@@ -14,7 +14,7 @@ passes.** Partial passes do not count.
 | 3 | Detection evaluation (`EMA_OUTCOME_V1`, no hindsight) | Backfill over the Phase 2 week completes; reached-3/5/10 counted from COMPLETE horizons only, PENDING reported separately | ✅ done (see the threshold-scale finding) |
 | 4 | Execution safety core — exactly-once (**the money phase**) | Failure-injection scenarios A–H + the seeded acceptance suite pass under the emulator; one demo market order and one pending order end to end | 🟡 code + emulator suite green; **demo-account leg outstanding** |
 | 5 | Position lifecycle — MT5 is the truth | Demo: open via executor, close from mobile; `trades/` shows CLOSED with right close_price/close_reason/P&L within one poll | 🟡 code + emulator suite green; **demo-account leg outstanding** |
-| 6 | Discord — human interface over a safe backend | FOK trade and stop order placed from Discord; `/trading disable` blocks with a clear FAILED embed; every action audited | ⬜ not started |
+| 6 | Discord — human interface over a safe backend | FOK trade and stop order placed from Discord; `/trading disable` blocks with a clear FAILED embed; every action audited | 🟡 code + emulator suite green; **live-Discord leg outstanding** |
 | 7 | Reviews — machine observation vs human execution | `/status` on a CLOSED market renders the weekly review; baseline numbers reconcile | ⬜ not started |
 | 8 | Aureon Vue — read-only dashboard | Dashboard matches `/status` at the same second; STALE banner on observer stop; non-allowlisted account sees nothing; rules tests pass | ⬜ not started |
 
@@ -149,3 +149,29 @@ close_reason and P&L within one poll; likewise for an SL hit and a position open
 in the terminal. All three need a Windows terminal and a broker login. The code paths they
 exercise are covered by the emulator suite against a fake broker, but no byte has been
 exchanged with a real MT5 terminal.
+
+## Phase 6 — what is proven, and what is not
+
+**Proven.** All Discord logic lives in `service.py`, which imports no discord.py, so the
+rules that protect real money are unit-tested directly: an unauthorized user is rejected,
+the wrong user clicking CONFIRM is rejected, a stale quote re-prompts rather than refusing,
+a double confirm produces one execution, and `/status` renders STALE at 46 seconds. Against
+the emulator: a Discord draft becomes a real execution, `/trading disable` blocks the very
+next request with `trading_disabled` and nothing reaches the broker, and a cancel that lost
+its race to a fill reports FAILED rather than lying about it.
+
+Two new boundary guards: Discord holds no broker or provider field on its context, and
+cannot import the repositories that write detections, evaluations, sessions or reviews.
+Both were verified to fail against a planted violation.
+
+Two constraint contradictions had to be resolved rather than deferred (decisions 79, 80):
+§39 and §42 require broker symbol metadata in Discord, and §40 and §27 require a quote —
+while Discord may not call the broker and tick data may not go to Firestore. The observer
+now publishes `symbol_specs/{symbol}` and a single `last_quote` snapshot in `system_state`.
+Both are state, not streams, and both are advisory: the execution guard re-reads live
+values regardless.
+
+**Not proven, and not claimed:** the gate's live leg — placing a FOK trade and a stop order
+*from Discord* on the demo account and seeing the result appear within seconds. That needs
+a Discord application, a guild, a bot token and an MT5 terminal. No gateway connection has
+been made; `bot.py`, the commands and the views have never rendered in a real client.

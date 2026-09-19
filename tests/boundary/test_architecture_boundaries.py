@@ -216,3 +216,56 @@ def test_reviews_never_read_horizons_directly() -> None:
         "review code must aggregate via DetectionEvaluation.complete_horizons, "
         "never .horizons directly:\n" + "\n".join(offenders)
     )
+
+
+# ── Discord's write scope ─────────────────────────────────────────────────────
+
+
+def test_discord_writes_only_what_it_is_permitted_to() -> None:
+    """CLAUDE.md: Discord writes ``trade_requests``, ``settings.trading_enabled`` and
+    ``audit_logs`` -- plus ``control_requests`` from Phase 6, which is how §46/§47 ask for
+    cancels and closes to be requested.
+
+    It must never write a detection, a trade, an evaluation or a review. Those are
+    observations and outcomes: a human interface that could write them could rewrite
+    history, and every statistic built on that history would become unfalsifiable.
+
+    Enforced by which repositories the Discord package is allowed to import. The
+    read-only ones are fine -- Discord reads freely; it is writing that is constrained --
+    so this checks for the repositories whose whole purpose is to write those collections.
+    """
+    forbidden_writers = {
+        "aureon.storage.evaluation_repository",
+        "aureon.storage.session_repository",
+        "aureon.storage.review_repository",
+        "aureon.outbox.local_outbox",
+        "aureon.outbox.outbox_worker",
+    }
+    offenders: list[str] = []
+    for path in _python_files("discord"):
+        for module in _imported_modules(path):
+            if module in forbidden_writers:
+                offenders.append(f"{path.relative_to(REPO_ROOT)} imports {module}")
+    assert not offenders, (
+        "Discord may not write detections, evaluations, sessions or reviews:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_discord_holds_no_broker_or_data_provider() -> None:
+    """The BotContext is the whole surface Discord can reach.
+
+    A broker or provider field there would make the import-level guards moot: the object
+    would arrive at runtime, handed over by whoever built the context. Checking the
+    dataclass's own annotations closes that.
+    """
+    from aureon.discord.context import BotContext
+
+    fields = set(BotContext.__dataclass_fields__)
+    assert "broker" not in fields
+    assert "provider" not in fields
+    annotations = " ".join(
+        str(f.type) for f in BotContext.__dataclass_fields__.values()
+    ).lower()
+    assert "broker" not in annotations
+    assert "provider" not in annotations

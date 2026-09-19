@@ -76,6 +76,7 @@ class Observer:
         market_state: MarketStateService | None = None,
         state_repository: object | None = None,
         session_repository: object | None = None,
+        symbol_repository: object | None = None,
         evaluation_repository: object | None = None,
         outcome_tracker: OutcomeTracker | None = None,
         heartbeat: HeartbeatService | None = None,
@@ -89,6 +90,9 @@ class Observer:
         self.market_state = market_state
         self.state_repository = state_repository
         self.session_repository = session_repository
+        # Discord may not call the broker, so the observer publishes symbol metadata for
+        # it to read (decision 79).
+        self.symbol_repository = symbol_repository
         self.evaluation_repository = evaluation_repository
         # Decision 50: evaluation runs IN the observer process.
         self.outcome_tracker = outcome_tracker
@@ -206,6 +210,18 @@ class Observer:
         self.state.set_and_save(candle.symbol, candle.timeframe, candle.open_time.utc)
         self._write_system_state(force=True)
 
+    def _latest_quote(self, symbol: str):
+        """The provider's current quote, or None if it cannot be read.
+
+        Failure is not an error here: state reporting must never stop observation, and a
+        missing quote correctly makes Discord re-prompt rather than proceed.
+        """
+        try:
+            return self.provider.get_quote(symbol)
+        except Exception:  # noqa: BLE001 - diagnostic, never critical
+            log.debug("could not read a quote for %s", symbol, exc_info=True)
+            return None
+
     def _write_system_state(self, *, force: bool = False) -> None:
         if self.state_repository is None:
             return
@@ -224,6 +240,10 @@ class Observer:
                         timeframe=timeframe,
                         market_state=result.state if result else MarketState.UNKNOWN,
                         last_closed_candle_time=candle.open_time.utc if candle else None,
+                        # Published so Discord can show bid/ask and judge staleness without
+                        # calling the broker (decision 80). One snapshot, overwritten in
+                        # place -- not a tick stream.
+                        last_quote=self._latest_quote(symbol),
                     )
                 )
         try:
@@ -252,6 +272,8 @@ class Observer:
         if pending:
             log.warning("%d detection(s) still undelivered; the worker will retry", pending)
 
+        self._publish_symbol_specs()
+
         # Step 4: backfill the gap, chronologically, through the live engine.
         backfilled = 0
         for symbol in self.config.symbols:
@@ -262,6 +284,27 @@ class Observer:
             self.heartbeat.start()
         self.worker.start()
         return backfilled
+
+    def _publish_symbol_specs(self) -> None:
+        """Publish broker symbol metadata for Discord (decision 79).
+
+        Best-effort: a failure here costs Discord a good error message, not an unsafe
+        trade -- the execution guard re-reads the live symbol regardless (§56).
+        """
+        if self.symbol_repository is None:
+            return
+        for symbol in self.config.symbols:
+            try:
+                info = self.provider.symbol_info(symbol)
+                self.symbol_repository.publish(info)  # type: ignore[attr-defined]
+                log.info(
+                    "published symbol spec for %s (step %s, modes %s)",
+                    symbol,
+                    info.volume_step,
+                    [m.value for m in info.filling_modes] or "none reported",
+                )
+            except Exception:  # noqa: BLE001 - see the docstring
+                log.exception("could not publish a symbol spec for %s", symbol)
 
     def _backfill(self, symbol: str, timeframe: Timeframe) -> int:
         """Re-warm the engine, then process everything after the cursor.
@@ -395,6 +438,7 @@ def build_observer(config: AureonConfig) -> Observer:
     from aureon.storage.evaluation_repository import EvaluationRepository
     from aureon.storage.firebase_service import get_client
     from aureon.storage.session_repository import SessionRepository
+    from aureon.storage.symbol_repository import SymbolRepository
     from aureon.storage.system_state_repository import (
         HeartbeatRepository,
         SystemStateRepository,
@@ -428,6 +472,7 @@ def build_observer(config: AureonConfig) -> Observer:
             client, min_interval_seconds=config.state_heartbeat_seconds
         ),
         session_repository=SessionRepository(client),
+        symbol_repository=SymbolRepository(client),
         evaluation_repository=EvaluationRepository(client),
         outcome_tracker=OutcomeTracker(
             get_rule(config.evaluation_rule_id), market_tz=config.market_tz

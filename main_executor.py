@@ -23,6 +23,7 @@ from types import FrameType
 
 from aureon.config import AureonConfig
 from aureon.execution.broker_interface import BrokerInterface
+from aureon.execution.control_worker import ControlWorker
 from aureon.execution.execution_worker import ExecutionWorker
 from aureon.execution.reconciliation_service import ReconciliationService
 from aureon.models.enums import MarketState
@@ -43,6 +44,7 @@ class Executor:
         broker: BrokerInterface,
         repository: TradeRequestRepository,
         *,
+        controls: object | None = None,
         settings_provider: object,
         market_state_provider: object | None = None,
         heartbeat: HeartbeatService | None = None,
@@ -60,6 +62,19 @@ class Executor:
             market_state_provider=market_state_provider,
             lease_seconds=config.executor_lease_seconds,
             poll_seconds=config.executor_poll_seconds,
+        )
+        # Discord's cancels and closes arrive as control_requests and are performed
+        # here, because this is the only process that holds a broker (§46, §47).
+        self.controls = (
+            ControlWorker(
+                controls,  # type: ignore[arg-type]
+                broker,
+                executor_id=self.worker.executor_id,
+                lease_seconds=config.executor_lease_seconds,
+                poll_seconds=config.executor_poll_seconds,
+            )
+            if controls is not None
+            else None
         )
         self.reconciliation = ReconciliationService(
             repository,
@@ -85,6 +100,8 @@ class Executor:
         if not outcomes:
             log.info("nothing to reconcile")
 
+        if self.controls is not None:
+            self.controls.start()
         if self.heartbeat is not None:
             self.heartbeat.start()
         return len(resolved)
@@ -101,6 +118,8 @@ class Executor:
     def shutdown(self) -> None:
         log.info("executor shutting down")
         self.worker.stop()
+        if self.controls is not None:
+            self.controls.stop()
         if self.heartbeat is not None:
             self.heartbeat.stop()
         self.broker.close()
@@ -111,6 +130,7 @@ def build_executor(config: AureonConfig) -> Executor:
     from aureon.data.mt5_provider import MT5DataProvider
     from aureon.execution.mt5_broker import MT5Broker
     from aureon.services.market_state_service import MarketStateService
+    from aureon.storage.control_request_repository import ControlRequestRepository
     from aureon.storage.firebase_service import get_client
     from aureon.storage.settings_repository import ExecutionSettingsRepository
     from aureon.storage.system_state_repository import HeartbeatRepository
@@ -138,6 +158,7 @@ def build_executor(config: AureonConfig) -> Executor:
         config,
         broker,
         TradeRequestRepository(client),
+        controls=ControlRequestRepository(client),
         settings_provider=settings_repository.read_or_default,
         market_state_provider=lambda symbol: market_state.state_for(symbol).state,
         heartbeat=HeartbeatService(

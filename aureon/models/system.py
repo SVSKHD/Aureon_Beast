@@ -14,6 +14,7 @@ from pydantic import Field
 
 from aureon.models.base import AureonDocument, AureonModel, UtcDatetime, to_utc, utc_now
 from aureon.models.enums import Freshness, MarketState, Timeframe
+from aureon.models.market import QuoteSnapshot
 
 # §84 defaults; overridable via config. 46s old must read STALE at 45s.
 DEFAULT_STALE_AFTER_SECONDS = 45.0
@@ -69,13 +70,27 @@ class Heartbeat(AureonDocument):
 
 
 class SymbolState(AureonModel):
-    """Per symbol/timeframe observation state (§59)."""
+    """Per symbol/timeframe observation state (§59).
+
+    ``last_quote`` carries the most recent bid/ask **as state**, not as a tick stream.
+    CLAUDE.md forbids tick data in Firestore, and this respects that: it is one current
+    snapshot per symbol, overwritten in place and throttled with the rest of
+    ``system_state`` (at most every ``AUREON_STATE_HEARTBEAT_SECONDS``), never an append.
+
+    It exists because Discord must show bid/ask on the §40 confirmation screen and must
+    check the quote's age before confirming (§27), while being forbidden from calling the
+    broker. Without it there is no honest price for Discord to show at all (decision 80).
+    """
 
     symbol: str
     timeframe: Timeframe
     market_state: MarketState = MarketState.UNKNOWN
     last_closed_candle_time: UtcDatetime | None = None
     last_tick_at: UtcDatetime | None = None
+    last_quote: QuoteSnapshot | None = Field(
+        default=None,
+        description="Latest bid/ask as state, for Discord's screens (decision 80).",
+    )
     detections_today: int = Field(default=0, ge=0)
 
 

@@ -34,6 +34,7 @@ AUDIT_LOGS = "audit_logs"
 HEARTBEATS = "heartbeats"
 SYSTEM_STATE = "system_state"
 SETTINGS = "settings"
+SYMBOL_SPECS = "symbol_specs"
 DAILY_REVIEWS = "daily_reviews"
 WEEKLY_REVIEWS = "weekly_reviews"
 
@@ -48,6 +49,7 @@ ALL_COLLECTIONS: tuple[str, ...] = (
     HEARTBEATS,
     SYSTEM_STATE,
     SETTINGS,
+    SYMBOL_SPECS,
     DAILY_REVIEWS,
     WEEKLY_REVIEWS,
 )
@@ -132,6 +134,15 @@ def system_state_path() -> str:
 def execution_settings_path() -> str:
     """``settings/execution`` -- runtime gates, overriding env (decision 11)."""
     return f"{SETTINGS}/{EXECUTION_SETTINGS_DOC}"
+
+
+def symbol_spec_path(symbol: str) -> str:
+    """``symbol_specs/{symbol}`` -- broker metadata published for Discord (decision 79).
+
+    A convenience copy, never an authority: the execution guard re-reads the live symbol
+    at execution time.
+    """
+    return f"{SYMBOL_SPECS}/{_require(symbol, 'symbol')}"
 
 
 def daily_review_path(market_date: str) -> str:

@@ -1,0 +1,84 @@
+"""What the Discord layer is allowed to reach (§71, CLAUDE.md).
+
+A single object holding every repository the bot may use -- and, just as importantly, not
+holding a broker or a data provider. Discord reads Firestore and writes only
+``trade_requests``, ``control_requests``, ``settings.trading_enabled`` and ``audit_logs``.
+
+Firestore's Python client is **synchronous**. Called directly from a discord.py handler it
+would block the event loop, and a blocked loop means missed heartbeats and interactions
+that time out at three seconds. So every call goes through ``run`` , which pushes it to a
+worker thread.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any, TypeVar
+
+from aureon.config import AureonConfig
+from aureon.models.settings import ExecutionSettings
+from aureon.storage.control_request_repository import ControlRequestRepository
+from aureon.storage.detection_repository import DetectionRepository
+from aureon.storage.settings_repository import ExecutionSettingsRepository
+from aureon.storage.symbol_repository import SymbolRepository
+from aureon.storage.system_state_repository import HeartbeatRepository, SystemStateRepository
+from aureon.storage.trade_repository import TradeRepository
+from aureon.storage.trade_request_repository import TradeRequestRepository
+
+log = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+
+@dataclass
+class BotContext:
+    """Everything a command handler needs.
+
+    Deliberately has no ``broker`` and no ``provider`` field: there is nothing here to
+    place an order with, so Discord cannot trade even by mistake.
+    """
+
+    config: AureonConfig
+    requests: TradeRequestRepository
+    controls: ControlRequestRepository
+    trades: TradeRepository
+    detections: DetectionRepository
+    settings: ExecutionSettingsRepository
+    symbols: SymbolRepository
+    system_state: SystemStateRepository
+    heartbeats: HeartbeatRepository
+
+    @property
+    def authorized_user_ids(self) -> tuple[str, ...]:
+        return self.config.authorized_user_ids
+
+    async def run(self, fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+        """Run a blocking Firestore call off the event loop.
+
+        Not an optimisation: discord.py must answer an interaction within three seconds,
+        and a synchronous Firestore round trip on the loop can miss that and lose the
+        interaction entirely.
+        """
+        return await asyncio.to_thread(fn, *args, **kwargs)
+
+    async def execution_settings(self) -> ExecutionSettings:
+        """Current settings, failing closed if they cannot be read (decision 66)."""
+        return await self.run(self.settings.read_or_default)
+
+
+def build_context(config: AureonConfig, client: Any) -> BotContext:
+    """Assemble a context from a Firestore client."""
+    return BotContext(
+        config=config,
+        requests=TradeRequestRepository(client),
+        controls=ControlRequestRepository(client),
+        trades=TradeRepository(client, account_scope=config.account_scope),
+        detections=DetectionRepository(client),
+        settings=ExecutionSettingsRepository(client),
+        symbols=SymbolRepository(client),
+        system_state=SystemStateRepository(client),
+        heartbeats=HeartbeatRepository(client),
+    )

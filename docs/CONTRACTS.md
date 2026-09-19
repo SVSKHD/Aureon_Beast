@@ -647,6 +647,7 @@ Per symbol/timeframe observation state (§59).
 | `market_state` | `MarketState` | no | `<MarketState.UNKNOWN: 'unknown'>` |  |
 | `last_closed_candle_time` | `AwareDatetime \| null` | no | `None` |  |
 | `last_tick_at` | `AwareDatetime \| null` | no | `None` |  |
+| `last_quote` | `QuoteSnapshot \| null` | no | `None` | Latest bid/ask as state, for Discord's screens (decision 80). |
 | `detections_today` | `int` | no | `0` |  |
 
 ---
