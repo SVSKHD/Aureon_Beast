@@ -138,6 +138,15 @@ class HorizonResult(AureonModel):
     )
 
     path: PathClassification = PathClassification.NONE
+    path_ambiguous: bool = Field(
+        default=False,
+        description=(
+            "True when the favourable and adverse thresholds were first crossed within "
+            "the SAME candle, so their real order is unknowable from candle data. "
+            "``path`` still follows the rule in §23, but a review can exclude these "
+            "rather than trust an order that was never observed."
+        ),
+    )
     candles_seen: int = Field(default=0, ge=0)
     completed_at: UtcDatetime | None = None
     invalid_reason: str | None = None

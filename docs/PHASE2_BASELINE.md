@@ -155,7 +155,54 @@ The three counts the Phase 2 gate asks to be recorded.
 
 ---
 
+## Detection outcomes (Phase 3)
+
+Rule `EMA_OUTCOME_V1`, frozen: reference `next_open`,
+thresholds [3.0, 5.0, 10.0, 15.0, 20.0] in **points**.
+70 `ema_cross` detections evaluated.
+
+**Reached counts come from COMPLETE horizons only.** Pending and invalid are
+reported separately and are never counted as misses — an unknown answer is not
+a failure, and treating it as one is the easiest way to make a strategy look
+worse than it is.
+
+| horizon | complete | pending | invalid | reach 3 | reach 5 | reach 10 |
+|---|---|---|---|---|---|---|
+| `c5` | 70 | 0 | 0 | 70/70 (100%) | 70/70 (100%) | 70/70 (100%) |
+| `c10` | 70 | 0 | 0 | 70/70 (100%) | 70/70 (100%) | 70/70 (100%) |
+| `c20` | 68 | 2 | 0 | 68/68 (100%) | 68/68 (100%) | 68/68 (100%) |
+| `m60` | 70 | 0 | 0 | 70/70 (100%) | 70/70 (100%) | 70/70 (100%) |
+| `session_close` | 67 | 3 | 0 | 67/67 (100%) | 67/67 (100%) | 67/67 (100%) |
+| `day_close` | 57 | 7 | 6 | 57/57 (100%) | 57/57 (100%) | 57/57 (100%) |
+| `opposite_cross` | 68 | 1 | 1 | 68/68 (100%) | 68/68 (100%) | 68/68 (100%) |
+
+### Path classification (COMPLETE only)
+
+| horizon | MFE_FIRST | MAE_FIRST | NONE | ambiguous |
+|---|---|---|---|---|
+| `c5` | 70 | 0 | 0 | 69 |
+| `c10` | 70 | 0 | 0 | 69 |
+| `c20` | 68 | 0 | 0 | 67 |
+| `m60` | 70 | 0 | 0 | 69 |
+| `session_close` | 67 | 0 | 0 | 66 |
+| `day_close` | 57 | 0 | 0 | 56 |
+| `opposite_cross` | 68 | 0 | 0 | 67 |
+
+### Diagnostics — read before using these numbers
+
+- thresholds ['3', '5', '10', '15', '20'] are reached >=95% of the time in every horizon. They are smaller than the instrument's typical candle range, so they measure almost nothing. The fix is a NEW rule_id with a larger scale -- never an edit to this one (§21).
+- 463/470 path classifications are ambiguous: the favourable and adverse thresholds were first crossed within the SAME candle, so their order was never observed. MFE_FIRST here is a convention, not a measurement -- treat these as unknown.
+
+In short: at `point = 0.01` the specified thresholds are $0.03–$0.20, well
+inside a single XAUUSD M5 candle's range, so they are crossed on the first
+candle almost every time. The 100% columns above measure the scale, not the
+strategy. Correcting it means a **new `rule_id`**, never an edit to this one
+(§21, decision 47).
+
+---
+
 ## Not yet measured
 
-Phase 3 adds reached-3/5/10 counts from COMPLETE horizons only, reported
-separately from PENDING counts.
+Outcomes for the Part B agents. `EMA_OUTCOME_V1` is written for `ema_cross`;
+whether the same horizons and thresholds suit sweeps and breakouts is a question
+for a rule of their own.

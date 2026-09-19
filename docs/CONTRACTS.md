@@ -517,6 +517,7 @@ What happened within one horizon -- or that we do not know yet (§22, §23).
 | `reached` | `dict[str, bool]` | no | `dict()` |  |
 | `time_to` | `dict[str, float \| null]` | no | `dict()` | Seconds from detection to first reach. |
 | `path` | `PathClassification` | no | `<PathClassification.NONE: 'none'>` |  |
+| `path_ambiguous` | `bool` | no | `False` | True when the favourable and adverse thresholds were first crossed within the SAME candle, so their real order is unknowable from candle data. ``path`` still follows the rule in §23, but a review can exclude these rather than trust an order that was never observed. |
 | `candles_seen` | `int` | no | `0` |  |
 | `completed_at` | `AwareDatetime \| null` | no | `None` |  |
 | `invalid_reason` | `str \| null` | no | `None` |  |

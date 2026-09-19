@@ -31,6 +31,8 @@ from aureon.data.historical_provider import HistoricalDataProvider  # noqa: E402
 from aureon.engine.analysis_engine import AnalysisEngine  # noqa: E402
 from aureon.engine.indicators import min_warmup  # noqa: E402
 from aureon.engine.levels import LevelTracker  # noqa: E402
+from aureon.evaluation.backfill import build_report, diagnose, run_backfill  # noqa: E402
+from aureon.evaluation.rules import EMA_OUTCOME_V1  # noqa: E402
 
 FIXTURE = REPO_ROOT / "aureon" / "data" / "fixtures" / "XAUUSD_M5.csv"
 OUTPUT = REPO_ROOT / "docs" / "PHASE2_BASELINE.md"
@@ -207,14 +209,91 @@ def build() -> str:
         for key in sorted(events):
             lines.append(f"| `{key}` | {events[key]} |")
 
+    # ── Phase 3: outcomes ─────────────────────────────────────────────────────
+    rule = EMA_OUTCOME_V1
+    backfill = run_backfill(
+        candles,
+        [EmaCrossAgent()],
+        rule,
+        account_scope=ACCOUNT_SCOPE,
+        market_tz=MARKET_TZ,
+        point=0.01,
+    )
+    reports = build_report(backfill.evaluations, rule)
+
+    lines += [
+        "",
+        "---",
+        "",
+        "## Detection outcomes (Phase 3)",
+        "",
+        f"Rule `{rule.rule_id}`, frozen: reference `{rule.reference_price.value}`,",
+        f"thresholds {list(rule.thresholds)} in **points**.",
+        f"{backfill.evaluated} `ema_cross` detections evaluated.",
+        "",
+        "**Reached counts come from COMPLETE horizons only.** Pending and invalid are",
+        "reported separately and are never counted as misses — an unknown answer is not",
+        "a failure, and treating it as one is the easiest way to make a strategy look",
+        "worse than it is.",
+        "",
+        "| horizon | complete | pending | invalid | reach 3 | reach 5 | reach 10 |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for horizon in rule.horizons:
+        report = reports[horizon.id]
+
+        def cell(key: str, report=report) -> str:
+            entry = report.thresholds[key]
+            if entry.rate is None:
+                return "— (no data)"
+            return f"{entry.reached}/{entry.evaluated} ({entry.rate * 100:.0f}%)"
+
+        lines.append(
+            f"| `{report.horizon_id}` | {report.complete} | {report.pending} | "
+            f"{report.invalid} | {cell('3')} | {cell('5')} | {cell('10')} |"
+        )
+
+    lines += [
+        "",
+        "### Path classification (COMPLETE only)",
+        "",
+        "| horizon | MFE_FIRST | MAE_FIRST | NONE | ambiguous |",
+        "|---|---|---|---|---|",
+    ]
+    for horizon in rule.horizons:
+        report = reports[horizon.id]
+        lines.append(
+            f"| `{report.horizon_id}` | {report.mfe_first} | {report.mae_first} | "
+            f"{report.path_none} | {report.path_ambiguous} |"
+        )
+
+    warnings = diagnose(reports, rule)
+    if warnings:
+        lines += [
+            "",
+            "### Diagnostics — read before using these numbers",
+            "",
+        ]
+        for warning in warnings:
+            lines.append(f"- {warning}")
+        lines += [
+            "",
+            "In short: at `point = 0.01` the specified thresholds are $0.03–$0.20, well",
+            "inside a single XAUUSD M5 candle's range, so they are crossed on the first",
+            "candle almost every time. The 100% columns above measure the scale, not the",
+            "strategy. Correcting it means a **new `rule_id`**, never an edit to this one",
+            "(§21, decision 47).",
+        ]
+
     lines += [
         "",
         "---",
         "",
         "## Not yet measured",
         "",
-        "Phase 3 adds reached-3/5/10 counts from COMPLETE horizons only, reported",
-        "separately from PENDING counts.",
+        "Outcomes for the Part B agents. `EMA_OUTCOME_V1` is written for `ema_cross`;",
+        "whether the same horizons and thresholds suit sweeps and breakouts is a question",
+        "for a rule of their own.",
     ]
     return "\n".join(lines).rstrip() + "\n"
 
