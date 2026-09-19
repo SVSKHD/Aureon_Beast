@@ -1,0 +1,510 @@
+"""The position monitor: MT5 is the truth (§49-§53, §58, §77).
+
+Polls the broker and makes Firestore agree with it. Aureon never decides a trade closed;
+it observes that it did -- which is why a close from the MT5 mobile app, a stop-loss hit
+overnight, or a position opened by hand in the terminal all land correctly without Aureon
+being involved in any of them.
+
+## It must keep running when trading is disabled (§58)
+
+``trading_enabled=false`` stops the *executor*. It must not stop the monitor: positions
+opened before the switch was thrown are still live, still moving, and still need their
+closes recorded. A monitor that paused with the executor would leave the operator blind
+during exactly the incident that made them disable trading.
+
+## The deal history overlap
+
+Each poll re-reads deals from a little **before** the last sync, not from it. Broker deal
+timestamps and our clock are not the same clock, and a deal can be published slightly out
+of order -- reading from exactly the last sync point would drop such a deal permanently.
+Re-reading is free because every write here is idempotent.
+
+## External positions are imported, never managed (§52)
+
+Anything without Aureon's magic number, or with it but no matching request, is recorded as
+``source=external_mt5`` with ``trade_request_id=None``. Aureon reports on it and leaves it
+alone: it did not open it and has no authorisation to touch it.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+
+from aureon.execution.broker_interface import BrokerInterface
+from aureon.models.base import MarketTime, to_utc, utc_now
+from aureon.models.broker import BrokerDeal, BrokerPosition
+from aureon.models.enums import TradeRequestStatus, TradeSource, TradeStatus
+from aureon.models.trade import Trade
+from aureon.positions.deal_reconciler import PositionOutcome, summarise_position
+from aureon.positions.excursion_tracker import ExcursionTracker
+from aureon.positions.pending_order_monitor import PendingOrderMonitor
+from aureon.storage.trade_repository import TradeRepository, trade_id_for
+from aureon.storage.trade_request_repository import TradeRequestRepository
+
+log = logging.getLogger(__name__)
+
+DEFAULT_POLL_SECONDS = 2.0
+
+# How far before the last sync to re-read deals. See the module docstring.
+DEAL_OVERLAP_SECONDS = 300.0
+
+# How far back to look on a cold start, when there is no last sync at all.
+COLD_START_HOURS = 72.0
+
+# Forward allowance on the deal window for broker/host clock skew.
+CLOCK_SKEW_ALLOWANCE_SECONDS = 60.0
+
+
+@dataclass
+class PollResult:
+    """What one poll changed."""
+
+    opened: list[str] = field(default_factory=list)
+    closed: list[str] = field(default_factory=list)
+    partially_closed: list[str] = field(default_factory=list)
+    imported_external: list[str] = field(default_factory=list)
+    pending_resolved: list[str] = field(default_factory=list)
+    excursions_updated: int = 0
+
+    @property
+    def changed(self) -> bool:
+        return bool(
+            self.opened
+            or self.closed
+            or self.partially_closed
+            or self.imported_external
+            or self.pending_resolved
+        )
+
+
+class PositionMonitor:
+    """Keeps ``trades`` in step with the broker (§49-§53)."""
+
+    def __init__(
+        self,
+        trades: TradeRepository,
+        requests: TradeRequestRepository,
+        broker: BrokerInterface,
+        *,
+        magic: int,
+        account_scope: str = "primary",
+        market_tz: str = "Etc/UTC",
+        point: float = 0.01,
+        poll_seconds: float = DEFAULT_POLL_SECONDS,
+        deal_overlap_seconds: float = DEAL_OVERLAP_SECONDS,
+    ) -> None:
+        self.trades = trades
+        self.requests = requests
+        self.broker = broker
+        self.magic = magic
+        self.account_scope = account_scope
+        self.market_tz = market_tz
+        self.point = point
+        self.poll_seconds = poll_seconds
+        self.deal_overlap_seconds = deal_overlap_seconds
+
+        self.excursions = ExcursionTracker(point=point)
+        self.pending = PendingOrderMonitor(requests, broker, magic=magic)
+        self._last_sync: datetime | None = None
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    # ── Startup (§77) ─────────────────────────────────────────────────────────
+
+    def startup(self, *, now: datetime | None = None) -> PollResult:
+        """Load stored state, query the broker, reconcile, then serve (§77).
+
+        Reconciling before serving matters because the gap is the interesting part: a
+        position may have closed, a pending order may have filled, and a human may have
+        opened something new, all while this process was not running.
+        """
+        moment = to_utc(now or utc_now())
+        open_trades = self.trades.open_trades()
+        pending_requests = self.requests.list_by_status(
+            [TradeRequestStatus.PENDING, TradeRequestStatus.PARTIALLY_FILLED]
+        )
+        log.info(
+            "monitor starting: %d open trade(s), %d pending request(s) to verify",
+            len(open_trades),
+            len(pending_requests),
+        )
+
+        # Resume excursion tracking, and rebuild it from candles for any position that
+        # was open while we were down (§45).
+        for trade in open_trades:
+            self.excursions.track(trade)
+
+        return self.poll_once(now=moment)
+
+    # ── One poll ──────────────────────────────────────────────────────────────
+
+    def poll_once(self, *, now: datetime | None = None) -> PollResult:
+        """Read the broker and reconcile Firestore to it."""
+        moment = to_utc(now or utc_now())
+        result = PollResult()
+
+        positions = {p.position_id: p for p in self.broker.open_positions()}
+        resting = {o.order_ticket for o in self.broker.pending_orders()}
+        deals = self._recent_deals(moment)
+
+        self._resolve_pending(deals, resting, result, now=moment)
+        self._import_open(positions, result, now=moment)
+        self._close_vanished(positions, deals, result, now=moment)
+        self._apply_partial_closes(positions, deals, result, now=moment)
+        self._update_excursions(positions, result)
+
+        self._last_sync = moment
+        return result
+
+    def _recent_deals(self, now: datetime) -> list[BrokerDeal]:
+        start = (
+            self._last_sync - timedelta(seconds=self.deal_overlap_seconds)
+            if self._last_sync is not None
+            else now - timedelta(hours=COLD_START_HOURS)
+        )
+        # The END bound reaches slightly into the future: the broker's clock is not ours,
+        # and a deal stamped a second ahead of us would otherwise be invisible for a whole
+        # poll -- long enough for the close path to see only part of a multi-deal exit.
+        end = now + timedelta(seconds=CLOCK_SKEW_ALLOWANCE_SECONDS)
+        try:
+            return self.broker.deals_history(start, end)
+        except Exception:  # noqa: BLE001 - a read failure must not stop the loop
+            log.exception("deals_history failed")
+            return []
+
+    # ── Pending orders ────────────────────────────────────────────────────────
+
+    def _resolve_pending(
+        self,
+        deals: list[BrokerDeal],
+        resting: set[int],
+        result: PollResult,
+        *,
+        now: datetime,
+    ) -> None:
+        for request in self.requests.list_by_status(TradeRequestStatus.PENDING):
+            outcome = self.pending.check(
+                request, deals=deals, resting_tickets=resting, now=now
+            )
+            if outcome is None:
+                continue
+            result.pending_resolved.append(request.request_id)
+            if outcome.created_a_position and outcome.position_id is not None:
+                # It filled while we were away; the position needs a Trade.
+                self._record_open_position(
+                    outcome.position_id, deals, request_id=request.request_id, result=result
+                )
+
+    # ── Opening ───────────────────────────────────────────────────────────────
+
+    def _import_open(
+        self, positions: dict[int, BrokerPosition], result: PollResult, *, now: datetime
+    ) -> None:
+        """Ensure every open broker position has a Trade document (§52)."""
+        for position_id, position in positions.items():
+            trade_id = trade_id_for(position_id, account_scope=self.account_scope)
+            if self.trades.get(trade_id) is not None:
+                continue
+
+            request_id = self._request_for(position)
+            external = position.magic != self.magic or request_id is None
+            trade = Trade(
+                trade_id=trade_id,
+                mt5_position_id=position_id,
+                trade_request_id=request_id,
+                source=TradeSource.EXTERNAL_MT5 if external else TradeSource.AUREON,
+                symbol=position.symbol,
+                direction=position.direction,
+                volume=position.volume,
+                open_price=position.open_price,
+                open_time=MarketTime.from_utc(position.open_time, self.market_tz),
+                sl=position.sl,
+                tp=position.tp,
+                magic=position.magic,
+                status=TradeStatus.OPEN,
+            )
+            self.trades.upsert_open(trade)
+            self.excursions.track(trade)
+            (result.imported_external if external else result.opened).append(trade_id)
+            log.info(
+                "imported %s position %s (%s %s %.2f)",
+                "external" if external else "aureon",
+                position_id,
+                position.symbol,
+                position.direction.value,
+                position.volume,
+            )
+            _ = now
+
+    def _record_open_position(
+        self,
+        position_id: int,
+        deals: list[BrokerDeal],
+        *,
+        request_id: str | None,
+        result: PollResult,
+    ) -> None:
+        """Create a Trade for a position known only from its deals.
+
+        Used when a pending order filled while the monitor was down: the position may
+        already be closed again, so the broker's open-positions list will not show it.
+        """
+        trade_id = trade_id_for(position_id, account_scope=self.account_scope)
+        if self.trades.get(trade_id) is not None:
+            return
+        outcome = summarise_position(deals, position_id)
+        if not outcome.entry_deals:
+            return
+        entry = outcome.entry_deals[0]
+        trade = Trade(
+            trade_id=trade_id,
+            mt5_position_id=position_id,
+            trade_request_id=request_id,
+            source=TradeSource.AUREON if request_id else TradeSource.EXTERNAL_MT5,
+            symbol=entry.symbol,
+            direction=entry.direction,
+            volume=outcome.opened_volume,
+            open_price=outcome.open_price or entry.price,
+            open_time=MarketTime.from_utc(entry.executed_at, self.market_tz),
+            magic=entry.magic,
+            status=TradeStatus.OPEN,
+        )
+        self.trades.upsert_open(trade)
+        result.opened.append(trade_id)
+
+    def _request_for(self, position: BrokerPosition) -> str | None:
+        """Find the request that opened this position, if Aureon opened it (§52).
+
+        Matched on the comment token carried by the *entry*, which is the one place a
+        comment is reliable. No match means external, and external means observed only.
+        """
+        if position.magic != self.magic or not position.comment:
+            return None
+        from aureon.models.identity import comment_token
+
+        for status in (
+            TradeRequestStatus.FILLED,
+            TradeRequestStatus.PARTIALLY_FILLED,
+            TradeRequestStatus.PENDING,
+            TradeRequestStatus.EXECUTING,
+        ):
+            for request in self.requests.list_by_status(status, limit=200):
+                if request.position_id == position.position_id:
+                    return request.request_id
+                if (request.comment_token or comment_token(request.request_id)) == position.comment:
+                    return request.request_id
+        return None
+
+    # ── Closing ───────────────────────────────────────────────────────────────
+
+    def _close_vanished(
+        self,
+        positions: dict[int, BrokerPosition],
+        deals: list[BrokerDeal],
+        result: PollResult,
+        *,
+        now: datetime,
+    ) -> None:
+        """A tracked position the broker no longer reports has closed (§44).
+
+        The deals say how: stop-loss, take-profit, a phone, or a hand on the terminal.
+        """
+        for trade in self.trades.open_trades():
+            if trade.mt5_position_id in positions:
+                continue
+            outcome = summarise_position(deals, trade.mt5_position_id)
+            if not outcome.exit_deals:
+                # Gone from the open list but no exit deal visible yet. Left alone rather
+                # than guessed at: the deal usually appears within a poll or two, and
+                # inventing a close price would be worse than waiting.
+                log.info(
+                    "position %s is gone but has no exit deal yet; waiting",
+                    trade.mt5_position_id,
+                )
+                continue
+
+            if outcome.closed_volume + 1e-9 < trade.volume:
+                # The position is gone, so it IS fully closed -- but the deals we can see
+                # do not account for all of it yet. CLOSED is terminal, so writing it now
+                # would freeze a partial realized P&L that can never be corrected. Record
+                # the progress instead and finish on a later poll, once the remaining
+                # deals are visible.
+                log.info(
+                    "position %s is gone but deals cover only %s of %s; recording partial "
+                    "and waiting for the rest",
+                    trade.mt5_position_id,
+                    outcome.closed_volume,
+                    trade.volume,
+                )
+                self._record_partial(trade, outcome, result)
+                continue
+
+            self._apply_close(trade, outcome, result, now=now)
+
+    def _apply_close(
+        self, trade: Trade, outcome: PositionOutcome, result: PollResult, *, now: datetime
+    ) -> None:
+        final = self.excursions.release(trade.trade_id) or trade.excursion
+        closed_volume = min(outcome.closed_volume, trade.volume)
+        updates = {
+            "closed_volume": round(closed_volume, 8),
+            "close_price": outcome.close_price,
+            "close_time": MarketTime.from_utc(
+                outcome.exit_deals[-1].executed_at, self.market_tz
+            ),
+            "close_reason": outcome.close_reason,
+            "close_reason_raw": outcome.close_reason_raw,
+            "realized_pnl": outcome.realized_pnl,
+            "commission": outcome.commission,
+            "swap": outcome.swap,
+            "deal_ids": outcome.deal_ids,
+            "excursion": final,
+        }
+        self.trades.transition(
+            trade.trade_id,
+            TradeStatus.CLOSED,
+            updates=updates,
+            reason=f"closed by {outcome.close_reason}",
+        )
+        result.closed.append(trade.trade_id)
+        log.info(
+            "trade %s CLOSED at %s (%s), P&L %.2f",
+            trade.trade_id,
+            outcome.close_price,
+            outcome.close_reason,
+            outcome.realized_pnl,
+        )
+        _ = now
+
+    def _record_partial(
+        self, trade: Trade, outcome: PositionOutcome, result: PollResult
+    ) -> None:
+        """Record partial-close progress without claiming the trade is finished."""
+        closed = min(round(outcome.closed_volume, 8), trade.volume)
+        if closed <= trade.closed_volume + 1e-9:
+            return
+        self.trades.transition(
+            trade.trade_id,
+            TradeStatus.PARTIALLY_CLOSED,
+            updates={
+                "closed_volume": closed,
+                "realized_pnl": outcome.realized_pnl,
+                "commission": outcome.commission,
+                "swap": outcome.swap,
+                "deal_ids": outcome.deal_ids,
+                "close_reason": outcome.close_reason,
+                "close_reason_raw": outcome.close_reason_raw,
+            },
+            reason=f"partial close of {closed} by {outcome.close_reason}",
+        )
+        if trade.trade_id not in result.partially_closed:
+            result.partially_closed.append(trade.trade_id)
+
+    def _apply_partial_closes(
+        self,
+        positions: dict[int, BrokerPosition],
+        deals: list[BrokerDeal],
+        result: PollResult,
+        *,
+        now: datetime,
+    ) -> None:
+        """A position still open but smaller than we recorded was partly closed (§44)."""
+        for trade in self.trades.open_trades():
+            position = positions.get(trade.mt5_position_id)
+            if position is None:
+                continue
+            outcome = summarise_position(deals, trade.mt5_position_id)
+            if not outcome.exit_deals:
+                continue
+            closed = min(round(outcome.closed_volume, 8), trade.volume)
+            if closed <= trade.closed_volume + 1e-9:
+                continue  # nothing new
+            self.trades.transition(
+                trade.trade_id,
+                TradeStatus.PARTIALLY_CLOSED,
+                updates={
+                    "closed_volume": closed,
+                    "realized_pnl": outcome.realized_pnl,
+                    "commission": outcome.commission,
+                    "swap": outcome.swap,
+                    "deal_ids": outcome.deal_ids,
+                    "close_reason": outcome.close_reason,
+                    "close_reason_raw": outcome.close_reason_raw,
+                },
+                reason=f"partial close of {closed} by {outcome.close_reason}",
+            )
+            result.partially_closed.append(trade.trade_id)
+            log.info(
+                "trade %s partially closed: %s of %s remains open",
+                trade.trade_id,
+                position.volume,
+                trade.volume,
+            )
+            _ = now
+
+    # ── Excursions ────────────────────────────────────────────────────────────
+
+    def _update_excursions(
+        self, positions: dict[int, BrokerPosition], result: PollResult
+    ) -> None:
+        """Fold the current quote into each open position's excursions (§45)."""
+        symbols = {p.symbol for p in positions.values()}
+        quotes = {}
+        for symbol in symbols:
+            try:
+                quotes[symbol] = self.broker.quote(symbol)
+            except Exception:  # noqa: BLE001 - excursions are diagnostic, never critical
+                log.exception("quote failed for %s", symbol)
+
+        for position in positions.values():
+            quote = quotes.get(position.symbol)
+            if quote is None:
+                continue
+            trade_id = trade_id_for(position.position_id, account_scope=self.account_scope)
+            updated = self.excursions.on_quote(trade_id, quote)
+            if updated is not None:
+                self.trades.update_excursion(trade_id, updated)
+                result.excursions_updated += 1
+
+    def reconstruct_excursions(
+        self, trade: Trade, candles: list, *, until: datetime | None = None
+    ) -> None:
+        """Rebuild a position's excursions from M1 candles and store them (§45)."""
+        from aureon.positions.excursion_tracker import reconstruct_from_candles
+
+        rebuilt = reconstruct_from_candles(
+            trade, candles, point=self.point, until=until
+        )
+        self.trades.update_excursion(trade.trade_id, rebuilt)
+        # Re-track so live ticks continue from the reconstructed extremes, keeping the
+        # weaker `reconstructed` label.
+        self.excursions.release(trade.trade_id)
+        self.excursions.track(trade.model_copy(update={"excursion": rebuilt}))
+
+    # ── Loop ──────────────────────────────────────────────────────────────────
+
+    def run(self) -> None:
+        """Poll until stopped.
+
+        Deliberately independent of ``trading_enabled`` (§58): disabling trading stops the
+        executor, not the recording of positions that are already live.
+        """
+        while not self._stop.is_set():
+            try:
+                self.poll_once()
+            except Exception:  # noqa: BLE001 - a poll failure must not kill the monitor
+                log.exception("monitor poll failed")
+            self._stop.wait(self.poll_seconds)
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self.run, name="position-monitor", daemon=True)
+        self._thread.start()
+
+    def stop(self, *, timeout: float = 5.0) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+            self._thread = None

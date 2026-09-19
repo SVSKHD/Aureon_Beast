@@ -13,7 +13,7 @@ passes.** Partial passes do not count.
 | 2 | Observer: market data, indicators, agents, engine, durable outbox | Parity + outbox + recovery tests pass; `docs/PHASE2_BASELINE.md` recorded | ✅ Parts A + B done (one MT5-only criterion outstanding) |
 | 3 | Detection evaluation (`EMA_OUTCOME_V1`, no hindsight) | Backfill over the Phase 2 week completes; reached-3/5/10 counted from COMPLETE horizons only, PENDING reported separately | ✅ done (see the threshold-scale finding) |
 | 4 | Execution safety core — exactly-once (**the money phase**) | Failure-injection scenarios A–H + the seeded acceptance suite pass under the emulator; one demo market order and one pending order end to end | 🟡 code + emulator suite green; **demo-account leg outstanding** |
-| 5 | Position lifecycle — MT5 is the truth | Demo: open via executor, close from mobile; `trades/` shows CLOSED with right close_price/close_reason/P&L within one poll | ⬜ not started |
+| 5 | Position lifecycle — MT5 is the truth | Demo: open via executor, close from mobile; `trades/` shows CLOSED with right close_price/close_reason/P&L within one poll | 🟡 code + emulator suite green; **demo-account leg outstanding** |
 | 6 | Discord — human interface over a safe backend | FOK trade and stop order placed from Discord; `/trading disable` blocks with a clear FAILED embed; every action audited | ⬜ not started |
 | 7 | Reviews — machine observation vs human execution | `/status` on a CLOSED market renders the weekly review; baseline numbers reconcile | ⬜ not started |
 | 8 | Aureon Vue — read-only dashboard | Dashboard matches `/status` at the same second; STALE banner on observer stop; non-allowlisted account sees nothing; rules tests pass | ⬜ not started |
@@ -126,3 +126,26 @@ Two real bugs were caught by those tests and are recorded as decisions 62 and 63
    provably never reaches the broker — but whether the *list* is complete is a question
    only the frozen spec can answer. **This is the one thing to resolve before a funded
    account.**
+
+## Phase 5 — what is proven, and what is not
+
+**Proven, against the emulator and FakeBroker:** every scenario the phase names — fill
+then SL close, TP close, a close that happened while the monitor was down (reconstructed
+from deals alone), partial close 0.25→0.10 and then to fully closed, an externally opened
+position imported, a pending order that filled while offline, realized P&L equal to the
+sum of the closing deals, MFE/MAE over a scripted price path, and reconstructed excursions
+flagged as such. Plus §58: the monitor keeps recording with `trading_enabled=false`, and a
+test asserts it never makes an order-placing broker call.
+
+One real bug was caught and is recorded as decision 71: a position gone from the broker's
+open list whose visible deals covered only *part* of its volume was marked `CLOSED` with a
+partial `realized_pnl`. Since `CLOSED` is terminal, that wrong number could never be
+corrected. A broker timestamp one second ahead of ours is enough to cause it. It now
+records `PARTIALLY_CLOSED` and finishes once the remaining deals appear.
+
+**Not proven, and not claimed:** the demo-account leg of the gate — open via the executor,
+close from the MT5 mobile app, and see `trades/` show CLOSED with the right close_price,
+close_reason and P&L within one poll; likewise for an SL hit and a position opened by hand
+in the terminal. All three need a Windows terminal and a broker login. The code paths they
+exercise are covered by the emulator suite against a fake broker, but no byte has been
+exchanged with a real MT5 terminal.
