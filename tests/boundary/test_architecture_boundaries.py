@@ -186,3 +186,33 @@ def test_firestore_clients_are_built_only_in_storage() -> None:
     assert not offenders, (
         "only aureon/storage may construct Firestore clients:\n" + "\n".join(offenders)
     )
+
+
+# ── Reviews may only read COMPLETE horizons ───────────────────────────────────
+
+
+def test_reviews_never_read_horizons_directly() -> None:
+    """Phase 3: ``complete_horizons`` is the only accessor review code may use.
+
+    Reading ``.horizons`` in a review would silently fold PENDING horizons into a
+    reached-N count, turning "we do not know yet" into "it did not happen" and
+    making every statistic in the review pessimistically wrong. The safe accessors
+    are ``complete_horizons``, ``pending_horizons`` and ``invalid_horizons``.
+    """
+    safe = ("complete_horizons", "pending_horizons", "invalid_horizons")
+    offenders: list[str] = []
+    for path in _python_files("reviews"):
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if ".horizons" not in line:
+                continue
+            # Strip the safe accessors first; whatever ".horizons" remains is a
+            # direct read of the unfiltered tuple.
+            stripped = line
+            for accessor in safe:
+                stripped = stripped.replace(f".{accessor}", "")
+            if ".horizons" in stripped:
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {line.strip()}")
+    assert not offenders, (
+        "review code must aggregate via DetectionEvaluation.complete_horizons, "
+        "never .horizons directly:\n" + "\n".join(offenders)
+    )

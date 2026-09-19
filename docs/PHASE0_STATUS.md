@@ -40,10 +40,17 @@ mentioning `MetaTrader5` does not fail the suite while a real lazy
 Each guard was verified to fail against a deliberately planted violation and to
 pass once removed — a guard that cannot fail is not a guard.
 
-## Blocker: the frozen spec and Phase 1 are both absent
+## Blocker (partially cleared): Phase 1 is now built; the frozen spec is still absent
 
-This repository had **zero commits and zero branches** before Phase 0. The phase
-prompts assume two things that are therefore not available:
+This repository had **zero commits and zero branches** before Phase 0, so the
+phase prompts' two assumptions were both unmet. One has since been cleared:
+
+> **Update.** The Phase 1 Decisions document was supplied directly, and Phase 1 is
+> now implemented against it — `aureon/models`, `aureon/config`,
+> `aureon/storage/paths.py`, generated `docs/CONTRACTS.md`, and 128 tests. What
+> remains missing is `docs/ARCHITECTURE.md` itself.
+
+The original two assumptions:
 
 1. **`docs/ARCHITECTURE.md`** — the frozen spec. Every phase opens with "Read
    ARCHITECTURE.md §x–§y", and the work is specified *by section number*, not by
