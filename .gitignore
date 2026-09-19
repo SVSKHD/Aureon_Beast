@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Secrets — never commit. See .env.example for the required variables.
+.env
+.env.*
+!.env.example
+*service-account*.json
+*firebase-adminsdk*.json
+
+# Local runtime state (never Firestore-backed, never shared)
+observer_state.json
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+outbox.db*
+
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/

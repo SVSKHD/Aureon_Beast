@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aureon"
+version = "0.1.0"
+description = "Aureon — market observation, evaluation and human-confirmed execution"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.6",
+    "pandas>=2.1",
+    "google-cloud-firestore>=2.14",
+    "firebase-admin>=6.4",
+    "python-dotenv>=1.0",
+    "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+discord = ["discord.py>=2.3"]
+mt5 = ["MetaTrader5>=5.0.45"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.3",
+    "pyarrow>=15.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["aureon*"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "emulator: requires the Firestore emulator (FIRESTORE_EMULATOR_HOST)",
+    "mt5: requires a live MetaTrader5 terminal (Windows only)",
+    "boundary: architectural boundary guards that must never be skipped",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
