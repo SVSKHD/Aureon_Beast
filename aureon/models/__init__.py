@@ -16,6 +16,12 @@ from aureon.models.base import (
     to_utc,
     utc_now,
 )
+from aureon.models.broker import (
+    AccountInfo,
+    BrokerDeal,
+    BrokerOrder,
+    BrokerPosition,
+)
 from aureon.models.control import ControlRequest
 from aureon.models.detection import (
     CandleContext,
@@ -131,6 +137,10 @@ __all__ = [
     "to_utc",
     "utc_now",
     "AuditRecord",
+    "AccountInfo",
+    "BrokerDeal",
+    "BrokerOrder",
+    "BrokerPosition",
     "ControlRequest",
     "CandleContext",
     "Detection",

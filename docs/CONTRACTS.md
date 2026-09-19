@@ -444,6 +444,85 @@ What the broker said back (§31-§33).
 | `message` | `str \| null` | no | `None` |  |
 | `raw` | `dict[str, object]` | no | `dict()` |  |
 
+### AccountInfo
+
+Account state, for the margin and exposure guards (§56).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `login` | `int` | yes | — |  |
+| `currency` | `str` | no | `'USD'` |  |
+| `balance` | `float` | yes | — |  |
+| `equity` | `float` | yes | — |  |
+| `margin` | `float` | no | `0.0` |  |
+| `margin_free` | `float` | no | `0.0` |  |
+| `margin_level` | `float \| null` | no | `None` |  |
+| `leverage` | `int \| null` | no | `None` |  |
+| `server` | `str \| null` | no | `None` |  |
+| `raw` | `dict[str, object]` | no | `dict()` |  |
+
+### BrokerPosition
+
+An open position as the broker reports it (§49).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `position_id` | `int` | yes | — |  |
+| `symbol` | `str` | yes | — |  |
+| `direction` | `Direction` | yes | — |  |
+| `volume` | `float` | yes | — |  |
+| `open_price` | `float` | yes | — |  |
+| `open_time` | `AwareDatetime` | yes | — |  |
+| `sl` | `float \| null` | no | `None` |  |
+| `tp` | `float \| null` | no | `None` |  |
+| `profit` | `float` | no | `0.0` |  |
+| `swap` | `float` | no | `0.0` |  |
+| `magic` | `int \| null` | no | `None` |  |
+| `comment` | `str \| null` | no | `None` |  |
+| `raw` | `dict[str, object]` | no | `dict()` |  |
+
+### BrokerOrder
+
+A resting (pending) order as the broker reports it (§43).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `order_ticket` | `int` | yes | — |  |
+| `symbol` | `str` | yes | — |  |
+| `order_type` | `OrderType` | yes | — |  |
+| `volume` | `float` | yes | — |  |
+| `price` | `float` | yes | — |  |
+| `sl` | `float \| null` | no | `None` |  |
+| `tp` | `float \| null` | no | `None` |  |
+| `placed_at` | `AwareDatetime \| null` | no | `None` |  |
+| `expires_at` | `AwareDatetime \| null` | no | `None` |  |
+| `magic` | `int \| null` | no | `None` |  |
+| `comment` | `str \| null` | no | `None` |  |
+| `raw` | `dict[str, object]` | no | `dict()` |  |
+
+### BrokerDeal
+
+A deal -- the record of something actually executing (§36).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `deal_id` | `int` | yes | — |  |
+| `order_ticket` | `int \| null` | no | `None` |  |
+| `position_id` | `int \| null` | no | `None` |  |
+| `symbol` | `str` | yes | — |  |
+| `direction` | `Direction` | yes | — |  |
+| `entry` | `DealEntry` | yes | — |  |
+| `volume` | `float` | yes | — |  |
+| `price` | `float` | yes | — |  |
+| `executed_at` | `AwareDatetime` | yes | — |  |
+| `profit` | `float` | no | `0.0` |  |
+| `commission` | `float` | no | `0.0` |  |
+| `swap` | `float` | no | `0.0` |  |
+| `magic` | `int \| null` | no | `None` |  |
+| `comment` | `str \| null` | no | `None` |  |
+| `reason` | `str \| null` | no | `None` | Broker reason code, kept verbatim (decision 15). |
+| `raw` | `dict[str, object]` | no | `dict()` |  |
+
 ### PendingOrder
 
 A live pending order at the broker (§43, decision 9).

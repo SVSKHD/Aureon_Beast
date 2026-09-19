@@ -1,0 +1,14 @@
+// Emulator-only rules: wide open, because the failure-injection suite drives the
+// repositories directly as a trusted server process.
+//
+// The REAL client-facing rules arrive in Phase 8, where the Vue dashboard needs
+// authenticated, allowlisted reads and NO client writes at all (§71). Do not deploy
+// this file.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

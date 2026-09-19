@@ -12,7 +12,7 @@ passes.** Partial passes do not count.
 | 1 | `aureon/models`, `aureon/config`, `aureon/storage/paths.py`, `docs/CONTRACTS.md`, `docs/PHASE1_DECISIONS.md` | Contracts generated, `--check` clean, suite green | ✅ done |
 | 2 | Observer: market data, indicators, agents, engine, durable outbox | Parity + outbox + recovery tests pass; `docs/PHASE2_BASELINE.md` recorded | ✅ Parts A + B done (one MT5-only criterion outstanding) |
 | 3 | Detection evaluation (`EMA_OUTCOME_V1`, no hindsight) | Backfill over the Phase 2 week completes; reached-3/5/10 counted from COMPLETE horizons only, PENDING reported separately | ✅ done (see the threshold-scale finding) |
-| 4 | Execution safety core — exactly-once (**the money phase**) | Failure-injection scenarios A–H + the seeded acceptance suite pass under the emulator; one demo market order and one pending order end to end | ⬜ not started |
+| 4 | Execution safety core — exactly-once (**the money phase**) | Failure-injection scenarios A–H + the seeded acceptance suite pass under the emulator; one demo market order and one pending order end to end | 🟡 code + emulator suite green; **demo-account leg outstanding** |
 | 5 | Position lifecycle — MT5 is the truth | Demo: open via executor, close from mobile; `trades/` shows CLOSED with right close_price/close_reason/P&L within one poll | ⬜ not started |
 | 6 | Discord — human interface over a safe backend | FOK trade and stop order placed from Discord; `/trading disable` blocks with a clear FAILED embed; every action audited | ⬜ not started |
 | 7 | Reviews — machine observation vs human execution | `/status` on a CLOSED market renders the weekly review; baseline numbers reconcile | ⬜ not started |
@@ -96,3 +96,33 @@ The machinery is behaving correctly; the scale is measuring nothing. Because a r
 frozen once shipped (§21), the correction is a **new `rule_id`**, never an edit — that
 is exactly the mechanism the freeze exists to provide. Confirm the intended unit
 against §21 before drawing conclusions from the recorded numbers (decision 47).
+
+## Phase 4 — what is proven, and what is not
+
+**Proven, against the real Firestore emulator:** scenarios A–H, plus the §81 acceptance
+suite — 50 requests per run across 20 seeds, each request independently assigned a
+failure mode, 1000 requests in total. Every one ends with at most one order at the
+broker, and none is left in `EXECUTING`. The ledger inside `FakeBroker` outlives a
+simulated restart, so "exactly once across two process lifetimes" is a claim the tests
+actually make rather than assume.
+
+Two real bugs were caught by those tests and are recorded as decisions 62 and 63:
+
+- `claim` wrote `FAILED_STALE` and then **raised inside the Firestore transaction**,
+  which rolled the write back. A request whose confirmation had expired stayed
+  `CONFIRMED` and could be claimed later at a price the human never saw.
+- `resolve` returned early whenever the status was unchanged, silently discarding the
+  `comment_token` the executor stamps before sending — leaving reconciliation nothing to
+  search for.
+
+**Not proven, and not claimed:**
+
+1. **The demo-account leg of the gate.** "One real MT5 demo market order and one pending
+   order through `main_executor.py`" needs a Windows terminal and a broker login.
+   `MT5Broker` is written and its retcode mapping is unit-tested, but it has never
+   exchanged a byte with a real terminal.
+2. **The guard's completeness.** §41/§56/§57 were unavailable, so the seventeen rules in
+   decision 55 are inferred. The machinery around them is sound — a refused request
+   provably never reaches the broker — but whether the *list* is complete is a question
+   only the frozen spec can answer. **This is the one thing to resolve before a funded
+   account.**

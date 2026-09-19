@@ -1,0 +1,26 @@
+# Firestore emulator for the Phase 4 failure-injection suite (§87).
+#
+#   docker compose -f docker-compose.emulator.yml up -d
+#   export FIRESTORE_EMULATOR_HOST=127.0.0.1:8080
+#   pytest tests/failure_injection
+#
+# If Docker is unavailable, `make emulator` runs the same emulator via firebase-tools
+# (Node + Java, no daemon required).
+services:
+  firestore:
+    image: node:22-alpine
+    working_dir: /work
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./tools/firebase.json:/work/firebase.json:ro
+      - ./tools/firestore.rules:/work/firestore.rules:ro
+    command: >
+      sh -c "apk add --no-cache openjdk17-jre-headless >/dev/null &&
+             npx --yes firebase-tools emulators:start
+               --only firestore --project aureon-test"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
