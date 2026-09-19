@@ -54,3 +54,23 @@ resolved without the section text in front of me.
 | 25 | §71 Discord authorization | Fails closed — an empty `AUREON_AUTHORIZED_USER_IDS` authorises **nobody**. Treating empty as "everyone" would turn a missing env var into an open trading bot. |
 | 26 | §63 weekly review doc id | `{iso_year}-W{iso_week:02d}`, e.g. `2026-W03`, so ids sort chronologically as strings. |
 | 27 | §21 threshold map keys | `threshold_key()` renders integral thresholds without a decimal point (`3`, not `3.0`), so `3` and `3.0` cannot become two buckets in the same `reached` map. |
+
+---
+
+## Decisions added while implementing Phase 2
+
+`docs/ARCHITECTURE.md` is still absent, so §13's exact wording was unavailable and
+the EMA-cross rule below is the standard reading. Rows 29 and 31 are the two most
+worth checking against the real §13, because they change detection counts.
+
+| # | Spec | Decision |
+|---|------|----------|
+| 28 | §9 fixture provenance | The committed `XAUUSD_M5.csv` is **synthetic** (seeded random walk via `scripts/gen_fixtures.py`), as no real broker export was available — the spec permits this if stated. It deliberately spans a weekend, so the 49h discontinuity exercises gap handling and Phase 3's `INVALID` horizons rather than leaving them untested. |
+| 29 | §13 `sequence_today` / `sequence_session` | Count **candles** within the broker day and session, not detections. The engine must build a context before knowing whether any agent will emit, so a per-agent detection count is not available at that moment; and it is recoverable by querying `detections`, whereas a candle index is deterministic under replay. |
+| 30 | §79/§82 engine window | `AnalysisEngine`'s window length is **fixed** and derived from `max(agent.min_window())`, identical in live and replay. This is a **correctness** parameter, not a tuning knob: EMA and Wilder's RSI are recursive, so a 30-bar and a 200-bar window disagree on EMA(21) by enough to move a crossover onto a different candle. `test_a_shorter_window_breaks_parity_as_expected` pins it. |
+| 31 | §13 what counts as a cross | A cross is a **change in the sign of `fast − slow`, ignoring bars where they are exactly equal**. Comparing only against the previous bar is wrong either way: treating equality as the opposite side invents a cross for `1, 2, 2, 1` against `slow = 2` (a touch from below that fell back), while requiring strict inequality misses `3, 2, 1` (a real cross passing through equality). Carrying the last non-zero side forward handles both. |
+| 32 | §75 backfill warm-up | The observer's backfill reaches back a full `window_size` **before** the cursor, feeds those candles to rebuild the engine's window, and discards their detections. Without this a restart silently produced detections that never existed and missed ones that did — caught by `test_observer_recovery` and pinned there. |
+| 33 | §13/§14 RSI's role | RSI is attached as **context only** and never gates a cross. Keeping the gate out means the stored detections record what the crossover rule saw, so "would RSI have helped?" stays answerable from `detection_evaluations` instead of being baked into what was recorded. |
+| 34 | §10 weekly schedule | The weekly open/close (Sun 22:00 → Fri 21:00, plus a 60-minute `PREOPEN`) is expressed in **UTC**, deliberately separate from §18's session windows, which are market-local. The weekly boundary is a market-wide convention, not a property of whichever broker clock we read. This is what makes Sunday 21:30 UTC (`PREOPEN`) differ from 23:30 UTC (`OPEN`). |
+| 35 | §79 agent window shape | Agents receive a pandas `DataFrame` with a UTC `DatetimeIndex` of candle **open** times and columns `open, high, low, close, tick_volume, real_volume`, oldest first, last row = the candle just closed. `validate_window` rejects anything else so a malformed window fails with a clear message rather than as a wrong indicator. |
+| 36 | §83 outbox durability | SQLite in WAL mode with `synchronous=FULL`. The table's entire purpose is surviving an abrupt kill, so trading a real durability guarantee for write throughput on a few detections an hour would be a bad bargain. `delivered_at` is set strictly **after** the remote write returns. |

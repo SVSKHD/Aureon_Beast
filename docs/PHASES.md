@@ -10,8 +10,8 @@ passes.** Partial passes do not count.
 |---|---|---|---|
 | 0 | Repo scaffolding, standing rules, boundary guards | `pytest tests/boundary` green | ✅ done |
 | 1 | `aureon/models`, `aureon/config`, `aureon/storage/paths.py`, `docs/CONTRACTS.md`, `docs/PHASE1_DECISIONS.md` | Contracts generated, `--check` clean, suite green | ✅ done |
-| 2 | Observer: market data, indicators, agents, engine, durable outbox | Parity + outbox + recovery tests pass; a full session of EMA crosses lands in `detections/` with correct ids; `docs/PHASE2_BASELINE.md` recorded | ⏭️ next |
-| 3 | Detection evaluation (`EMA_OUTCOME_V1`, no hindsight) | Backfill over the Phase 2 week completes; reached-3/5/10 counted from COMPLETE horizons only, PENDING reported separately | ⬜ not started |
+| 2 | Observer: market data, indicators, agents, engine, durable outbox | Parity + outbox + recovery tests pass; `docs/PHASE2_BASELINE.md` recorded | 🟡 **Part A done**; Part B agents pending |
+| 3 | Detection evaluation (`EMA_OUTCOME_V1`, no hindsight) | Backfill over the Phase 2 week completes; reached-3/5/10 counted from COMPLETE horizons only, PENDING reported separately | ⬜ blocked on Phase 2 Part B |
 | 4 | Execution safety core — exactly-once | Failure-injection scenarios A–H + the seeded acceptance suite pass under the emulator; one demo market order and one pending order end to end | ⬜ not started |
 | 5 | Position lifecycle — MT5 is the truth | Demo: open via executor, close from mobile; `trades/` shows CLOSED with right close_price/close_reason/P&L within one poll | ⬜ not started |
 | 6 | Discord — human interface over a safe backend | FOK trade and stop order placed from Discord; `/trading disable` blocks with a clear FAILED embed; every action audited | ⬜ not started |
@@ -26,6 +26,8 @@ passes.** Partial passes do not count.
       `aureon/storage`.
 - [ ] `python scripts/gen_contracts.py` produces no diff — or the diff is
       committed together with the model change.
+- [ ] `python scripts/gen_baseline.py` produces no diff — or the change to an
+      agent, the indicators or the fixture that explains it is committed too.
 - [ ] New env vars added to `.env.example`.
 - [ ] New decisions appended to the decisions doc **with the spec §**.
 - [ ] Nothing from a later phase was started early (§94).
@@ -48,3 +50,22 @@ depends on them:
 
 Everything else in Phase 1 is pinned by a test, so a correction surfaces as a
 failing test rather than as silent drift.
+
+## Phase 2 Part A — what landed, and what Part B still needs
+
+Part A is the EMA-cross vertical slice, end to end: market data providers (MT5 +
+historical), pure indicators, the `ema_cross` agent, one `AnalysisEngine` shared by
+live and replay, the durable SQLite outbox and its worker, the Firestore
+repositories, market-state and heartbeat services, and `main_observer.py` with the
+§75 startup sequence.
+
+Its gate is met except for the one criterion that needs a broker: *"`main_observer.py`
+runs for one full session against MT5"*. Everything else the gate asks for is green
+against the fixture and a live-shaped fake feed. That criterion is flagged rather
+than quietly treated as passed.
+
+**Part B (not started):** `rsi_agent`, `session_trend_agent`, `liquidity_agent`,
+`wick_agent`, `breakout_agent`, and the shared `LevelTracker` in
+`aureon/engine/levels.py` that the liquidity and breakout agents must both use —
+never two implementations. Each needs its own parity test and its counts added to
+`docs/PHASE2_BASELINE.md`.
