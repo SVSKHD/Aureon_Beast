@@ -33,7 +33,7 @@ Gaps (weekend discontinuity):
 | fast / slow EMA | 9 / 21 |
 | RSI period | 14 (context only, never a gate) |
 | warm-up bars | 63 (slow × 3) |
-| engine window | 64 bars (fixed; parity contract) |
+| engine window | 583 bars (fixed; parity contract) |
 
 ## Detections
 
@@ -65,12 +65,97 @@ Gaps (weekend discontinuity):
 | `2026-09-21` | 8 |
 | `2026-09-22` | 7 |
 
-## Not yet measured
+---
 
-Part B agents (RSI context, session trend, liquidity sweeps, wick rejections,
-breakouts) are not implemented, so sweeps-per-session and breakouts-per-session
-are absent from this table. They are added here as each agent lands, alongside
-its own parity test.
+## All agents
+
+Counts from one run with the whole roster registered. Because the engine gives
+each agent its own window slice, these are identical to running each agent
+alone -- adding an agent never changes another's output.
+
+| agent | version | window | detections |
+|---|---|---|---|
+| `ema_cross` | 1.0.0 | 64 | 70 |
+| `rsi` | 1.0.0 | 44 | 110 |
+| `session_trend` | 1.0.0 | 98 | 19 |
+| `wick` | 1.0.0 | 1 | 235 |
+| `liquidity` | 1.0.0 | 583 | 528 |
+| `breakout` | 1.0.0 | 583 | 251 |
+
+### Crosses, sweeps and breakouts per session
+
+The three counts the Phase 2 gate asks to be recorded.
+
+| session | crosses | sweeps | breakouts |
+|---|---|---|---|
+| `asia` | 16 | 137 | 59 |
+| `london` | 31 | 220 | 110 |
+| `new_york` | 12 | 124 | 66 |
+| `off` | 11 | 47 | 16 |
+| **total** | **70** | **528** | **251** |
+
+### Liquidity sweeps by level
+
+| event_key | count |
+|---|---|
+| `down|asia_low` | 28 |
+| `down|london_low` | 19 |
+| `down|previous_day_low` | 31 |
+| `down|previous_session_low` | 68 |
+| `down|swing_low` | 98 |
+| `up|asia_high` | 51 |
+| `up|london_high` | 10 |
+| `up|previous_day_high` | 4 |
+| `up|previous_session_high` | 65 |
+| `up|swing_high` | 154 |
+
+### Breakouts by level
+
+| event_key | count |
+|---|---|
+| `down|asia_low` | 14 |
+| `down|london_low` | 11 |
+| `down|previous_day_low` | 11 |
+| `down|previous_session_low` | 35 |
+| `down|swing_low` | 66 |
+| `up|asia_high` | 19 |
+| `up|london_high` | 7 |
+| `up|previous_day_high` | 2 |
+| `up|previous_session_high` | 26 |
+| `up|swing_high` | 60 |
+
+### RSI zone transitions
+
+| event_key | count |
+|---|---|
+| `overbought_entry` | 21 |
+| `overbought_exit` | 25 |
+| `oversold_entry` | 32 |
+| `oversold_exit` | 32 |
+
+### Session trends
+
+| event_key | count |
+|---|---|
+| `asia|down` | 2 |
+| `asia|up` | 5 |
+| `london|down` | 3 |
+| `london|flat` | 1 |
+| `london|up` | 2 |
+| `new_york|down` | 2 |
+| `new_york|flat` | 1 |
+| `new_york|up` | 3 |
+
+### Wick rejections
+
+| event_key | count |
+|---|---|
+| `lower_rejection` | 118 |
+| `upper_rejection` | 117 |
+
+---
+
+## Not yet measured
 
 Phase 3 adds reached-3/5/10 counts from COMPLETE horizons only, reported
 separately from PENDING counts.

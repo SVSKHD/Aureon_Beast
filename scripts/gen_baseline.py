@@ -20,11 +20,17 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from aureon.agents.breakout_agent import BreakoutAgent  # noqa: E402
 from aureon.agents.ema_cross_agent import EmaCrossAgent  # noqa: E402
+from aureon.agents.liquidity_agent import LiquidityAgent  # noqa: E402
+from aureon.agents.rsi_agent import RsiAgent  # noqa: E402
+from aureon.agents.session_trend_agent import SessionTrendAgent  # noqa: E402
+from aureon.agents.wick_agent import WickAgent  # noqa: E402
 from aureon.config.sessions import SESSION_CONFIG_VERSION  # noqa: E402
 from aureon.data.historical_provider import HistoricalDataProvider  # noqa: E402
 from aureon.engine.analysis_engine import AnalysisEngine  # noqa: E402
 from aureon.engine.indicators import min_warmup  # noqa: E402
+from aureon.engine.levels import LevelTracker  # noqa: E402
 
 FIXTURE = REPO_ROOT / "aureon" / "data" / "fixtures" / "XAUUSD_M5.csv"
 OUTPUT = REPO_ROOT / "docs" / "PHASE2_BASELINE.md"
@@ -35,15 +41,42 @@ ACCOUNT_SCOPE = "primary"
 def build() -> str:
     provider = HistoricalDataProvider(FIXTURE, market_tz=MARKET_TZ)
     candles = provider.candles
-    agent = EmaCrossAgent()
-    engine = AnalysisEngine(
-        [agent], account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ
-    )
-    detections = engine.feed(candles)
 
+    agent = EmaCrossAgent()
+    # Liquidity and breakout share ONE LevelTracker (§15, §17).
+    levels = LevelTracker()
+    agents = [
+        agent,
+        RsiAgent(),
+        SessionTrendAgent(),
+        WickAgent(),
+        LiquidityAgent(level_tracker=levels),
+        BreakoutAgent(level_tracker=levels),
+    ]
+    engine = AnalysisEngine(agents, account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ)
+    all_detections = engine.feed(candles)
+
+    by_agent = Counter(d.agent_name for d in all_detections)
+    # The cross agent's own numbers, kept broken out because Phase 3 evaluates
+    # EMA_OUTCOME_V1 against exactly these.
+    detections = [d for d in all_detections if d.agent_name == "ema_cross"]
     by_event = Counter(d.event_key for d in detections)
     by_session = Counter(d.session.session.value for d in detections)
     by_day = Counter(d.detected_at.market_date for d in detections)
+
+    SESSIONS = ("asia", "london", "new_york", "off")
+
+    def per_session(agent_name: str) -> Counter:
+        return Counter(
+            d.session.session.value
+            for d in all_detections
+            if d.agent_name == agent_name
+        )
+
+    def per_event(agent_name: str) -> Counter:
+        return Counter(
+            d.event_key for d in all_detections if d.agent_name == agent_name
+        )
 
     gaps = [
         (a.open_time.utc, b.open_time.utc)
@@ -121,14 +154,64 @@ def build() -> str:
     for day in sorted(by_day):
         lines.append(f"| `{day}` | {by_day[day]} |")
 
+    # ── Part B ────────────────────────────────────────────────────────────────
     lines += [
         "",
-        "## Not yet measured",
+        "---",
         "",
-        "Part B agents (RSI context, session trend, liquidity sweeps, wick rejections,",
-        "breakouts) are not implemented, so sweeps-per-session and breakouts-per-session",
-        "are absent from this table. They are added here as each agent lands, alongside",
-        "its own parity test.",
+        "## All agents",
+        "",
+        "Counts from one run with the whole roster registered. Because the engine gives",
+        "each agent its own window slice, these are identical to running each agent",
+        "alone -- adding an agent never changes another's output.",
+        "",
+        "| agent | version | window | detections |",
+        "|---|---|---|---|",
+    ]
+    for registered in agents:
+        lines.append(
+            f"| `{registered.agent_name}` | {registered.agent_version} | "
+            f"{registered.min_window()} | {by_agent.get(registered.agent_name, 0)} |"
+        )
+
+    lines += [
+        "",
+        "### Crosses, sweeps and breakouts per session",
+        "",
+        "The three counts the Phase 2 gate asks to be recorded.",
+        "",
+        "| session | crosses | sweeps | breakouts |",
+        "|---|---|---|---|",
+    ]
+    sweeps_by_session = per_session("liquidity")
+    breaks_by_session = per_session("breakout")
+    for session in SESSIONS:
+        lines.append(
+            f"| `{session}` | {by_session.get(session, 0)} | "
+            f"{sweeps_by_session.get(session, 0)} | {breaks_by_session.get(session, 0)} |"
+        )
+    lines.append(
+        f"| **total** | **{len(detections)}** | **{sum(sweeps_by_session.values())}** | "
+        f"**{sum(breaks_by_session.values())}** |"
+    )
+
+    for title, agent_name in (
+        ("Liquidity sweeps by level", "liquidity"),
+        ("Breakouts by level", "breakout"),
+        ("RSI zone transitions", "rsi"),
+        ("Session trends", "session_trend"),
+        ("Wick rejections", "wick"),
+    ):
+        events = per_event(agent_name)
+        lines += ["", f"### {title}", "", "| event_key | count |", "|---|---|"]
+        for key in sorted(events):
+            lines.append(f"| `{key}` | {events[key]} |")
+
+    lines += [
+        "",
+        "---",
+        "",
+        "## Not yet measured",
         "",
         "Phase 3 adds reached-3/5/10 counts from COMPLETE horizons only, reported",
         "separately from PENDING counts.",

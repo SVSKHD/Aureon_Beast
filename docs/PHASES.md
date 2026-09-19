@@ -10,8 +10,8 @@ passes.** Partial passes do not count.
 |---|---|---|---|
 | 0 | Repo scaffolding, standing rules, boundary guards | `pytest tests/boundary` green | ✅ done |
 | 1 | `aureon/models`, `aureon/config`, `aureon/storage/paths.py`, `docs/CONTRACTS.md`, `docs/PHASE1_DECISIONS.md` | Contracts generated, `--check` clean, suite green | ✅ done |
-| 2 | Observer: market data, indicators, agents, engine, durable outbox | Parity + outbox + recovery tests pass; `docs/PHASE2_BASELINE.md` recorded | 🟡 **Part A done**; Part B agents pending |
-| 3 | Detection evaluation (`EMA_OUTCOME_V1`, no hindsight) | Backfill over the Phase 2 week completes; reached-3/5/10 counted from COMPLETE horizons only, PENDING reported separately | ⬜ blocked on Phase 2 Part B |
+| 2 | Observer: market data, indicators, agents, engine, durable outbox | Parity + outbox + recovery tests pass; `docs/PHASE2_BASELINE.md` recorded | ✅ Parts A + B done (one MT5-only criterion outstanding) |
+| 3 | Detection evaluation (`EMA_OUTCOME_V1`, no hindsight) | Backfill over the Phase 2 week completes; reached-3/5/10 counted from COMPLETE horizons only, PENDING reported separately | ⏭️ next |
 | 4 | Execution safety core — exactly-once | Failure-injection scenarios A–H + the seeded acceptance suite pass under the emulator; one demo market order and one pending order end to end | ⬜ not started |
 | 5 | Position lifecycle — MT5 is the truth | Demo: open via executor, close from mobile; `trades/` shows CLOSED with right close_price/close_reason/P&L within one poll | ⬜ not started |
 | 6 | Discord — human interface over a safe backend | FOK trade and stop order placed from Discord; `/trading disable` blocks with a clear FAILED embed; every action audited | ⬜ not started |
@@ -64,8 +64,16 @@ runs for one full session against MT5"*. Everything else the gate asks for is gr
 against the fixture and a live-shaped fake feed. That criterion is flagged rather
 than quietly treated as passed.
 
-**Part B (not started):** `rsi_agent`, `session_trend_agent`, `liquidity_agent`,
-`wick_agent`, `breakout_agent`, and the shared `LevelTracker` in
-`aureon/engine/levels.py` that the liquidity and breakout agents must both use —
-never two implementations. Each needs its own parity test and its counts added to
-`docs/PHASE2_BASELINE.md`.
+**Part B (done):** `rsi_agent`, `session_trend_agent`, `wick_agent`,
+`liquidity_agent` and `breakout_agent`, plus the shared `LevelTracker` in
+`aureon/engine/levels.py`. The liquidity and breakout agents are handed the **same**
+tracker instance and a test asserts it — two trackers would be two implementations of
+where a level is, and the agents would disagree about the same bar.
+
+Every agent has a replay/live parity test, and a second test asserts that registering
+an agent never changes what another agent detects (decision 37).
+
+One criterion of the Phase 2 gate remains outstanding and is **not** treated as
+passed: *"`main_observer.py` runs for one full session against MT5"*. It needs a
+Windows terminal and a broker. Everything else in the gate is green against the
+fixture and a live-shaped fake feed.

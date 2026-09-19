@@ -14,6 +14,16 @@ by enough to move a crossover onto a different candle. So the window length is
 derived once, from the agents' own stated requirements, and used identically in both
 directions. It is a correctness parameter, not a tuning knob.
 
+## Why each agent gets its OWN slice
+
+The engine holds one buffer sized to the hungriest agent, but hands each agent exactly
+``agent.min_window()`` bars -- not the whole buffer. Without this, window dependence
+would leak between agents: adding a session agent that needs ~96 bars would widen the
+shared window and thereby change the EMA-cross agent's detections, so introducing a
+new agent would silently rewrite an existing agent's history. Slicing per agent makes
+each one's output depend only on its own configuration, which is what lets agents be
+added in Part B without invalidating Part A's recorded baseline.
+
 ## Counters
 
 ``sequence_today`` and ``sequence_session`` count **candles** within the broker
@@ -103,9 +113,11 @@ class AnalysisEngine:
 
         detections: list[Detection] = []
         for agent in self.agents:
-            produced = agent.on_closed_candle(frame, ctx)
-            for detection in produced:
-                detections.append(detection)
+            # Exactly this agent's stated requirement, so a hungrier sibling cannot
+            # change what this agent sees.
+            needed = agent.min_window()
+            view = frame if len(frame) <= needed else frame.iloc[-needed:]
+            detections.extend(agent.on_closed_candle(view, ctx))
         return detections
 
     def feed(self, candles: Iterable[Candle]) -> list[Detection]:

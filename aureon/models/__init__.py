@@ -80,6 +80,13 @@ from aureon.models.review import (
     ThresholdOutcome,
     WeeklyReview,
 )
+from aureon.models.session import (
+    TREND_DOWN,
+    TREND_FLAT,
+    TREND_UP,
+    TRENDS,
+    SessionSummary,
+)
 from aureon.models.settings import ExecutionSettings
 from aureon.models.system import (
     DEFAULT_OFFLINE_AFTER_SECONDS,
@@ -110,6 +117,7 @@ DOCUMENT_MODELS: tuple[type[AureonDocument], ...] = (
     Heartbeat,
     SystemState,
     ExecutionSettings,
+    SessionSummary,
     DailyReview,
     WeeklyReview,
 )
@@ -179,6 +187,11 @@ __all__ = [
     "ReviewBase",
     "ThresholdOutcome",
     "WeeklyReview",
+    "SessionSummary",
+    "TRENDS",
+    "TREND_UP",
+    "TREND_DOWN",
+    "TREND_FLAT",
     "ExecutionSettings",
     "DEFAULT_OFFLINE_AFTER_SECONDS",
     "DEFAULT_STALE_AFTER_SECONDS",

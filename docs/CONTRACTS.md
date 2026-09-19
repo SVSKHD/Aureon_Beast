@@ -232,6 +232,32 @@ Execution gates and limits (§56, §84).
 | `updated_by` | `str \| null` | no | `None` |  |
 | `disabled_reason` | `str \| null` | no | `None` |  |
 
+### SessionSummary
+
+A completed trading session (§18).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
+| `session_id` | `str` | yes | — | {market_date}__{session} |
+| `account_scope` | `str` | yes | — |  |
+| `symbol` | `str` | yes | — |  |
+| `timeframe` | `Timeframe` | yes | — |  |
+| `session` | `SessionName` | yes | — |  |
+| `market_date` | `str` | yes | — | Broker-local date, YYYY-MM-DD. |
+| `session_config_version` | `int` | yes | — | Boundaries are config (decision 7); stamped so a later change cannot silently reinterpret this document. |
+| `started_at` | `MarketTime` | yes | — | Open of the session's first candle. |
+| `ended_at` | `MarketTime` | yes | — | Close of the session's last candle. |
+| `open` | `float` | yes | — |  |
+| `high` | `float` | yes | — |  |
+| `low` | `float` | yes | — |  |
+| `close` | `float` | yes | — |  |
+| `trend` | `str` | yes | — | One of ['down', 'flat', 'up']. |
+| `change` | `float` | yes | — | close - open, in price. |
+| `change_points` | `float` | yes | — | close - open, in points. |
+| `range` | `float` | yes | — | high - low, in price. |
+| `candle_count` | `int` | yes | — |  |
+
 ### DailyReview
 
 One broker trading day (§61).

@@ -95,3 +95,48 @@ def session_close(market_dt: datetime) -> datetime | None:
 def day_close(market_dt: datetime) -> datetime:
     """Broker-day close: midnight at the end of this market day (§21)."""
     return market_dt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+
+def session_for_minute_of_day(minute_of_day: int) -> SessionName:
+    """Session for a market-local minute-of-day (0-1439).
+
+    Same windows and same precedence as ``session_for`` -- it reads
+    ``SESSION_WINDOWS`` and ``SESSION_PRECEDENCE``, so there is still one definition
+    of where the boundaries are. This variant exists only so a caller with thousands
+    of timestamps can avoid materialising a ``datetime`` per bar, which profiling
+    showed dominated the level and session agents.
+
+    ``test_part_b_agents`` asserts the two agree for every minute of the day.
+    """
+    for name in SESSION_PRECEDENCE:
+        window = SESSION_WINDOWS[name]
+        start = window.start.hour * 60 + window.start.minute
+        end = window.end.hour * 60 + window.end.minute
+        if start <= end:
+            if start <= minute_of_day < end:
+                return name
+        elif minute_of_day >= start or minute_of_day < end:
+            return name
+    return SessionName.OFF
+
+
+def sessions_for_index(market_index: object) -> list[SessionName]:
+    """Sessions for a tz-aware pandas DatetimeIndex already in MARKET time.
+
+    The index must already be converted; passing a UTC index would shift every
+    boundary by the broker's offset (§18).
+    """
+    hours = market_index.hour  # type: ignore[attr-defined]
+    minutes = market_index.minute  # type: ignore[attr-defined]
+    # Cached per distinct minute-of-day: a week of M5 bars has at most 288 distinct
+    # values, so the window lookup runs a few hundred times instead of per bar.
+    cache: dict[int, SessionName] = {}
+    out: list[SessionName] = []
+    for hour, minute in zip(hours, minutes, strict=True):
+        key = int(hour) * 60 + int(minute)
+        session = cache.get(key)
+        if session is None:
+            session = session_for_minute_of_day(key)
+            cache[key] = session
+        out.append(session)
+    return out

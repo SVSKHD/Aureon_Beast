@@ -31,10 +31,17 @@ import sys
 from datetime import timedelta
 from types import FrameType
 
+from aureon.agents.base_agent import BaseAgent
+from aureon.agents.breakout_agent import BreakoutAgent
 from aureon.agents.ema_cross_agent import EmaCrossAgent
+from aureon.agents.liquidity_agent import LiquidityAgent
+from aureon.agents.rsi_agent import RsiAgent
+from aureon.agents.session_trend_agent import SessionTrendAgent, summary_from_detection
+from aureon.agents.wick_agent import WickAgent
 from aureon.config import AureonConfig
 from aureon.data.base_provider import BaseMarketDataProvider
 from aureon.engine.analysis_engine import AnalysisEngine
+from aureon.engine.levels import LevelTracker
 from aureon.engine.market_engine import MarketEngine
 from aureon.models.detection import Detection
 from aureon.models.enums import MarketState, Timeframe
@@ -66,8 +73,9 @@ class Observer:
         state: ObserverState,
         market_state: MarketStateService | None = None,
         state_repository: object | None = None,
+        session_repository: object | None = None,
         heartbeat: HeartbeatService | None = None,
-        agents: list[object] | None = None,
+        agents: list[BaseAgent] | None = None,
     ) -> None:
         self.config = config
         self.provider = provider
@@ -76,10 +84,11 @@ class Observer:
         self.state = state
         self.market_state = market_state
         self.state_repository = state_repository
+        self.session_repository = session_repository
         self.heartbeat = heartbeat
 
         self.engine = AnalysisEngine(
-            agents or [EmaCrossAgent()],
+            agents or default_agents(config),
             account_scope=config.account_scope,
             market_tz=config.market_tz,
         )
@@ -104,6 +113,36 @@ class Observer:
             inserted,
             ", ".join(f"{d.agent_name}/{d.event_key}" for d in detections),
         )
+        self._write_session_summaries(detections)
+
+    def _write_session_summaries(self, detections: list[Detection]) -> None:
+        """Write ``sessions/`` for any completed session (§18).
+
+        The agent stays pure and only supplies the numbers; the write happens here,
+        because a Firestore write from an agent would break both the purity contract
+        and the rule that only repositories touch Firestore (CLAUDE.md).
+
+        Unlike detections, these do not go through the outbox: a session summary is
+        derived entirely from candles the observer will re-process on restart, so a
+        lost write is regenerated rather than lost. Failing loudly here would stop
+        observation for something recoverable.
+        """
+        if self.session_repository is None:
+            return
+        for detection in detections:
+            if detection.agent_name != SessionTrendAgent.agent_name:
+                continue
+            try:
+                summary = summary_from_detection(detection)
+                self.session_repository.upsert(summary)  # type: ignore[attr-defined]
+                log.info(
+                    "wrote session %s (%s, %d candles)",
+                    summary.session_id,
+                    summary.trend,
+                    summary.candle_count,
+                )
+            except Exception:  # noqa: BLE001 - recoverable; see the docstring
+                log.exception("failed to write session summary for %s", detection.event_key)
 
     def _on_candle_close(self, candle: Candle) -> None:
         """Advance the cursor and write state on every candle close."""
@@ -272,11 +311,36 @@ class Observer:
         self.provider.close()
 
 
+def default_agents(config: AureonConfig, *, point: float = 0.01) -> list[BaseAgent]:
+    """The full Part A + Part B roster.
+
+    The liquidity and breakout agents are handed **the same** ``LevelTracker``
+    instance (§15, §17). Two trackers would be two implementations of where a level
+    is, and the agents would disagree about the same bar -- one reporting a sweep of a
+    high the other never considered a high.
+
+    One timeframe is assumed for the level and session agents, because their window
+    sizes are derived from it; a multi-timeframe deployment builds one roster per
+    timeframe.
+    """
+    timeframe = config.timeframes[0]
+    levels = LevelTracker()
+    return [
+        EmaCrossAgent(),
+        RsiAgent(),
+        SessionTrendAgent(timeframe=timeframe, point=point),
+        WickAgent(point=point),
+        LiquidityAgent(timeframe=timeframe, point=point, level_tracker=levels),
+        BreakoutAgent(timeframe=timeframe, point=point, level_tracker=levels),
+    ]
+
+
 def build_observer(config: AureonConfig) -> Observer:
     """Assemble a live observer from configuration."""
     from aureon.data.mt5_provider import MT5DataProvider
     from aureon.storage.detection_repository import DetectionRepository
     from aureon.storage.firebase_service import get_client
+    from aureon.storage.session_repository import SessionRepository
     from aureon.storage.system_state_repository import (
         HeartbeatRepository,
         SystemStateRepository,
@@ -309,6 +373,7 @@ def build_observer(config: AureonConfig) -> Observer:
         state_repository=SystemStateRepository(
             client, min_interval_seconds=config.state_heartbeat_seconds
         ),
+        session_repository=SessionRepository(client),
         heartbeat=HeartbeatService(heartbeat_repo, paths.SERVICE_OBSERVER),
     )
 

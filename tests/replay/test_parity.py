@@ -112,27 +112,35 @@ def test_detection_ids_are_unique_across_a_week(historical: Any) -> None:
     assert len(set(ids)) == len(ids)
 
 
-def test_a_shorter_window_breaks_parity_as_expected(candles: list[Candle]) -> None:
-    """Documents WHY the window size is fixed, by showing it matters.
+def test_the_engine_buffer_size_does_not_change_an_agents_output(
+    candles: list[Candle],
+) -> None:
+    """The engine insulates each agent from how big its buffer happens to be.
 
-    The recursive indicators depend on how much history they are given. This is the
-    failure the fixed-window contract exists to prevent, so it is pinned here: if
-    someone "optimises" the window size in one path only, this test explains what
-    they broke.
+    The indicators themselves remain window-dependent -- that property is pinned in
+    ``test_indicators.test_ema_depends_on_how_much_history_it_is_given``, and it is
+    why a fixed window is a correctness parameter at all. What this test pins is the
+    protection built on top of it (decision 37): the engine hands each agent exactly
+    ``agent.min_window()`` bars, so a wider buffer, whether from ``window_margin`` or
+    from a hungrier sibling agent, cannot reach the agent and change what it detects.
+
+    Without this, registering the liquidity agent (583 bars) beside the cross agent
+    (64) would silently rewrite the cross agent's history and invalidate the recorded
+    Phase 2 baseline.
     """
     agent = EmaCrossAgent()
     wide = AnalysisEngine(
         [agent], account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ, window_margin=200
     )
     narrow = AnalysisEngine([agent], account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ)
-    assert wide.window_size != narrow.window_size
+    assert wide.window_size > narrow.window_size, "the buffers must actually differ"
 
-    wide_ids = [d.detection_id for d in wide.feed(candles)]
-    narrow_ids = [d.detection_id for d in narrow.feed(candles)]
-    assert wide_ids != narrow_ids, (
-        "window size unexpectedly did not affect detections; if the indicators were "
-        "made window-independent, this test and the fixed-window contract can be relaxed"
-    )
+    wide_detections = wide.feed(candles)
+    narrow_detections = narrow.feed(candles)
+    assert wide_detections, "no detections; the comparison would be vacuous"
+    assert [comparable(d) for d in wide_detections] == [
+        comparable(d) for d in narrow_detections
+    ]
 
 
 def test_live_ignores_the_forming_bar(candles: list[Candle]) -> None:
@@ -171,3 +179,97 @@ def test_splitting_a_replay_does_not_change_its_detections(
 
     whole_tail = [d for d in whole if d.candle_open_time.utc >= candles[restart_at].open_time.utc]
     assert [d.detection_id for d in tail] == [d.detection_id for d in whole_tail]
+
+
+# ── Part B: every agent must hold parity, not just the cross agent ────────────
+
+
+def all_agents() -> list:
+    """The full roster, with liquidity and breakout sharing one LevelTracker."""
+    from aureon.agents.breakout_agent import BreakoutAgent
+    from aureon.agents.liquidity_agent import LiquidityAgent
+    from aureon.agents.rsi_agent import RsiAgent
+    from aureon.agents.session_trend_agent import SessionTrendAgent
+    from aureon.agents.wick_agent import WickAgent
+    from aureon.engine.levels import LevelTracker
+
+    levels = LevelTracker()
+    return [
+        EmaCrossAgent(),
+        RsiAgent(),
+        SessionTrendAgent(),
+        WickAgent(),
+        LiquidityAgent(level_tracker=levels),
+        BreakoutAgent(level_tracker=levels),
+    ]
+
+
+AGENT_NAMES = ["ema_cross", "rsi", "session_trend", "wick", "liquidity", "breakout"]
+
+
+@pytest.mark.parametrize("agent_name", AGENT_NAMES)
+def test_every_agent_holds_replay_live_parity(
+    agent_name: str, historical: Any, candles: list[Candle]
+) -> None:
+    """§82 for the whole roster.
+
+    Run once with every agent registered, so the comparison also covers the engine's
+    per-agent slicing: if slicing leaked between agents, the live and replay paths
+    would still agree with each other, but a single-agent run would disagree with the
+    combined run -- which the next test checks.
+    """
+    replay_engine = AnalysisEngine(
+        all_agents(), account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ
+    )
+    replayed = [d for d in replay_engine.feed(candles) if d.agent_name == agent_name]
+
+    provider = FakeLiveProvider(candles)
+    live_engine = AnalysisEngine(
+        all_agents(), account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ
+    )
+    collected: list[Detection] = []
+    market = MarketEngine(
+        provider,
+        live_engine,
+        symbols=["XAUUSD"],
+        timeframes=[Timeframe.M5],
+        on_detections=collected.extend,
+    )
+    first = candles[0]
+    market.seed_cursor(
+        "XAUUSD", Timeframe.M5, first.open_time.utc - (first.close_time - first.open_time.utc)
+    )
+    for candle in candles:
+        provider.advance_to_close_of(candle)
+        market.poll_once()
+    live = [d for d in collected if d.agent_name == agent_name]
+
+    assert replayed, f"{agent_name} produced no detections; parity would be vacuous"
+    assert [d.detection_id for d in live] == [d.detection_id for d in replayed]
+    assert [comparable(d) for d in live] == [comparable(d) for d in replayed]
+
+
+@pytest.mark.parametrize("agent_name", AGENT_NAMES)
+def test_an_agent_is_unaffected_by_its_siblings(
+    agent_name: str, candles: list[Candle]
+) -> None:
+    """Adding an agent must not change what another agent detects.
+
+    This is what the engine's per-agent window slicing buys. Without it, registering
+    the liquidity agent (583 bars) alongside the cross agent (64) would widen the
+    shared window and silently rewrite the cross agent's history -- invalidating the
+    recorded Phase 2 baseline just by adding a sibling.
+    """
+    solo_agent = next(a for a in all_agents() if a.agent_name == agent_name)
+    solo = AnalysisEngine(
+        [solo_agent], account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ
+    ).feed(candles)
+
+    combined_engine = AnalysisEngine(
+        all_agents(), account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ
+    )
+    combined = [
+        d for d in combined_engine.feed(candles) if d.agent_name == agent_name
+    ]
+
+    assert [comparable(d) for d in solo] == [comparable(d) for d in combined]
