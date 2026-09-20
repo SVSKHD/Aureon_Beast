@@ -100,19 +100,30 @@ OVERRIDES: dict[str, dict[str, float]] = {
     "XAUUSD": {"point": 0.01},
     # ── XAGUSD: a PLACEHOLDER OF A PLACEHOLDER ────────────────────────────────────
     # Derived by arithmetic from gold's unresearched numbers, so it is one step further
-    # from evidence than they are, and that is worth saying plainly before anyone reads
-    # a silver detection as a measurement.
+    # from evidence than they are. Worth saying plainly before anyone reads a silver
+    # detection as a measurement.
     #
-    # The derivation, so it can be argued with rather than guessed at: the distance
-    # thresholds are scaled by the ratio of typical daily ranges (gold ~$30 on ~$2400,
-    # silver ~$0.60 on ~$30, so ~50x) and re-expressed in silver's own tick (0.001).
-    # Gold's 5 points of penetration is $0.05, which is 0.17% of its daily range; the
-    # same fraction of silver's range is $0.001 -- one single point.
+    # The derivation, so it can be argued with rather than guessed at: each DISTANCE
+    # threshold is the same **fraction of price** as gold's, re-expressed in silver's own
+    # tick. Gold's 5 points of penetration is $0.05 against ~$2400, or 2.08e-5 of price;
+    # the same fraction of ~$30 is $0.000625, which at a 0.001 tick is **0.625 of one
+    # tick**. It is not representable, so it is clamped to 1 -- and that clamp is the
+    # finding, not a detail: gold's placeholder thresholds are FINER THAN ONE SILVER
+    # TICK, so silver cannot express them at all and its smallest possible penetration is
+    # already ~1.6x larger in relative terms. Expect noise or nothing from this symbol
+    # until somebody researches it, and read `is_default` before believing any of it.
     #
-    # That result is itself the finding: at these scales a "penetration" is one tick,
-    # which is inside the spread on most silver feeds. Expect this symbol to produce
-    # either noise or nothing until someone researches it properly, and read
-    # `is_default` on the params snapshot before believing any of it.
+    # A second derivation, by the ratio of typical DAILY RANGES (gold ~$30 on ~$2400,
+    # silver ~$0.60 on ~$30, so ~50x rather than ~80x), gives values about 1.6x larger:
+    # 1 / 2 / 4 / 10. It was what this entry held before Phase 9A. The two disagree
+    # because silver's daily range is a larger share of its price than gold's (~2% vs
+    # ~1.25%), and that disagreement is the honest measure of how unresearched both are.
+    # The price-fraction numbers are kept because they are the more conservative of the
+    # two -- a smaller threshold selects more events, and over-selecting is visible in a
+    # reached-N table where under-selecting is invisible.
+    #
+    # Changing these forks nothing and needs no agent_version bump (contrast decision
+    # 120): no XAGUSD detection has ever been stored, and XAUUSD's values do not move.
     #
     # The RATIOS are deliberately not scaled. min_rejection_fraction, the wick ratios
     # and max_close_position are dimensionless -- a wick covering 25% of a candle means
@@ -120,10 +131,12 @@ OVERRIDES: dict[str, dict[str, float]] = {
     # difference rather than correcting one.
     "XAGUSD": {
         "point": 0.001,
+        # 0.625 by the arithmetic; clamped to one tick, which is the smallest a
+        # penetration can be and is therefore not a chosen number at all.
         "min_penetration_points": 1.0,
-        "min_close_beyond_points": 2.0,
-        "min_range_points": 4.0,
-        "flat_points": 10.0,
+        "min_close_beyond_points": 1.25,
+        "min_range_points": 2.5,
+        "flat_points": 6.25,
     },
 }
 

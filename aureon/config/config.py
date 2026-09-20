@@ -62,6 +62,25 @@ def _env_csv(key: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
+def _env_map(key: str) -> dict[str, str]:
+    """``KEY=A:x,B:y`` -> ``{"A": "x", "B": "y"}``.
+
+    A malformed entry raises rather than being skipped: a pair without a colon is a
+    typo, and silently dropping it would leave the symbol it was meant to configure
+    looking unconfigured -- which for an evaluation rule means the wrong thresholds or
+    a refusal to start, either way traced back to the wrong thing.
+    """
+    found: dict[str, str] = {}
+    for part in _env_csv(key):
+        symbol, separator, value = part.partition(":")
+        if not separator or not symbol.strip() or not value.strip():
+            raise ValueError(
+                f"{key}: {part!r} is not SYMBOL:VALUE (e.g. XAUUSD:XAU_OUTCOME_V2)"
+            )
+        found[symbol.strip().upper()] = value.strip()
+    return found
+
+
 class AureonConfig(AureonModel):
     """Everything Aureon needs from its environment."""
 
@@ -109,7 +128,18 @@ class AureonConfig(AureonModel):
     monitor_poll_seconds: float = 2.0
 
     # ── Evaluation (§84) ──────────────────────────────────────────────────────
+    #: The rule for a SINGLE-symbol deployment, and the historical name of this
+    #: setting. With more than one symbol it is not enough -- see evaluation_rules.
     evaluation_rule_id: str = "XAU_OUTCOME_V2"
+
+    #: ``AUREON_EVAL_RULES=XAUUSD:XAU_OUTCOME_V2,XAGUSD:XAG_OUTCOME_V1``.
+    #:
+    #: Required once more than one symbol is configured, because an outcome rule's
+    #: thresholds are in the instrument's own money: XAU_OUTCOME_V2 measures $3-$20,
+    #: which on silver at ~$30 is 10-65% of price and would never be reached. Sharing
+    #: one rule across both symbols would fill the reached-N table with zeros that read
+    #: as a finding about silver and are a unit error.
+    evaluation_rules: dict[str, str] = Field(default_factory=dict)
 
     # ── Firestore ─────────────────────────────────────────────────────────────
     firebase_project_id: str | None = None
@@ -147,6 +177,17 @@ class AureonConfig(AureonModel):
             )
         if not self.symbols:
             raise ValueError("at least one symbol must be configured")
+        if len(self.symbols) > 1:
+            # One rule cannot serve two instruments priced two orders of magnitude
+            # apart, so a multi-symbol deployment has to say which rule each uses.
+            missing = [s for s in self.symbols if s.upper() not in self.evaluation_rules]
+            if missing:
+                raise ValueError(
+                    f"AUREON_EVAL_RULES must name every configured symbol; missing "
+                    f"{', '.join(missing)}. An outcome rule's thresholds are in the "
+                    "instrument's own money, so one rule cannot serve two symbols "
+                    "(e.g. AUREON_EVAL_RULES=XAUUSD:XAU_OUTCOME_V2,XAGUSD:XAG_OUTCOME_V1)."
+                )
         if self.status_stale_after_seconds <= self.state_heartbeat_seconds:
             # Otherwise the observer is reported STALE while writing normally.
             raise ValueError(
@@ -203,6 +244,7 @@ class AureonConfig(AureonModel):
                 "AUREON_EVAL_RULE",
                 _env_str("AUREON_EVALUATION_RULE_ID", "XAU_OUTCOME_V2"),
             ),
+            evaluation_rules=_env_map("AUREON_EVAL_RULES"),
             firebase_project_id=_env_opt("AUREON_FIREBASE_PROJECT_ID"),
             google_application_credentials=_env_opt("GOOGLE_APPLICATION_CREDENTIALS"),
             firestore_emulator_host=_env_opt("FIRESTORE_EMULATOR_HOST"),
@@ -216,6 +258,21 @@ class AureonConfig(AureonModel):
             mt5_server=_env_opt("AUREON_MT5_SERVER"),
             mt5_terminal_path=_env_opt("AUREON_MT5_TERMINAL_PATH"),
         )
+
+    def rule_id_for(self, symbol: str) -> str:
+        """The outcome rule id for one symbol.
+
+        Falls back to ``evaluation_rule_id`` ONLY for a single-symbol deployment, which
+        is every existing one: the validator above refuses a multi-symbol config that
+        does not name each symbol's rule, so this can never quietly measure silver
+        against gold's thresholds.
+        """
+        named = self.evaluation_rules.get(symbol.upper())
+        if named:
+            return named
+        if len(self.symbols) > 1:  # pragma: no cover - the validator refuses this first
+            raise KeyError(f"no evaluation rule configured for {symbol}")
+        return self.evaluation_rule_id
 
     @property
     def uses_emulator(self) -> bool:

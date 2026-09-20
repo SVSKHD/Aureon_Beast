@@ -80,6 +80,28 @@ XAU_OUTCOME_V2 = EvaluationRule(
 )
 
 
+#: XAGUSD's rule. Silver trades near $30 against gold's ~$2400, so a rule measuring
+#: $3-$20 would ask whether silver moved 10-65% of its price -- the answer is always no,
+#: and a reached-N table of zeros reads as a finding about the instrument rather than as
+#: the unit error it is.
+#:
+#: The thresholds are gold's V2 distances scaled by the ratio of prices (~80x) and then
+#: rounded to numbers a silver trader would name: $0.10-$1.00. That makes $0.10 on silver
+#: about the same fraction of price as $8 on gold -- so this rule is NOT a translation of
+#: V2 and the two are not directly comparable threshold-for-threshold. What is comparable
+#: is the SHAPE: same reference price, same horizons, same "COMPLETE only" accounting.
+#:
+#: Researched on nothing, like V2's own $3-$20 (decision 121). Frozen from here (§21): a
+#: better scale is XAG_OUTCOME_V2, never an edit to this one.
+XAG_OUTCOME_V1 = EvaluationRule(
+    rule_id="XAG_OUTCOME_V1",
+    reference_price=ReferencePrice.NEXT_OPEN,
+    horizons=EMA_OUTCOME_V1.horizons,
+    thresholds=(0.10, 0.20, 0.30, 0.50, 1.00),
+    threshold_unit=ThresholdUnit.PRICE,
+)
+
+
 class RuleFrozenError(RuntimeError):
     """An attempt to redefine a rule that has already shipped."""
 
@@ -123,3 +145,4 @@ def registered_rules() -> tuple[str, ...]:
 
 register(EMA_OUTCOME_V1)
 register(XAU_OUTCOME_V2)
+register(XAG_OUTCOME_V1)
