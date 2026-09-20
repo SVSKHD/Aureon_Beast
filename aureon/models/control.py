@@ -9,9 +9,11 @@ reconciled view rather than from the request's own optimistic return.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import Field, model_validator
 
-from aureon.models.base import AureonDocument, UtcDatetime, utc_now
+from aureon.models.base import AureonDocument, UtcDatetime, to_utc, utc_now
 from aureon.models.enums import ControlRequestKind, ControlRequestStatus, FailureCode
 
 
@@ -37,6 +39,19 @@ class ControlRequest(AureonDocument):
     completed_at: UtcDatetime | None = None
     failure_code: FailureCode | None = None
     failure_message: str | None = None
+
+    def lease_held_by(self, executor_id: str, *, now: datetime | None = None) -> bool:
+        """Whether ``executor_id`` currently holds a live lease (§46, §47).
+
+        The same gate the trade requests use, and for the same reason: an executor whose
+        lease expired must stop touching the request even mid-flight, because another
+        may already have taken it over. Two executors resolving one cancel is how a
+        human comes to believe an order is gone when the second executor's stale
+        "completed" overwrote the first's "already filled".
+        """
+        if self.executor_instance_id != executor_id or self.lease_expires_at is None:
+            return False
+        return to_utc(now or utc_now()) < self.lease_expires_at
 
     @model_validator(mode="after")
     def _volume_only_for_close(self) -> ControlRequest:

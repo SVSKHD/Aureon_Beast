@@ -19,7 +19,7 @@ from typing import Any
 
 from aureon.models.enums import TradeRequestStatus
 from aureon.models.trade import TradeRequest
-from aureon.storage import paths
+from aureon.storage.trade_request_repository import TradeRequestRepository
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +49,10 @@ class RequestResultListener:
         *,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
-        self._client = client
+        # A repository, not a raw client: every Firestore call goes through one
+        # (CLAUDE.md, decision 107). ``client`` is still accepted so callers need no
+        # change.
+        self._requests = TradeRequestRepository(client)
         self.request_id = request_id
         self._report = report
         self._loop = loop
@@ -63,8 +66,9 @@ class RequestResultListener:
         trade that was already confirmed.
         """
         try:
-            ref = self._client.document(paths.trade_request_path(self.request_id))
-            self._watch = ref.on_snapshot(self._on_snapshot)
+            self._watch = self._requests.watch_document(
+                self.request_id, self._on_snapshot
+            )
         except Exception:  # noqa: BLE001
             log.exception("could not watch request %s", self.request_id)
 

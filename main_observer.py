@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 import signal
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import FrameType
 
 from aureon.agents.base_agent import BaseAgent
@@ -39,7 +39,9 @@ from aureon.agents.rsi_agent import RsiAgent
 from aureon.agents.session_trend_agent import SessionTrendAgent, summary_from_detection
 from aureon.agents.wick_agent import WickAgent
 from aureon.config import AureonConfig
+from aureon.config.sessions import session_for
 from aureon.data.base_provider import BaseMarketDataProvider
+from aureon.data.live_candle_archive import LiveCandleArchive
 from aureon.engine.analysis_engine import AnalysisEngine
 from aureon.engine.levels import LevelTracker
 from aureon.engine.market_engine import MarketEngine
@@ -52,6 +54,7 @@ from aureon.models.system import SymbolState, SystemState
 from aureon.outbox.local_outbox import LocalOutbox
 from aureon.outbox.outbox_worker import OutboxWorker
 from aureon.services.heartbeat_service import HeartbeatService
+from aureon.services.market_snapshot import MarketSnapshot
 from aureon.services.market_state_service import MarketStateService
 from aureon.services.observer_state import ObserverState
 from aureon.storage import paths
@@ -60,6 +63,12 @@ log = logging.getLogger("aureon.observer")
 
 # How far back to backfill when there is no cursor at all (a first-ever run).
 COLD_START_BARS = 500
+
+#: How many times ``_reach_back`` may double its request before giving up. Eight
+#: doublings turns one window into 256, which clears any weekend, holiday or broker
+#: outage; bounded so a provider that keeps returning the same short history cannot
+#: spin here forever.
+MAX_REACH_BACK_DOUBLINGS = 8
 
 
 class Observer:
@@ -80,6 +89,7 @@ class Observer:
         evaluation_repository: object | None = None,
         outcome_tracker: OutcomeTracker | None = None,
         heartbeat: HeartbeatService | None = None,
+        candle_archive: LiveCandleArchive | None = None,
         agents: list[BaseAgent] | None = None,
     ) -> None:
         self.config = config
@@ -112,8 +122,18 @@ class Observer:
             on_candle_close=self._on_candle_close,
         )
         self._last_candles: dict[tuple[str, Timeframe], Candle] = {}
+        # One snapshot per symbol/timeframe, fed by every detection and candle so
+        # /status reports the SAME indicator values that were stored, never a
+        # recomputation that could disagree with them (§59, §66).
+        self._snapshots: dict[tuple[str, Timeframe], MarketSnapshot] = {}
+        self.candle_archive = candle_archive
 
     # ── Detection sink ────────────────────────────────────────────────────────
+
+    def _snapshot(self, symbol: str, timeframe: Timeframe) -> MarketSnapshot:
+        return self._snapshots.setdefault(
+            (symbol, timeframe), MarketSnapshot(symbol=symbol)
+        )
 
     def _on_detections(self, detections: list[Detection]) -> None:
         """Queue detections durably. Local write first, delivery later (§83)."""
@@ -124,6 +144,8 @@ class Observer:
             inserted,
             ", ".join(f"{d.agent_name}/{d.event_key}" for d in detections),
         )
+        for detection in detections:
+            self._snapshot(detection.symbol, detection.timeframe).observe(detection)
         self._write_session_summaries(detections)
         self._track_outcomes(detections)
 
@@ -204,6 +226,20 @@ class Observer:
         """Advance the cursor, evaluations and state on every candle close."""
         key = (candle.symbol, candle.timeframe)
         self._last_candles[key] = candle
+        # Session extremes come from candles, not detections: a session has a high
+        # whether or not anything detected anything.
+        self._snapshot(candle.symbol, candle.timeframe).observe_candle(
+            high=candle.high,
+            low=candle.low,
+            session=session_for(candle.open_time.market),
+        )
+        if self.candle_archive is not None:
+            # §82: record what the broker actually served, so a live-vs-replay
+            # comparison can replay these exact bytes rather than a fresh fetch.
+            try:
+                self.candle_archive.add(candle)
+            except Exception:  # noqa: BLE001 - archiving must never stop observing
+                log.exception("could not archive %s", candle.open_time.utc)
         self._advance_evaluations(candle)
         # Saved per candle, not per poll: a crash between two candles must not
         # re-process the earlier one.
@@ -244,6 +280,11 @@ class Observer:
                         # calling the broker (decision 80). One snapshot, overwritten in
                         # place -- not a tick stream.
                         last_quote=self._latest_quote(symbol),
+                        # Read from the engine rather than recounted here: the engine
+                        # already resets them on the market clock, and a second tally
+                        # would eventually disagree with the first.
+                        **self.engine.cross_counts(symbol, timeframe).as_state(),
+                        **self._snapshot(symbol, timeframe).as_state(),
                     )
                 )
         try:
@@ -306,6 +347,62 @@ class Observer:
             except Exception:  # noqa: BLE001 - see the docstring
                 log.exception("could not publish a symbol spec for %s", symbol)
 
+    def _reach_back(
+        self, symbol: str, timeframe: Timeframe, *, cursor: datetime, now: datetime
+    ) -> list[Candle]:
+        """Fetch enough history to re-warm the engine: a count of CANDLES, not a span
+        of time.
+
+        This distinction is the whole function. ``window_size`` bars of history is
+        ``window_size * timeframe`` minutes only while the market never closes. Reach
+        back 151 bars in wall-clock time from the first candle after a weekend and the
+        request lands inside the 49-hour gap: the provider returns ~70 candles, the
+        fresh engine's EMAs never converge, and the restart silently loses detections
+        the uninterrupted run produced.
+
+        That is not hypothetical -- it is the bug that ``test_restart_produces_no_
+        duplicates_and_no_gap[1500]`` caught. A time-based reach-back survived the
+        9/21 pair by coincidence (64 bars of reach happened to fit in the six hours of
+        candles after the gap) and broke the moment the warm-up grew to 150.
+
+        So: widen the request until it actually yields ``window_size`` candles at or
+        before the cursor, or until widening stops returning anything new -- which is
+        how a genuinely short history (a brand-new symbol) terminates.
+        """
+        bar = timedelta(minutes=timeframe.minutes)
+        needed = self.engine.window_size
+        span = bar * needed
+        candles: list[Candle] = []
+
+        for _attempt in range(MAX_REACH_BACK_DOUBLINGS):
+            candles = self.provider.get_closed_candles(
+                symbol, timeframe, cursor - span, now
+            )
+            warmup = sum(1 for c in candles if c.open_time.utc <= cursor)
+            if warmup >= needed:
+                return candles
+            # Deliberately NOT stopping when the count failed to grow. "Asked for
+            # earlier candles and got none" means either a market closure or the start
+            # of history, and from here those look identical -- an early exit on the
+            # first unchanged count is what left the reach-back starved inside the
+            # weekend gap. Widening to the cap costs a handful of reads, once, at
+            # startup; guessing wrong costs a silently missed detection.
+            span *= 2
+
+        # A genuinely short history (a new symbol) lands here. Not a failure, but said
+        # out loud: the first detections after this restart may differ from an
+        # uninterrupted run's, and silence would make that look like an agent bug.
+        log.warning(
+            "%s %s: only %d of %d warm-up candles available after reaching back to %s; "
+            "early detections may differ from an uninterrupted run",
+            symbol,
+            timeframe.value,
+            sum(1 for c in candles if c.open_time.utc <= cursor),
+            needed,
+            (cursor - span).isoformat(),
+        )
+        return candles
+
     def _backfill(self, symbol: str, timeframe: Timeframe) -> int:
         """Re-warm the engine, then process everything after the cursor.
 
@@ -316,10 +413,11 @@ class Observer:
         window's worth of candles -- a restart would silently produce detections
         that never existed, and miss ones that did.
 
-        So the fetch reaches back a full ``window_size`` BEFORE the cursor. Those
-        warm-up candles are fed through the engine to rebuild its window but their
-        detections are discarded: they were already handled by the previous run.
-        Only candles strictly after the cursor are emitted.
+        So the fetch reaches back a full ``window_size`` worth of CANDLES before the
+        cursor (see ``_reach_back`` for why candles and not minutes). Those warm-up
+        candles are fed through the engine to rebuild its window but their detections
+        are discarded: they were already handled by the previous run. Only candles
+        strictly after the cursor are emitted.
         """
         cursor = self.state.get(symbol, timeframe)
         now = self.provider.now_utc()
@@ -328,20 +426,16 @@ class Observer:
         if cursor is None:
             start = now - bar * COLD_START_BARS
             log.info("no cursor for %s %s; cold start from %s", symbol, timeframe.value, start)
+            candles = self.provider.get_closed_candles(symbol, timeframe, start, now)
         else:
-            # Reach back a full window so the fresh engine's indicators match what
-            # the uninterrupted run would have computed.
-            start = cursor - bar * self.engine.window_size
             log.info(
-                "backfilling %s %s from %s (cursor %s, re-warming %d bars)",
+                "backfilling %s %s (cursor %s, re-warming %d bars)",
                 symbol,
                 timeframe.value,
-                start.isoformat(),
                 cursor.isoformat(),
                 self.engine.window_size,
             )
-
-        candles = self.provider.get_closed_candles(symbol, timeframe, start, now)
+            candles = self._reach_back(symbol, timeframe, cursor=cursor, now=now)
         if not candles:
             # Nothing to backfill, but the live loop still needs the cursor so it
             # does not fall back to its lookback window and re-derive old candles.
@@ -393,6 +487,15 @@ class Observer:
         """Stop cleanly, leaving nothing queued if Firestore is reachable."""
         log.info("observer shutting down")
         self.market_engine.stop()
+        if self.candle_archive is not None:
+            # Flushed here, not per candle: rewriting a parquet file every five minutes
+            # would cost more than the archive is worth. A crash therefore loses the
+            # current day's tail, which the merge on the next flush recovers.
+            try:
+                for path in self.candle_archive.flush_all():
+                    log.info("flushed live candles to %s", path)
+            except Exception:  # noqa: BLE001
+                log.exception("could not flush the live-candle archive")
         if self.heartbeat is not None:
             self.heartbeat.stop()
         self.worker.stop()
@@ -422,7 +525,7 @@ def default_agents(config: AureonConfig, *, point: float = 0.01) -> list[BaseAge
     timeframe = config.timeframes[0]
     levels = LevelTracker()
     return [
-        EmaCrossAgent(),
+        EmaCrossAgent(fast_period=config.ema_fast, slow_period=config.ema_slow),
         RsiAgent(),
         SessionTrendAgent(timeframe=timeframe, point=point),
         WickAgent(point=point),
@@ -477,6 +580,7 @@ def build_observer(config: AureonConfig) -> Observer:
         outcome_tracker=OutcomeTracker(
             get_rule(config.evaluation_rule_id), market_tz=config.market_tz
         ),
+        candle_archive=LiveCandleArchive(),
         heartbeat=HeartbeatService(heartbeat_repo, paths.SERVICE_OBSERVER),
     )
 

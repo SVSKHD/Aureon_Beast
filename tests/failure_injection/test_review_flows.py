@@ -492,3 +492,105 @@ def test_the_cli_defaults_to_the_most_recently_completed_period(service) -> None
     stored = ReviewReader(service._client).get_weekly(*ISO)
     assert stored is not None
     assert (stored.iso_year, stored.iso_week) == ISO
+
+
+# ── The live /status snapshot (§59, §66) ──────────────────────────────────────
+
+
+def open_market_state():
+    """A SystemState with a fully-populated symbol, as the observer would write it."""
+    from aureon.models.enums import SessionName
+
+    return SystemState(
+        symbols=(
+            SymbolState(
+                symbol=SYMBOL,
+                timeframe=Timeframe.M5,
+                market_state=MarketState.OPEN,
+                ema_fast=2401.5,
+                ema_slow=2399.25,
+                rsi=71.4,
+                session=SessionName.LONDON,
+                session_trend="up",
+                session_high=2405.0,
+                session_low=2395.0,
+                ema_crosses_today=3,
+                ema_crosses_session=2,
+                bullish_crosses_today=2,
+                bearish_crosses_today=1,
+                bullish_crosses_session=1,
+                bearish_crosses_session=1,
+                last_cross={
+                    "direction": "buy",
+                    "at": "2026-09-16T10:05:00+00:00",
+                    "price": 2400.0,
+                    "detection_id": "d1",
+                },
+                last_sweep={
+                    "direction": "up",
+                    "level_type": "swing_high",
+                    "at": "2026-09-16T10:00:00+00:00",
+                },
+                last_wick={
+                    "classification": "lower_rejection",
+                    "at": "2026-09-16T09:50:00+00:00",
+                },
+                last_breakout={
+                    "direction": "down",
+                    "level_type": "swing_low",
+                    "at": "2026-09-16T09:55:00+00:00",
+                },
+                detections_today=9,
+            ),
+        )
+    )
+
+
+def test_status_on_an_open_market_renders_the_full_snapshot(
+    context, firestore_client
+) -> None:
+    """The §59 gate, through a real Firestore round trip.
+
+    The unit test proves the layout. This proves the snapshot SURVIVES storage: the
+    last-event dicts, the enum-valued session and the tz-aware timestamps all have to come
+    back intact, and a field that JSON flattened into a string would render as a dash
+    while looking like missing data rather than a serialisation bug.
+    """
+    from aureon.storage.system_state_repository import SystemStateRepository
+
+    SystemStateRepository(firestore_client).write(open_market_state())
+    screen = build_screen(context, ExecutionSettings())
+
+    assert screen.market_closed is False
+    assert screen.review_summary is None, "a live screen must not show a stale review"
+    assert len(screen.live_panels) == 1
+
+    rendered = "\n".join(screen.live_panels[0].lines)
+    for expected in (
+        "2401.50",
+        "+2.25",
+        "overbought",
+        "london",
+        "2405.00",
+        "crosses today 3 (2↑ 1↓)",
+        "last cross buy at 10:05:00Z",
+        "last sweep up swing_high",
+        "last breakout down swing_low",
+        "last wick lower_rejection",
+        "detections today 9",
+    ):
+        assert expected in rendered, f"{expected!r} did not survive the round trip:\n{rendered}"
+
+
+def test_the_derived_fields_survive_the_round_trip(firestore_client) -> None:
+    """ema_distance and rsi_zone are stored, so a reader needs no re-derivation."""
+    from aureon.storage.system_state_repository import SystemStateRepository
+
+    repository = SystemStateRepository(firestore_client)
+    repository.write(open_market_state())
+    read_back = repository.read()
+
+    assert read_back is not None
+    symbol_state = read_back.symbols[0]
+    assert symbol_state.ema_distance == pytest.approx(2.25)
+    assert symbol_state.rsi_zone == "overbought"

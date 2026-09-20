@@ -7,6 +7,8 @@ clock rather than the host's.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pandas as pd
 import pytest
 
@@ -14,14 +16,15 @@ from aureon.agents.base_agent import WINDOW_COLUMNS, validate_window
 from aureon.agents.ema_cross_agent import EmaCrossAgent
 from aureon.engine.analysis_engine import AnalysisEngine
 from aureon.engine.market_engine import MarketEngine
+from aureon.models.detection import Detection
 from aureon.models.enums import Direction, SessionName, Timeframe
 from aureon.models.market import Candle
-from tests.conftest import ACCOUNT_SCOPE, MARKET_TZ, FakeLiveProvider
+from tests.conftest import ACCOUNT_SCOPE, MARKET_TZ, FakeLiveProvider, cross_agent
 
 
 def build(**kwargs: object) -> AnalysisEngine:
     return AnalysisEngine(
-        [EmaCrossAgent()], account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ, **kwargs
+        [cross_agent()], account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ, **kwargs
     )
 
 
@@ -69,7 +72,7 @@ def test_an_inverted_period_pair_is_refused() -> None:
 
 def test_no_detection_before_warmup(candles: list[Candle]) -> None:
     """An unwarmed EMA still carries its seed and would cross on noise."""
-    agent = EmaCrossAgent()
+    agent = cross_agent()
     engine = build()
     early = engine.feed(candles[: agent.min_window() - 1])
     assert early == []
@@ -100,7 +103,7 @@ def test_direction_matches_the_event_key(candles: list[Candle]) -> None:
 
 def test_the_window_is_sized_from_the_agents_requirements() -> None:
     engine = build()
-    assert engine.window_size == EmaCrossAgent().min_window()
+    assert engine.window_size == cross_agent().min_window()
 
 
 def test_a_window_below_the_agents_requirement_is_refused() -> None:
@@ -248,3 +251,194 @@ def test_detections_are_handed_over_per_candle(candles: list[Candle]) -> None:
     market.poll_once()
     assert batches, "no detections were handed over"
     assert all(count >= 1 for count in batches)
+
+
+# ── Cross numbering and tallies (§13, §66) ────────────────────────────────────
+
+
+def cross(index: int, *, direction: Direction, when: datetime) -> Detection:
+    """A cross detection, built directly rather than coaxed out of an agent.
+
+    The numbering is the engine's job, not the agent's, so these tests drive the
+    engine's own hook. Building the detection here keeps the arithmetic visible
+    instead of buried under whatever prices happen to produce a crossover.
+    """
+    from aureon.models.base import MarketTime
+    from aureon.models.detection import SessionContext
+    from aureon.models.identity import detection_id
+
+    event_key = "bullish" if direction is Direction.BUY else "bearish"
+    return Detection(
+        detection_id=detection_id(
+            account_scope=ACCOUNT_SCOPE,
+            symbol="XAUUSD",
+            timeframe="M5",
+            candle_close=when,
+            agent_name="ema_cross",
+            agent_version="2.0.0",
+            event_key=event_key,
+        ),
+        account_scope=ACCOUNT_SCOPE,
+        symbol="XAUUSD",
+        timeframe=Timeframe.M5,
+        agent_name="ema_cross",
+        agent_version="2.0.0",
+        event_key=event_key,
+        direction=direction,
+        detected_at=MarketTime.from_utc(when, MARKET_TZ),
+        candle_open_time=MarketTime.from_utc(when - timedelta(minutes=5), MARKET_TZ),
+        price=2400.0,
+        session=SessionContext(session=SessionName.LONDON, session_config_version=1),
+        sequence_today=index,
+        sequence_session=index,
+    )
+
+
+def test_three_crosses_in_a_session_are_numbered_one_two_three() -> None:
+    """The §13 change: the sequence answers "which cross", not "which candle"."""
+    engine = build()
+    key = ("XAUUSD", Timeframe.M5)
+    base = datetime(2026, 9, 16, 10, 0, tzinfo=UTC)
+
+    numbered = [
+        engine._number(  # noqa: SLF001 - the unit under test
+            cross(99, direction=Direction.BUY, when=base + timedelta(minutes=5 * i)), key
+        )
+        for i in range(3)
+    ]
+
+    assert [d.sequence_today for d in numbered] == [1, 2, 3]
+    assert [d.sequence_session for d in numbered] == [1, 2, 3]
+    # The candle index they were built with is discarded, not blended in.
+    assert all(d.sequence_today != 99 for d in numbered)
+
+    counts = engine.cross_counts("XAUUSD", Timeframe.M5)
+    assert counts.total_today == 3
+    assert counts.total_session == 3
+    assert counts.bullish_today == 3
+    assert counts.bearish_today == 0
+
+
+def test_the_tallies_split_bullish_from_bearish() -> None:
+    engine = build()
+    key = ("XAUUSD", Timeframe.M5)
+    base = datetime(2026, 9, 16, 10, 0, tzinfo=UTC)
+    for i, direction in enumerate([Direction.BUY, Direction.SELL, Direction.BUY]):
+        engine._number(  # noqa: SLF001
+            cross(1, direction=direction, when=base + timedelta(minutes=5 * i)), key
+        )
+
+    state = engine.cross_counts("XAUUSD", Timeframe.M5).as_state()
+    assert state == {
+        "ema_crosses_today": 3,
+        "ema_crosses_session": 3,
+        "bullish_crosses_today": 2,
+        "bearish_crosses_today": 1,
+        "bullish_crosses_session": 2,
+        "bearish_crosses_session": 1,
+    }
+
+
+def test_a_non_cross_detection_keeps_its_candle_index() -> None:
+    """Only crosses are re-numbered; for a sweep the candle index IS the ordinal."""
+    engine = build()
+    key = ("XAUUSD", Timeframe.M5)
+    when = datetime(2026, 9, 16, 10, 0, tzinfo=UTC)
+    sweep = cross(42, direction=Direction.BUY, when=when).model_copy(
+        update={"agent_name": "liquidity", "event_key": "up|swing_high"}
+    )
+
+    numbered = engine._number(sweep, key)  # noqa: SLF001
+
+    assert numbered.sequence_today == 42
+    assert engine.cross_counts("XAUUSD", Timeframe.M5).total_today == 0
+
+
+def test_re_numbering_never_changes_the_detection_id() -> None:
+    """§12 excludes the sequence, so numbering cannot re-key a detection."""
+    engine = build()
+    key = ("XAUUSD", Timeframe.M5)
+    original = cross(7, direction=Direction.SELL, when=datetime(2026, 9, 16, 10, 0, tzinfo=UTC))
+
+    numbered = engine._number(original, key)  # noqa: SLF001
+
+    assert numbered.detection_id == original.detection_id
+    assert numbered.sequence_today == 1
+
+
+def test_the_counters_reset_on_the_market_clock(candles: list[Candle]) -> None:
+    """A broker day rolls at market midnight, not UTC midnight (§8).
+
+    Driven through the real ``_context`` path, because the reset hangs off the same
+    day/session bookkeeping the candle counters use -- testing the counter object
+    alone would not prove it is wired to the market clock.
+    """
+    engine = build()
+    key = ("XAUUSD", Timeframe.M5)
+
+    # Athens is UTC+3 in September, so the broker day rolls at 21:00 UTC.
+    before = next(c for c in candles if c.open_time.utc.hour == 20)
+    after = next(
+        c
+        for c in candles
+        if c.open_time.utc > before.open_time.utc and c.open_time.utc.hour == 21
+    )
+    assert before.open_time.market_date != after.open_time.market_date
+
+    engine._context(before, key)  # noqa: SLF001
+    engine._number(  # noqa: SLF001
+        cross(1, direction=Direction.BUY, when=before.close_time), key
+    )
+    assert engine.cross_counts("XAUUSD", Timeframe.M5).total_today == 1
+
+    engine._context(after, key)  # noqa: SLF001
+    assert engine.cross_counts("XAUUSD", Timeframe.M5).total_today == 0, (
+        "the broker day rolled but the tally did not reset"
+    )
+
+
+def test_a_session_change_resets_only_the_session_tally() -> None:
+    """A day contains its sessions, so the day tally must survive a session change."""
+    from aureon.engine.analysis_engine import CrossCounts
+
+    counts = CrossCounts()
+    counts.record(Direction.BUY)
+    counts.record(Direction.SELL)
+    counts.reset_session()
+
+    assert counts.total_today == 2
+    assert counts.bullish_today == 1
+    assert counts.total_session == 0
+    assert counts.bullish_session == 0
+
+
+def test_a_day_reset_clears_the_session_tally_too() -> None:
+    from aureon.engine.analysis_engine import CrossCounts
+
+    counts = CrossCounts()
+    counts.record(Direction.BUY)
+    counts.reset_day()
+
+    assert counts.as_state() == dict.fromkeys(CrossCounts().as_state(), 0)
+
+
+def test_crosses_are_numbered_end_to_end_through_the_engine(
+    candles: list[Candle],
+) -> None:
+    """The whole path: real candles, real agent, numbering applied on the way out.
+
+    Pins that the hook is actually reached by ``on_closed_candle`` -- a numbering
+    function nothing calls would pass every test above.
+    """
+    engine = build()
+    detections = [d for d in engine.feed(candles) if d.agent_name == "ema_cross"]
+    assert detections, "the fixture produced no crosses to number"
+
+    by_day: dict[str, list[Detection]] = {}
+    for detection in detections:
+        by_day.setdefault(detection.detected_at.market_date, []).append(detection)
+
+    for day, group in by_day.items():
+        assert [d.sequence_today for d in group] == list(range(1, len(group) + 1)), (
+            f"{day} is not numbered 1..n"
+        )

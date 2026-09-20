@@ -42,16 +42,27 @@ class EmaCrossAgent(BaseAgent):
     """Fast/slow EMA crossover on closed candles (§13)."""
 
     agent_name = "ema_cross"
-    agent_version = "1.0.0"
+    #: 2.0.0: the periods moved to configuration and the shipped pair changed from
+    #: 9/21 to 20/50. Under §12 the version is part of the detection id, so this bump
+    #: forks history rather than rewriting it -- 1.0.0's detections stay exactly where
+    #: they are and the two pairs can be compared over the same week.
+    agent_version = "2.0.0"
 
     def __init__(
         self,
         *,
-        fast_period: int = 9,
-        slow_period: int = 21,
+        fast_period: int,
+        slow_period: int,
         rsi_period: int = 14,
         price_field: str = "close",
     ) -> None:
+        """Periods are REQUIRED -- there is no default pair.
+
+        A default here is the bug this signature exists to prevent: the observer would
+        read 20/50 from config while a replay, a script or a test silently constructed
+        9/21, and the two would disagree about which candles produced a cross while
+        both looked correct. Callers pass ``cfg.ema_fast`` / ``cfg.ema_slow``.
+        """
         if fast_period <= 0 or slow_period <= 0:
             raise ValueError("periods must be positive")
         if fast_period >= slow_period:
@@ -72,16 +83,26 @@ class EmaCrossAgent(BaseAgent):
             "slow_period": self.slow_period,
             "rsi_period": self.rsi_period,
             "price_field": self.price_field,
-            "warmup_bars": self.min_window(),
+            "warmup_bars": self.warmup_bars(),
         }
 
+    def warmup_bars(self) -> int:
+        """Bars of warm-up before a cross may be confirmed: ``slow_period × 3`` (§14).
+
+        Three times the slow period is where an EMA has effectively forgotten its
+        seed. Shorter, and the first crosses are artefacts of how the average was
+        initialised rather than of the market.
+        """
+        return min_warmup(self.slow_period)
+
     def min_window(self) -> int:
-        """Bars required before a cross may be confirmed (§14).
+        """Bars this agent needs before it will emit anything (§14).
 
         ``+ 1`` because a cross needs the previous bar's relationship as well as the
-        current one.
+        current one. The RSI term is here because the snapshot carries RSI as context;
+        it never gates the detection.
         """
-        return max(min_warmup(self.slow_period), self.rsi_period + 1) + 1
+        return max(self.warmup_bars(), self.rsi_period + 1) + 1
 
     def on_closed_candle(self, window: pd.DataFrame, ctx: CandleContext) -> list[Detection]:
         validate_window(window)

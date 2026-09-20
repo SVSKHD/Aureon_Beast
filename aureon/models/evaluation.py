@@ -23,6 +23,7 @@ from aureon.models.enums import (
     HorizonStatus,
     PathClassification,
     ReferencePrice,
+    ThresholdUnit,
 )
 
 
@@ -81,7 +82,11 @@ class EvaluationRule(AureonModel):
     reference_price: ReferencePrice
     horizons: tuple[Horizon, ...]
     thresholds: tuple[float, ...] = Field(
-        description="Favourable/adverse distances, in points."
+        description="Favourable/adverse distances, in `threshold_unit`."
+    )
+    threshold_unit: ThresholdUnit = Field(
+        default=ThresholdUnit.POINTS,
+        description="Whether `thresholds` are broker points or quote-currency price.",
     )
     termination: str = Field(
         default="per_horizon",
@@ -106,6 +111,49 @@ class EvaluationRule(AureonModel):
     @property
     def threshold_keys(self) -> tuple[str, ...]:
         return tuple(threshold_key(t) for t in self.thresholds)
+
+    def thresholds_in_points(self, point: float) -> tuple[float, ...]:
+        """The thresholds expressed in points, for a symbol whose tick is ``point``.
+
+        The tracker measures excursions in points, so a PRICE rule is converted here
+        rather than at every comparison. ``point`` comes from ``symbol_info.point`` at
+        evaluation time -- never a hard-coded 100 -- so the same rule means "$5" on any
+        symbol instead of meaning $5 on gold and something else everywhere.
+        """
+        if point <= 0:
+            raise ValueError(f"{self.rule_id}: point must be positive, got {point}")
+        if self.threshold_unit is ThresholdUnit.POINTS:
+            return self.thresholds
+        return tuple(t / point for t in self.thresholds)
+
+    @property
+    def definition_hash(self) -> str:
+        """A stable digest of everything that changes what this rule MEANS.
+
+        Exists so a frozen rule can be pinned by a test without pinning its prose. A
+        shipped rule's results are stored under ``{detection_id}__{rule_id}``, so
+        editing its thresholds would silently redefine every number already recorded
+        against it -- the digest turns that into a failing test naming the rule.
+        """
+        import hashlib
+        import json
+
+        payload = json.dumps(
+            {
+                "rule_id": self.rule_id,
+                "reference_price": self.reference_price.value,
+                "threshold_unit": self.threshold_unit.value,
+                "thresholds": list(self.thresholds),
+                "termination": self.termination,
+                "horizons": [
+                    {"id": h.id, "kind": h.kind.value, "value": h.value}
+                    for h in self.horizons
+                ],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def horizon(self, horizon_id: str) -> Horizon:
         for h in self.horizons:
@@ -213,6 +261,14 @@ class DetectionEvaluation(AureonDocument):
         default=None, description="The actual price measured from."
     )
     horizons: tuple[HorizonResult, ...] = ()
+    context_tags: dict[str, bool] = Field(
+        default_factory=dict,
+        description=(
+            "What else the machine had seen at this detection's candle close (§19, "
+            "§23). Derived ONLY from data available at that close -- see "
+            "aureon.evaluation.context_tags. Research grouping, never a gate."
+        ),
+    )
     updated_at: UtcDatetime | None = None
 
     @model_validator(mode="after")

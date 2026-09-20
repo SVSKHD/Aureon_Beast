@@ -31,7 +31,8 @@ def test_defaults_match_the_decisions() -> None:
     config = AureonConfig.from_env(env={})
     assert config.account_scope == "primary"  # decision 4
     assert config.market_tz == "Europe/Athens"  # decision 6
-    assert config.evaluation_rule_id == "EMA_OUTCOME_V1"
+    # decision 103: V2 is the default; the old name still wins when explicitly set.
+    assert config.evaluation_rule_id == "XAU_OUTCOME_V2"
 
 
 def test_an_empty_allowlist_authorises_nobody() -> None:

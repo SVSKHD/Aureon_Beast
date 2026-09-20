@@ -85,8 +85,12 @@ class ControlWorker:
 
         if result.ok:
             self.performed += 1
+            # Deliberately NOT now=moment: the lease is checked against the real
+            # clock, and `moment` is when the claim happened. Passing the claim time
+            # would let an operation that outran its lease still resolve, which is the
+            # exact case the check exists for.
             return self.repository.resolve(
-                control_id, self.executor_id, ControlRequestStatus.COMPLETED, now=moment
+                control_id, self.executor_id, ControlRequestStatus.COMPLETED
             )
 
         self.refused += 1
@@ -100,7 +104,6 @@ class ControlWorker:
             failure_code=result.failure_code or FailureCode.BROKER_REJECTED,
             failure_message=result.message
             or "the broker refused; the monitor will record the actual state",
-            now=moment,
         )
 
     def _perform(self, request: ControlRequest):

@@ -8,6 +8,7 @@ EMULATOR_PORT ?= 8080
 EMULATOR_HOST ?= 127.0.0.1:$(EMULATOR_PORT)
 EMULATOR_ENV  = FIRESTORE_EMULATOR_HOST=$(EMULATOR_HOST) \
                 GOOGLE_CLOUD_PROJECT=aureon-test \
+                AUREON_COLLECTION_PREFIX=aureon_test \
                 no_grpc_proxy=127.0.0.1,localhost
 
 .PHONY: help emulator emulator-stop test test-fast test-emulator contracts baseline lint check

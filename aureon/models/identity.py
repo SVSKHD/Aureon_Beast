@@ -51,30 +51,56 @@ def _canonical_timestamp(value: datetime) -> str:
     return to_utc(value).replace(microsecond=0).isoformat()
 
 
+#: The §12 component order, frozen. Named so a test can assert the tuple the hash
+#: is built from rather than only that the hash is stable.
+DETECTION_ID_COMPONENTS: tuple[str, ...] = (
+    "account_scope",
+    "symbol",
+    "timeframe",
+    "candle_close_utc",
+    "agent_name",
+    "agent_version",
+    "event_key",
+)
+
+
 def detection_id_components(
     *,
     account_scope: str,
     symbol: str,
     timeframe: str,
+    candle_close: datetime,
     agent_name: str,
+    agent_version: str,
     event_key: str,
-    candle_time: datetime,
 ) -> tuple[str, ...]:
-    """The exact tuple hashed into a ``detection_id``, for debugging and tests.
+    """The exact tuple hashed into a ``detection_id`` (§12), for debugging and tests.
 
-    ``agent_version`` is deliberately NOT a component (decision 16): a patch
-    release of an agent re-running over history must land on the SAME document,
-    upserting it, rather than minting a parallel detection for a candle that only
-    ever happened once. The version is still stamped on the document as a field,
-    so which build observed it remains answerable.
+    Seven components, in this order, matching ``DETECTION_ID_COMPONENTS``.
+
+    Two of them deserve a note, because both were different before and the change
+    is visible in every stored id:
+
+    * **``agent_version`` IS a component.** §12 makes it part of the frozen
+      contract, which reverses decision 16. The consequence is deliberate and
+      worth stating plainly: bumping an agent's version no longer upserts the same
+      document, it mints a parallel detection for the same candle. That is what
+      lets ``ema_cross`` 1.0.0 (9/21) and 2.0.0 (20/50) describe the same week
+      side by side instead of overwriting each other -- but it also means a pure
+      bug-fix release re-run over history leaves the old detections behind rather
+      than correcting them. A version bump is now a fork of history, not an edit
+      of it.
+    * **The timestamp is the candle CLOSE, not its open.** A detection becomes
+      known at the close, and §12 keys it on the instant it became knowable.
     """
     return (
         account_scope,
         symbol,
         timeframe,
+        _canonical_timestamp(candle_close),
         agent_name,
+        agent_version,
         event_key,
-        _canonical_timestamp(candle_time),
     )
 
 
@@ -83,9 +109,10 @@ def detection_id(
     account_scope: str,
     symbol: str,
     timeframe: str,
+    candle_close: datetime,
     agent_name: str,
+    agent_version: str,
     event_key: str,
-    candle_time: datetime,
 ) -> str:
     """Stable id for a detection (§12).
 
@@ -98,9 +125,10 @@ def detection_id(
             account_scope=account_scope,
             symbol=symbol,
             timeframe=timeframe,
+            candle_close=candle_close,
             agent_name=agent_name,
+            agent_version=agent_version,
             event_key=event_key,
-            candle_time=candle_time,
         )
     ).hex()
 

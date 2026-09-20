@@ -40,18 +40,22 @@ ACCOUNT_SCOPE = "primary"
 POINT = 0.01
 
 
-def build_agents(*, cross_only: bool) -> list:
+def build_agents(*, cross_only: bool, ema_fast: int, ema_slow: int) -> list:
     """The agent roster to replay.
 
     ``--cross-only`` restricts it to ``ema_cross``, which is what ``EMA_OUTCOME_V1``
     was written for; the default evaluates every directional detection, which is what
     the phase asks for.
+
+    The EMA periods are passed in rather than defaulted, for the reason
+    ``EmaCrossAgent`` has no defaults: a backfill that silently used a different pair
+    from the observer would produce detections at ids the observer never wrote.
     """
     if cross_only:
-        return [EmaCrossAgent()]
+        return [EmaCrossAgent(fast_period=ema_fast, slow_period=ema_slow)]
     levels = LevelTracker()  # shared by liquidity and breakout (§15, §17)
     return [
-        EmaCrossAgent(),
+        EmaCrossAgent(fast_period=ema_fast, slow_period=ema_slow),
         RsiAgent(),
         SessionTrendAgent(point=POINT),
         WickAgent(point=POINT),
@@ -62,7 +66,11 @@ def build_agents(*, cross_only: bool) -> list:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--rule", default="EMA_OUTCOME_V1")
+    parser.add_argument(
+        "--rule",
+        default=None,
+        help="evaluation rule id; defaults to AUREON_EVALUATION_RULE_ID",
+    )
     parser.add_argument("--fixture", type=Path, default=FIXTURE)
     parser.add_argument(
         "--cross-only",
@@ -76,13 +84,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    rule = get_rule(args.rule)
+    # Periods come from the same config the observer reads, so a backfill and the
+    # live run cannot disagree about which pair produced a cross.
+    from aureon.config import AureonConfig
+
+    config = AureonConfig.from_env()
+    rule = get_rule(args.rule or config.evaluation_rule_id)
     provider = HistoricalDataProvider(args.fixture, market_tz=MARKET_TZ)
     candles = provider.candles
 
     result = run_backfill(
         candles,
-        build_agents(cross_only=args.cross_only),
+        build_agents(
+            cross_only=args.cross_only,
+            ema_fast=config.ema_fast,
+            ema_slow=config.ema_slow,
+        ),
         rule,
         account_scope=ACCOUNT_SCOPE,
         market_tz=MARKET_TZ,

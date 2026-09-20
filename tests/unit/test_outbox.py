@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 
-from aureon.agents.ema_cross_agent import EmaCrossAgent
 from aureon.engine.analysis_engine import AnalysisEngine
 from aureon.models.base import utc_now
 from aureon.models.detection import Detection
@@ -25,7 +24,7 @@ from aureon.models.market import Candle
 from aureon.outbox.local_outbox import LocalOutbox
 from aureon.outbox.outbox_worker import OutboxWorker
 from aureon.storage.detection_repository import DetectionRepository
-from tests.conftest import ACCOUNT_SCOPE, MARKET_TZ, InMemoryFirestore
+from tests.conftest import ACCOUNT_SCOPE, MARKET_TZ, InMemoryFirestore, cross_agent
 
 
 @pytest.fixture
@@ -35,8 +34,31 @@ def outbox(tmp_path: Path) -> LocalOutbox:
 
 @pytest.fixture
 def detections(candles: list[Candle]) -> list[Detection]:
+    """Fifty real detections, from the roster the observer actually runs.
+
+    The whole roster rather than ``ema_cross`` alone: the outbox queues whatever the
+    engine produces, and this fixture needs fifty of them. An earlier version used the
+    cross agent alone and happened to get seventy at 9/21 -- at 20/50 the same fixture
+    yields twenty-nine, so the count was resting on a tuning parameter that has nothing
+    to do with the outbox.
+    """
+    from aureon.agents.breakout_agent import BreakoutAgent
+    from aureon.agents.liquidity_agent import LiquidityAgent
+    from aureon.agents.rsi_agent import RsiAgent
+    from aureon.agents.wick_agent import WickAgent
+    from aureon.engine.levels import LevelTracker
+
+    levels = LevelTracker()  # shared by liquidity and breakout (§15, §17)
     engine = AnalysisEngine(
-        [EmaCrossAgent()], account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ
+        [
+            cross_agent(),
+            RsiAgent(),
+            WickAgent(point=0.01),
+            LiquidityAgent(point=0.01, level_tracker=levels),
+            BreakoutAgent(point=0.01, level_tracker=levels),
+        ],
+        account_scope=ACCOUNT_SCOPE,
+        market_tz=MARKET_TZ,
     )
     produced = engine.feed(candles)
     assert len(produced) >= 50, f"fixture produced only {len(produced)} detections"

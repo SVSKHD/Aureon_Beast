@@ -9,6 +9,15 @@ less and a parity failure could not be distinguished from a data difference.
 
 from __future__ import annotations
 
+import os
+
+# BEFORE any aureon import: aureon.storage.paths reads AUREON_COLLECTION_PREFIX at
+# import time and freezes it, so setting this later would have no effect at all while
+# looking as though it had. A suite writing to the production prefix would, the one time
+# someone runs it against a real project, overwrite live documents and report a clean
+# pass.
+os.environ.setdefault("AUREON_COLLECTION_PREFIX", "aureon_test")
+
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -20,12 +29,35 @@ from aureon.data.historical_provider import DEFAULT_SYMBOL_INFO, HistoricalDataP
 from aureon.models.base import to_utc
 from aureon.models.enums import Timeframe
 from aureon.models.market import Candle, QuoteSnapshot, SymbolInfo
+from aureon.storage.paths import DEFAULT_COLLECTION_PREFIX, PREFIX
+
+if PREFIX == DEFAULT_COLLECTION_PREFIX and not os.environ.get("FIRESTORE_EMULATOR_HOST"):
+    raise RuntimeError(
+        f"AUREON_COLLECTION_PREFIX resolved to {PREFIX!r}, the production default, and "
+        "no FIRESTORE_EMULATOR_HOST is set. Refusing to run the suite."
+    )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_CSV = REPO_ROOT / "aureon" / "data" / "fixtures" / "XAUUSD_M5.csv"
 
 MARKET_TZ = "Europe/Athens"
 ACCOUNT_SCOPE = "primary"
+
+# The shipped pair (AUREON_EMA_FAST / AUREON_EMA_SLOW defaults). EmaCrossAgent takes no
+# default periods on purpose, so tests name them here once rather than each inventing a
+# pair -- which is how a suite ends up proving something about 9/21 while the observer
+# runs 20/50.
+EMA_FAST = 20
+EMA_SLOW = 50
+
+
+def cross_agent(**overrides: object):
+    """An ``EmaCrossAgent`` on the shipped periods unless a test says otherwise."""
+    from aureon.agents.ema_cross_agent import EmaCrossAgent
+
+    params: dict[str, object] = {"fast_period": EMA_FAST, "slow_period": EMA_SLOW}
+    params.update(overrides)
+    return EmaCrossAgent(**params)  # type: ignore[arg-type]
 
 
 @pytest.fixture
@@ -136,6 +168,17 @@ class InMemoryFirestore:
     def collection(self, path: str) -> _FakeCollection:
         return _FakeCollection(self, path)
 
+    def transaction(self) -> _FakeTransaction:
+        """A transaction object with NO isolation and NO retry.
+
+        Enough to exercise a repository's transactional code path in a unit test, and
+        nothing more. It cannot prove the property the transactions exist for -- that a
+        concurrent write aborts the loser -- because a double that defines its own
+        concurrency semantics would be testing my model of Firestore rather than
+        Firestore. That belongs in the emulator suite, which is where it is.
+        """
+        return _FakeTransaction(self)
+
 
 class _FakeSnapshot:
     def __init__(self, data: dict[str, Any] | None) -> None:
@@ -158,8 +201,26 @@ class _FakeDoc:
         self._store.docs[self._path] = dict(payload)
         self._store.writes += 1
 
-    def get(self) -> _FakeSnapshot:
+    def get(self, transaction: Any | None = None) -> _FakeSnapshot:
+        # `transaction` accepted and ignored: reads inside a transaction see the same
+        # store, which is exactly the no-isolation caveat above.
         return _FakeSnapshot(self._store.docs.get(self._path))
+
+    def delete(self) -> None:
+        self._store.docs.pop(self._path, None)
+
+
+class _FakeTransaction:
+    """Applies writes immediately. See ``InMemoryFirestore.transaction``."""
+
+    def __init__(self, store: InMemoryFirestore) -> None:
+        self._store = store
+
+    def set(self, ref: _FakeDoc, payload: dict[str, Any]) -> None:
+        ref.set(payload)
+
+    def delete(self, ref: _FakeDoc) -> None:
+        ref.delete()
 
 
 class _FakeCollection:

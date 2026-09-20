@@ -154,6 +154,13 @@ class TradeRequest(AureonDocument):
     failure_code: FailureCode | None = None
     failure_message: str | None = None
 
+    #: Observational stamps, and the ONLY fields a terminal document may still take
+    #: (§58). They record when something was last looked at and assert nothing about
+    #: what happened, so writing one cannot rewrite history -- which is why the
+    #: repositories allow exactly these two past a terminal status.
+    last_reconciled_at: UtcDatetime | None = None
+    last_synced_at: UtcDatetime | None = None
+
     @model_validator(mode="after")
     def _reject_inferred_links(self) -> TradeRequest:
         # Decision 8: an inferred link is a statistical guess. Allowing one here
@@ -292,6 +299,13 @@ class Trade(AureonDocument):
 
     detection_id: str | None = None
     link_type: LinkType | None = None
+
+    #: Observational stamps, and the ONLY fields a terminal document may still take
+    #: (§58). They record when something was last looked at and assert nothing about
+    #: what happened, so writing one cannot rewrite history -- which is why the
+    #: repositories allow exactly these two past a terminal status.
+    last_reconciled_at: UtcDatetime | None = None
+    last_synced_at: UtcDatetime | None = None
 
     @model_validator(mode="after")
     def _reject_inferred_links(self) -> Trade:

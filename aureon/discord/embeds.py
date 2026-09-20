@@ -132,6 +132,12 @@ def status_embed(screen: StatusScreen) -> Any:
     )
     embed.add_field(name="Open trades", value=str(screen.open_trades), inline=True)
     embed.add_field(name="Pending", value=str(screen.pending_requests), inline=True)
+    for panel in screen.live_panels:
+        embed.add_field(
+            name=f"{panel.symbol} ({panel.market_state})",
+            value="```\n" + "\n".join(panel.lines) + "\n```",
+            inline=False,
+        )
     if screen.review_summary is not None:
         embed.add_field(name="Latest review", value=screen.review_summary, inline=False)
     return embed

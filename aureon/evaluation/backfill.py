@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 
 from aureon.agents.base_agent import BaseAgent
 from aureon.engine.analysis_engine import AnalysisEngine
+from aureon.evaluation.context_tags import DEFAULT_CONTEXT_WINDOW_CANDLES, derive_all
 from aureon.evaluation.outcome_tracker import OutcomeTracker
 from aureon.models.detection import Detection
 from aureon.models.enums import HorizonStatus
@@ -57,8 +58,10 @@ def run_backfill(
     account_scope: str,
     market_tz: str,
     point: float = 0.01,
+    context_window_candles: int = DEFAULT_CONTEXT_WINDOW_CANDLES,
+    only_agents: frozenset[str] | None = None,
 ) -> BackfillResult:
-    """Replay candles, produce detections, and evaluate their outcomes."""
+    """Replay candles, produce detections, evaluate their outcomes, and tag them."""
     engine = AnalysisEngine(
         list(agents), account_scope=account_scope, market_tz=market_tz
     )
@@ -74,6 +77,22 @@ def run_backfill(
             result.detections.append(detection)
 
     result.evaluations = tracker.all_evaluations()
+
+    # Tags are derived AFTER the replay, from the detections the replay produced, and
+    # each one sees only the detections at or before its own candle close (§19). Doing
+    # it here rather than inside the tracker keeps the tracker's job unchanged and keeps
+    # the no-hindsight rule in one readable place.
+    tags = derive_all(
+        result.detections,
+        window_candles=context_window_candles,
+        only_agents=only_agents,
+    )
+    result.evaluations = [
+        evaluation.model_copy(
+            update={"context_tags": tags.get(evaluation.detection_id, {})}
+        )
+        for evaluation in result.evaluations
+    ]
     return result
 
 
@@ -177,7 +196,9 @@ def format_report(reports: dict[str, HorizonReport], rule: EvaluationRule) -> st
     )
     lines = [
         f"rule: {rule.rule_id}  (reference={rule.reference_price.value}, "
-        f"thresholds in points={list(rule.thresholds)})",
+        # The unit is named from the rule, not assumed: a PRICE rule reporting "points"
+        # is how $3 gets read as $0.03 by someone trusting the header.
+        f"thresholds in {rule.threshold_unit.value}={list(rule.thresholds)})",
         "",
         "Reached counts use COMPLETE horizons ONLY. Pending and invalid are shown",
         "separately and are never counted as misses.",

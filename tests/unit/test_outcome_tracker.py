@@ -60,9 +60,10 @@ def make_detection(direction: Direction = Direction.BUY, *, index: int = 0) -> D
             account_scope="primary",
             symbol="XAUUSD",
             timeframe="M5",
+            candle_close=origin.close_time,
             agent_name="ema_cross",
+            agent_version="1.0.0",
             event_key="bullish" if direction is Direction.BUY else "bearish",
-            candle_time=origin.open_time.utc,
         ),
         account_scope="primary",
         symbol="XAUUSD",
@@ -471,3 +472,111 @@ def test_re_registering_the_identical_rule_is_a_no_op() -> None:
     from aureon.evaluation.rules import register
 
     assert register(EMA_OUTCOME_V1) is EMA_OUTCOME_V1
+
+
+# ── Price-unit thresholds (XAU_OUTCOME_V2, §21) ───────────────────────────────
+
+
+def v2_tracker(point: float = 0.01) -> OutcomeTracker:
+    from aureon.evaluation.rules import XAU_OUTCOME_V2
+
+    return OutcomeTracker(XAU_OUTCOME_V2, market_tz=TZ, point=point)
+
+
+def test_a_four_dollar_move_reaches_three_but_not_five() -> None:
+    """The acceptance case for V2: thresholds mean DOLLARS, not points.
+
+    +$4 must satisfy the $3 threshold and fail the $5 one. Under V1's point-scale the
+    same move is +400 points and would have satisfied every threshold up to $0.20 --
+    which is exactly the saturation V2 exists to fix.
+    """
+    tracker = v2_tracker()
+    detection = make_detection(Direction.BUY, index=0)
+    tracker.track(detection)
+
+    # Reference is next_open = 100.0. Run to 104.0: a $4 favourable excursion.
+    tracker.on_closed_candle(flat_candle(1, 100.0))
+    tracker.on_closed_candle(candle(2, open_=100.0, high=104.0, low=100.0, close=104.0))
+    for index in range(3, 12):
+        tracker.on_closed_candle(flat_candle(index, 104.0))
+
+    evaluation = tracker.evaluation_for(detection.detection_id)
+    assert evaluation is not None
+    horizon = next(
+        h for h in evaluation.complete_horizons if h.horizon_id == HORIZON_5_CANDLES
+    )
+    assert horizon.reached["3"] is True, "$4 should reach the $3 threshold"
+    assert horizon.reached["5"] is not True, "$4 must not reach the $5 threshold"
+    assert horizon.reached["10"] is not True
+
+
+def test_the_same_move_is_measured_against_the_symbols_own_point() -> None:
+    """A $4 move is $4 whatever the tick size is.
+
+    Run twice with different ``point`` values and the SAME prices. If the conversion
+    were hard-coded rather than derived, one of these two would come out wrong.
+    """
+    outcomes = []
+    for point in (0.01, 0.1):
+        tracker = v2_tracker(point)
+        detection = make_detection(Direction.BUY, index=0)
+        tracker.track(detection)
+        tracker.on_closed_candle(flat_candle(1, 100.0))
+        tracker.on_closed_candle(
+            candle(2, open_=100.0, high=104.0, low=100.0, close=104.0)
+        )
+        for index in range(3, 12):
+            tracker.on_closed_candle(flat_candle(index, 104.0))
+        evaluation = tracker.evaluation_for(detection.detection_id)
+        assert evaluation is not None
+        horizon = next(
+            h for h in evaluation.complete_horizons if h.horizon_id == HORIZON_5_CANDLES
+        )
+        outcomes.append((horizon.reached.get("3"), horizon.reached.get("5")))
+
+    assert outcomes[0] == outcomes[1] == (True, None) or outcomes[0] == outcomes[1], (
+        f"the same $4 move gave different answers at different tick sizes: {outcomes}"
+    )
+    assert outcomes[0][0] is True
+    assert outcomes[0][1] is not True
+
+
+def test_a_points_rule_is_unaffected_by_the_conversion() -> None:
+    """V1 keeps behaving exactly as it did: 3 points is $0.03 at point=0.01.
+
+    A $4 move is 400 points, so under V1 every threshold up to 20 points is reached --
+    the saturation the Phase 2 baseline reported as a finding.
+    """
+    tracker = OutcomeTracker(EMA_OUTCOME_V1, market_tz=TZ, point=0.01)
+    detection = make_detection(Direction.BUY, index=0)
+    tracker.track(detection)
+    tracker.on_closed_candle(flat_candle(1, 100.0))
+    tracker.on_closed_candle(candle(2, open_=100.0, high=104.0, low=100.0, close=104.0))
+    for index in range(3, 12):
+        tracker.on_closed_candle(flat_candle(index, 104.0))
+
+    evaluation = tracker.evaluation_for(detection.detection_id)
+    assert evaluation is not None
+    horizon = next(
+        h for h in evaluation.complete_horizons if h.horizon_id == HORIZON_5_CANDLES
+    )
+    assert all(horizon.reached.get(key) for key in ("3", "5", "10", "15", "20"))
+
+
+def test_a_sell_detection_measures_the_downside_in_price() -> None:
+    """Direction-agnostic: -$4 on a SELL is the same $4 favourable move."""
+    tracker = v2_tracker()
+    detection = make_detection(Direction.SELL, index=0)
+    tracker.track(detection)
+    tracker.on_closed_candle(flat_candle(1, 100.0))
+    tracker.on_closed_candle(candle(2, open_=100.0, high=100.0, low=96.0, close=96.0))
+    for index in range(3, 12):
+        tracker.on_closed_candle(flat_candle(index, 96.0))
+
+    evaluation = tracker.evaluation_for(detection.detection_id)
+    assert evaluation is not None
+    horizon = next(
+        h for h in evaluation.complete_horizons if h.horizon_id == HORIZON_5_CANDLES
+    )
+    assert horizon.reached["3"] is True
+    assert horizon.reached["5"] is not True

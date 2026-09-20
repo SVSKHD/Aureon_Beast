@@ -14,7 +14,6 @@ import pytest
 
 from aureon.agents.base_agent import WINDOW_COLUMNS, BaseAgent
 from aureon.agents.breakout_agent import BreakoutAgent
-from aureon.agents.ema_cross_agent import EmaCrossAgent
 from aureon.agents.liquidity_agent import LiquidityAgent
 from aureon.agents.rsi_agent import (
     ZONE_NEUTRAL,
@@ -31,7 +30,7 @@ from aureon.models.base import MarketTime
 from aureon.models.detection import CandleContext, Detection, SessionContext
 from aureon.models.enums import Direction, SessionName, Timeframe
 from aureon.models.market import Candle
-from tests.conftest import ACCOUNT_SCOPE, MARKET_TZ
+from tests.conftest import ACCOUNT_SCOPE, MARKET_TZ, cross_agent
 
 PART_B = [RsiAgent, SessionTrendAgent, LiquidityAgent, WickAgent, BreakoutAgent]
 
@@ -232,7 +231,7 @@ def test_a_session_summary_document_can_be_built(candles: list[Candle]) -> None:
 
 
 def test_summary_rejects_a_foreign_detection(candles: list[Candle]) -> None:
-    cross = run(EmaCrossAgent(), candles)[0]
+    cross = run(cross_agent(), candles)[0]
     with pytest.raises(ValueError, match="session_trend"):
         summary_from_detection(cross)
 

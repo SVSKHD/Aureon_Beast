@@ -17,6 +17,7 @@ passes.** Partial passes do not count.
 | 6 | Discord — human interface over a safe backend | FOK trade and stop order placed from Discord; `/trading disable` blocks with a clear FAILED embed; every action audited | 🟡 code + emulator suite green; **live-Discord leg outstanding** |
 | 7 | Reviews — machine observation vs human execution | `/status` on a CLOSED market renders the weekly review; baseline numbers reconcile | ✅ done |
 | 8 | Aureon Vue — read-only dashboard | Dashboard matches `/status` at the same second; STALE banner on observer stop; non-allowlisted account sees nothing; rules tests pass | ⬜ not started |
+| — | **Corrections slice** (§12 identity, EMA 20/50, outcome V2, context tags, live snapshot, safety gaps, collection prefix, live-vs-replay tooling) | pytest green with and without the emulator; baseline carries a 20/50 section; `/status` shows the full snapshot; boundary tests cover identity components, bare collection literals and raw Firestore access | ✅ code done; **real-session leg outstanding** |
 
 ## Cross-phase checklist (run after each phase)
 
@@ -232,3 +233,21 @@ criteria are a reasonable rank, not a calibrated one, and `confidence` is explic
 documented as an ordering, not a probability. Whether §61/§63 want these exact fields is
 still unconfirmed (see the standing caveat above).
 
+## Phase 2 real-session evidence
+
+**Empty. Nothing has run against a real MT5 terminal.**
+
+The tooling is in place and tested — `LiveCandleArchive` records the candles the observer
+processed, and `scripts/compare_live_vs_replay.py` replays exactly those and diffs the
+result against what reached Firestore, exiting non-zero on any difference. What is missing
+is a session: this needs Windows and a running terminal, neither of which exists in this
+environment.
+
+`docs/MT5_SESSION_CHECKLIST.md` is the procedure. When a session has run, paste the
+comparison's full output here with the market date, the terminal build, the broker server,
+the commit the observer ran at, and the exit code. The commit hash matters most — a
+comparison is evidence about one build, and without it the output is an anecdote about an
+unknown one.
+
+Until this section has content, every parity claim in this repository is a claim about the
+**engine** given a fixture, not about the engine and a broker agreeing on what a candle is.

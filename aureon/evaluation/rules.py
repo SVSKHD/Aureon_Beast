@@ -25,7 +25,7 @@ scale is a new rule_id, not an edit to this one.
 
 from __future__ import annotations
 
-from aureon.models.enums import HorizonKind, ReferencePrice
+from aureon.models.enums import HorizonKind, ReferencePrice, ThresholdUnit
 from aureon.models.evaluation import EvaluationRule, Horizon
 
 # Horizon ids. These become map keys inside stored documents, so renaming one
@@ -55,6 +55,28 @@ EMA_OUTCOME_V1 = EvaluationRule(
         Horizon(id=HORIZON_OPPOSITE_CROSS, kind=HorizonKind.OPPOSITE_CROSS),
     ),
     thresholds=(3.0, 5.0, 10.0, 15.0, 20.0),
+)
+
+
+#: Agents whose detections carry a direction and are therefore evaluable (§21).
+#: ``wick`` is absent on purpose: it emits ``direction=None``, so there is no
+#: favourable side to measure and evaluating it would invent one.
+XAU_V2_AGENTS: frozenset[str] = frozenset({"ema_cross", "liquidity", "breakout"})
+
+XAU_OUTCOME_V2 = EvaluationRule(
+    rule_id="XAU_OUTCOME_V2",
+    reference_price=ReferencePrice.NEXT_OPEN,
+    # The same horizons as V1. Only the threshold SCALE was wrong, and changing one
+    # thing at a time is what makes the two rules comparable over the same week.
+    horizons=EMA_OUTCOME_V1.horizons,
+    # In PRICE, not points. V1's 3-20 points at point=0.01 is $0.03-$0.20 -- inside a
+    # single XAUUSD M5 candle, which is why every V1 threshold reads as ~100% reached
+    # and measures the instrument's tick size rather than the strategy. These are
+    # $3-$20, distances a gold trader would actually hold for. At point=0.01 that is
+    # 300/500/1000/1500/2000 points, but the multiplier is DERIVED from
+    # symbol_info.point at evaluation time, never written down here.
+    thresholds=(3.0, 5.0, 10.0, 15.0, 20.0),
+    threshold_unit=ThresholdUnit.PRICE,
 )
 
 
@@ -100,3 +122,4 @@ def registered_rules() -> tuple[str, ...]:
 
 
 register(EMA_OUTCOME_V1)
+register(XAU_OUTCOME_V2)

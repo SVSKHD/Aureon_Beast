@@ -270,21 +270,30 @@ def test_settings_round_trip() -> None:
     assert loaded.max_lot == 2.5
 
 
-def test_flipping_the_trading_switch_is_audited() -> None:
-    """§57, §60: disabling takes effect immediately and leaves a record."""
-    from aureon.storage import paths
+def test_the_trading_switch_is_now_transactional() -> None:
+    """§57, §60: the switch and its audit row commit together, with a version check.
 
-    store = InMemoryFirestore()
-    repository = ExecutionSettingsRepository(store)
-    repository.set_trading_enabled(True, actor="user-1")
-    repository.set_trading_enabled(False, actor="user-1", reason="drawdown")
+    This test moved to the emulator suite when ``set_trading_enabled`` became
+    transactional. What it used to assert -- that both writes happen -- can no longer be
+    checked against the in-memory double: the double applies writes immediately and has
+    no isolation, so it would pass whether or not the two writes were atomic. Asserting
+    atomicity against a fake that defines its own semantics proves nothing.
 
-    settings = repository.read()
-    assert settings.trading_enabled is False
-    assert settings.disabled_reason == "drawdown"
+    The real tests live in ``tests/failure_injection/test_kill_switch.py``: two
+    concurrent toggles resolve to exactly one winner, and each successful write leaves
+    exactly one audit row. What remains here is the shape of the API.
+    """
+    import inspect
 
-    audits = [
-        doc for path, doc in store.docs.items() if path.startswith(f"{paths.AUDIT_LOGS}/")
-    ]
-    actions = sorted(a["action"] for a in audits)
-    assert actions == ["trading.disable", "trading.enable"]
+    from aureon.storage.settings_repository import ExecutionSettingsRepository
+
+    signature = inspect.signature(ExecutionSettingsRepository.set_trading_enabled)
+    assert "if_version" in signature.parameters, (
+        "the switch must accept a version to assert against"
+    )
+    source = inspect.getsource(ExecutionSettingsRepository.set_trading_enabled)
+    assert "transaction.set" in source, "the switch must write inside a transaction"
+    assert source.count("transaction.set") == 2, (
+        "the settings document AND its audit row must both be written in the "
+        "transaction; one of them is outside it"
+    )

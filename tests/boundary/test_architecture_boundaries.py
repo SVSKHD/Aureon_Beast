@@ -188,6 +188,149 @@ def test_firestore_clients_are_built_only_in_storage() -> None:
     )
 
 
+def test_no_firestore_access_outside_storage() -> None:
+    """CLAUDE.md: Firestore goes through ``aureon/storage``, with no exceptions.
+
+    The older guard only checked that nobody outside storage IMPORTED a Firestore SDK.
+    That missed the shape the code actually took: an injected client, with
+    ``.collection(...)`` and ``.document(...)`` called on it. Six such call sites existed
+    -- four in the review service, one in the Discord listener, and one in the executor
+    that reached into ``repository._client``, a private attribute.
+
+    All six were reads, so no client-side money write ever existed. That is exactly why
+    this guard matters: the rule that was supposed to prevent one did not constrain this
+    shape of code at all, so the next raw call could have been a ``.set()`` and the suite
+    would have stayed green.
+
+    AST-based, so a docstring or a comment mentioning ``.collection(`` does not fail the
+    suite while a real call does.
+    """
+    forbidden_methods = {"collection", "document", "transaction"}
+    offenders: list[str] = []
+    for path in sorted(AUREON.rglob("*.py")):
+        if path.is_relative_to(AUREON / "storage"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not isinstance(func, ast.Attribute) or func.attr not in forbidden_methods:
+                continue
+            offenders.append(
+                f"{path.relative_to(REPO_ROOT)}:{node.lineno}: "
+                f"{ast.unparse(func)}(...)"
+            )
+    assert not offenders, (
+        "only aureon/storage may call Firestore's .collection()/.document()/"
+        ".transaction(); move the read into a repository method:\n" + "\n".join(offenders)
+    )
+
+
+def test_nothing_reaches_into_a_repositorys_private_client() -> None:
+    """``repository._client`` puts the write discipline one attribute access away.
+
+    Checked separately from the call guard because the access alone is the problem: a
+    caller holding the raw client can do anything the repository was written to prevent,
+    and the next reader has no reason to think the repository is authoritative.
+    """
+    offenders: list[str] = []
+    for path in sorted(AUREON.rglob("*.py")):
+        if path.is_relative_to(AUREON / "storage"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute) or node.attr != "_client":
+                continue
+            # ``self._client`` is a class's own attribute, not a reach into someone
+            # else's repository. The offence is holding ANOTHER object's client.
+            if isinstance(node.value, ast.Name) and node.value.id == "self":
+                continue
+            offenders.append(
+                f"{path.relative_to(REPO_ROOT)}:{node.lineno}: {ast.unparse(node)}"
+            )
+    assert not offenders, (
+        "a repository's private _client must not be reached into from outside "
+        "aureon/storage:\n" + "\n".join(offenders)
+    )
+
+
+#: The collection names, unprefixed. A bare occurrence of any of these as a string
+#: literal outside paths.py is almost certainly a forgotten prefix.
+BARE_COLLECTION_NAMES = frozenset(
+    {
+        "detections",
+        "detection_evaluations",
+        "sessions",
+        "trade_requests",
+        "trades",
+        "control_requests",
+        "audit_logs",
+        "heartbeats",
+        "system_state",
+        "settings",
+        "symbol_specs",
+        "daily_reviews",
+        "weekly_reviews",
+    }
+)
+
+
+def test_no_bare_collection_literal_outside_paths() -> None:
+    """Every collection name is built by ``paths.collection()`` (§83, decision 111).
+
+    A bare literal is the worst kind of bug because it does not fail. Reading or writing
+    ``"detections"`` when everything else uses ``"aureon_beast_detections"`` silently
+    touches a second, empty collection -- which looks exactly like "no data yet".
+
+    Checked as string CONSTANTS via the AST, so a docstring or a dict key derived from a
+    path does not trip it while a real ``client.collection("trades")`` does.
+    """
+    paths_module = AUREON / "storage" / "paths.py"
+    # tests/ is scanned too. A stale literal in a test HELPER is worse than one in
+    # production code: it matches nothing, so the negative assertions pass vacuously and
+    # only a positive one fails -- if there happens to be one.
+    scanned = [*AUREON.rglob("*.py"), *(REPO_ROOT / "tests").rglob("*.py")]
+    # paths.py builds the names; its own test has to pass bare ones to test the builder;
+    # this file lists them to check for them. Those three, and nothing else.
+    exempt = {
+        paths_module,
+        Path(__file__).resolve(),
+        (REPO_ROOT / "tests" / "unit" / "test_paths.py").resolve(),
+    }
+    offenders: list[str] = []
+    for path in sorted(scanned):
+        if path.resolve() in exempt:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and node.value in BARE_COLLECTION_NAMES
+            ):
+                offenders.append(
+                    f"{path.relative_to(REPO_ROOT)}:{node.lineno}: {node.value!r}"
+                )
+    assert not offenders, (
+        "collection names must come from aureon.storage.paths, never a bare literal:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_every_collection_constant_carries_the_prefix() -> None:
+    """The constants hold prefixed values, so existing callers are already correct."""
+    from aureon.storage import paths
+
+    assert paths.PREFIX, "a prefix must always resolve to something"
+    for name in paths.ALL_COLLECTIONS:
+        assert name.startswith(f"{paths.PREFIX}_"), f"{name} is not prefixed"
+    # And nothing is left unprefixed by accident.
+    assert set(paths.ALL_COLLECTIONS) == {
+        paths.collection(bare) for bare in BARE_COLLECTION_NAMES
+    }
+
+
 # ── Reviews may only read COMPLETE horizons ───────────────────────────────────
 
 

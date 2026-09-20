@@ -32,6 +32,10 @@ from aureon.storage.trade_request_repository import _where
 log = logging.getLogger(__name__)
 
 
+class ControlLeaseLost(RuntimeError):
+    """An executor tried to resolve a control request whose lease it no longer holds."""
+
+
 class ControlClaimRejected(RuntimeError):
     """Another executor holds this control request, or it is no longer REQUESTED."""
 
@@ -177,8 +181,21 @@ class ControlRequestRepository:
         failure_code: FailureCode | None = None,
         failure_message: str | None = None,
         now: datetime | None = None,
+        reconciliation: bool = False,
     ) -> ControlRequest:
-        """Record the outcome of a control request."""
+        """Record the outcome of a control request, if this executor still holds it.
+
+        The lease check was missing here while the trade-request equivalent has always
+        had one -- an asymmetry, not a decision. Without it, an executor whose lease
+        expired could still record the outcome of a cancel it no longer owned,
+        overwriting whatever the current holder wrote. A cancel can lose a race to a
+        fill, so the stale writer's "completed" landing on top of the real
+        "already filled" is how a human comes to believe an order is gone when it is a
+        live position (§46, §47).
+
+        ``reconciliation=True`` is the same sanctioned exception the trade requests use:
+        reconciliation holds no lease because it is repairing what a dead executor left.
+        """
         moment = to_utc(now or utc_now())
 
         def txn(transaction: Any) -> ControlRequest:
@@ -186,6 +203,11 @@ class ControlRequestRepository:
             if not getattr(snapshot, "exists", False):
                 raise ControlClaimRejected(f"no such control request {control_id}")
             current = ControlRequest.model_validate(snapshot.to_dict())
+            if not reconciliation and not current.lease_held_by(executor_id, now=moment):
+                raise ControlLeaseLost(
+                    f"{executor_id} cannot resolve {control_id}: lease held by "
+                    f"{current.executor_instance_id} until {current.lease_expires_at}"
+                )
             if current.status is status:
                 return current
             try:
