@@ -46,6 +46,7 @@ from aureon.data.live_candle_archive import LiveCandleArchive
 from aureon.engine.analysis_engine import AnalysisEngine
 from aureon.engine.levels import LevelTracker
 from aureon.engine.market_engine import MarketEngine
+from aureon.engine.symbol_engines import SymbolEngines
 from aureon.evaluation.outcome_tracker import OutcomeTracker
 from aureon.evaluation.rules import get_rule
 from aureon.models.detection import Detection
@@ -88,10 +89,10 @@ class Observer:
         session_repository: object | None = None,
         symbol_repository: object | None = None,
         evaluation_repository: object | None = None,
-        outcome_tracker: OutcomeTracker | None = None,
+        outcome_trackers: dict[str, OutcomeTracker] | None = None,
         heartbeat: HeartbeatService | None = None,
         candle_archive: LiveCandleArchive | None = None,
-        agents: list[BaseAgent] | None = None,
+        agents: list[BaseAgent] | dict[str, list[BaseAgent]] | None = None,
     ) -> None:
         self.config = config
         self.provider = provider
@@ -105,18 +106,26 @@ class Observer:
         # it to read (decision 79).
         self.symbol_repository = symbol_repository
         self.evaluation_repository = evaluation_repository
-        # Decision 50: evaluation runs IN the observer process.
-        self.outcome_tracker = outcome_tracker
+        # Decision 50: evaluation runs IN the observer process. One tracker per symbol,
+        # because an outcome rule's thresholds are in the instrument's own money and its
+        # conversion to points needs that symbol's tick (decision 141).
+        self.outcome_trackers: dict[str, OutcomeTracker] = dict(outcome_trackers or {})
         self.heartbeat = heartbeat
 
-        self.engine = AnalysisEngine(
-            agents or default_agents(config),
-            account_scope=config.account_scope,
-            market_tz=config.market_tz,
+        # One engine, one roster and one LevelTracker per symbol. See SymbolEngines for
+        # why a single shared engine cannot do this: it would keep the right history and
+        # the wrong thresholds.
+        self.engines = SymbolEngines(
+            {symbol: AnalysisEngine(
+                roster,
+                account_scope=config.account_scope,
+                market_tz=config.market_tz,
+            )
+                for symbol, roster in _rosters(config, agents).items()}
         )
         self.market_engine = MarketEngine(
             provider,
-            self.engine,
+            self.engines,
             symbols=config.symbols,
             timeframes=config.timeframes,
             on_detections=self._on_detections,
@@ -151,28 +160,35 @@ class Observer:
         self._track_outcomes(detections)
 
     def _track_outcomes(self, detections: list[Detection]) -> None:
-        """Begin evaluating new detections, and close any horizons they end (§22)."""
-        if self.outcome_tracker is None:
-            return
+        """Begin evaluating new detections, and close any horizons they end (§22).
+
+        Routed by the detection's own symbol: each symbol's tracker holds that symbol's
+        rule and tick, so handing gold's detection to silver's tracker would measure it
+        against $0.10 thresholds converted with the wrong point.
+        """
         try:
             for detection in detections:
+                tracker = self.outcome_trackers.get(detection.symbol)
+                if tracker is None:
+                    continue
                 # Notify BEFORE tracking: a reversing detection closes the
                 # opposite_cross horizon of earlier ones, and cannot close its own.
-                self._persist_evaluations(self.outcome_tracker.on_detection(detection))
-                started = self.outcome_tracker.track(detection)
+                self._persist_evaluations(tracker.on_detection(detection))
+                started = tracker.track(detection)
                 if started is not None:
                     self._persist_evaluations([started])
         except Exception:  # noqa: BLE001 - evaluation must never stop observation
             log.exception("outcome tracking failed for a detection batch")
 
     def _advance_evaluations(self, candle: Candle) -> None:
-        if self.outcome_tracker is None:
+        tracker = self.outcome_trackers.get(candle.symbol)
+        if tracker is None:
             return
         try:
-            self._persist_evaluations(self.outcome_tracker.on_closed_candle(candle))
+            self._persist_evaluations(tracker.on_closed_candle(candle))
             # Finished evaluations are dropped so a long-running observer does not
             # accumulate them; they are already persisted.
-            self.outcome_tracker.release_closed()
+            tracker.release_closed()
         except Exception:  # noqa: BLE001 - see above
             log.exception("advancing evaluations failed at %s", candle.open_time.utc)
 
@@ -284,7 +300,9 @@ class Observer:
                         # Read from the engine rather than recounted here: the engine
                         # already resets them on the market clock, and a second tally
                         # would eventually disagree with the first.
-                        **self.engine.cross_counts(symbol, timeframe).as_state(),
+                        **self.engines.for_symbol(symbol)
+                        .cross_counts(symbol, timeframe)
+                        .as_state(),
                         **self._snapshot(symbol, timeframe).as_state(),
                     )
                 )
@@ -371,7 +389,7 @@ class Observer:
         how a genuinely short history (a brand-new symbol) terminates.
         """
         bar = timedelta(minutes=timeframe.minutes)
-        needed = self.engine.window_size
+        needed = self.engines.for_symbol(symbol).window_size
         span = bar * needed
         candles: list[Candle] = []
 
@@ -434,7 +452,7 @@ class Observer:
                 symbol,
                 timeframe.value,
                 cursor.isoformat(),
-                self.engine.window_size,
+                self.engines.for_symbol(symbol).window_size,
             )
             candles = self._reach_back(symbol, timeframe, cursor=cursor, now=now)
         if not candles:
@@ -446,8 +464,9 @@ class Observer:
 
         produced = 0
         warmed = 0
+        engine = self.engines.for_symbol(symbol)
         for candle in candles:
-            detections = self.engine.on_closed_candle(candle)
+            detections = engine.on_closed_candle(candle)
             is_warmup = cursor is not None and candle.open_time.utc <= cursor
             if is_warmup:
                 # Window rebuilt; these detections belong to the previous run. (Even
@@ -511,8 +530,37 @@ class Observer:
         self.provider.close()
 
 
+def _rosters(
+    config: AureonConfig, agents: list[BaseAgent] | dict[str, list[BaseAgent]] | None
+) -> dict[str, list[BaseAgent]]:
+    """One roster per configured symbol.
+
+    An explicit ``agents`` list is accepted only for a SINGLE-symbol process. Handing one
+    list to two engines would share the agent instances and their ``LevelTracker`` between
+    two instruments, which is the bug this whole split exists to prevent -- so it raises
+    rather than doing it quietly. A dict is the multi-symbol override.
+    """
+    if isinstance(agents, dict):
+        missing = [s for s in config.symbols if s not in agents]
+        if missing:
+            raise ValueError(f"no agent roster supplied for {', '.join(missing)}")
+        return {symbol: agents[symbol] for symbol in config.symbols}
+    if agents is not None:
+        if len(config.symbols) > 1:
+            raise ValueError(
+                "one agent roster cannot serve "
+                f"{len(config.symbols)} symbols: its thresholds and its LevelTracker "
+                "belong to one instrument. Pass {symbol: [agents]}."
+            )
+        return {config.symbols[0]: agents}
+    return {symbol: default_agents(config, symbol=symbol) for symbol in config.symbols}
+
+
 def default_agents(
-    config: AureonConfig, *, point: float | None = None
+    config: AureonConfig,
+    *,
+    symbol: str | None = None,
+    point: float | None = None,
 ) -> list[BaseAgent]:
     """The full Part A + Part B roster.
 
@@ -529,22 +577,27 @@ def default_agents(
     table's value rather than to gold's 0.01; a caller that has read ``symbol_info.point``
     from the broker passes it and it wins, because that is the tick the symbol actually
     has.
+
+    ``symbol`` says which symbol the roster is FOR, and defaults to the first configured
+    one. With two symbols each gets its own roster (9A): the thresholds are not
+    dimensionless, so a shared roster would measure silver with gold's numbers.
     """
     timeframe = config.timeframes[0]
+    wanted = symbol or config.symbols[0]
     levels = LevelTracker()
     # EVERY configured symbol, not just the one the roster is built for: the observer
     # watches them all, and finding out about the third one three hours in is finding
     # out too late.
-    for symbol in config.symbols:
-        require_tuning(symbol)
+    for configured in config.symbols:
+        require_tuning(configured)
     # Per-symbol, because the level and wick thresholds are NOT dimensionless:
     # min_penetration_points = 5 is $0.05 on gold and something else entirely on a
     # symbol with a different tick and a different daily range (D-15).
-    tuning = require_tuning(config.symbols[0], point=point)
+    tuning = require_tuning(wanted, point=point)
     if not tuning.is_default:
         log.info(
             "%s runs tuned agent parameters: %s",
-            config.symbols[0],
+            wanted,
             ", ".join(tuning.overridden),
         )
     return [
@@ -619,9 +672,18 @@ def build_observer(config: AureonConfig) -> Observer:
         session_repository=SessionRepository(client),
         symbol_repository=SymbolRepository(client),
         evaluation_repository=EvaluationRepository(client),
-        outcome_tracker=OutcomeTracker(
-            get_rule(config.evaluation_rule_id), market_tz=config.market_tz
-        ),
+        outcome_trackers={
+            # Each symbol's own rule AND its own tick. The tick matters as much as the
+            # rule: XAG_OUTCOME_V1's $0.10 is 100 points at silver's 0.001 and would be
+            # 10 at gold's 0.01, so a shared point would measure silver's thresholds ten
+            # times too small (decision 138, again).
+            symbol: OutcomeTracker(
+                get_rule(config.rule_id_for(symbol)),
+                market_tz=config.market_tz,
+                point=require_tuning(symbol).point,
+            )
+            for symbol in config.symbols
+        },
         candle_archive=LiveCandleArchive(),
         heartbeat=HeartbeatService(heartbeat_repo, paths.SERVICE_OBSERVER),
     )

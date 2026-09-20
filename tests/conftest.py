@@ -18,6 +18,7 @@ import os
 # pass.
 os.environ.setdefault("AUREON_COLLECTION_PREFIX", "aureon_test")
 
+import math
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,7 @@ if PREFIX == DEFAULT_COLLECTION_PREFIX and not os.environ.get("FIRESTORE_EMULATO
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_CSV = REPO_ROOT / "aureon" / "data" / "fixtures" / "XAUUSD_M5.csv"
+SILVER_FIXTURE_CSV = REPO_ROOT / "aureon" / "data" / "fixtures" / "XAGUSD_M5.csv"
 
 MARKET_TZ = "Europe/Athens"
 ACCOUNT_SCOPE = "primary"
@@ -76,6 +78,18 @@ def historical(fixture_path: Path) -> HistoricalDataProvider:
 @pytest.fixture
 def candles(historical: HistoricalDataProvider) -> list[Candle]:
     return historical.candles
+
+
+@pytest.fixture
+def silver_candles() -> list[Candle]:
+    """The XAGUSD week: same trading hours and session shape, its own random walk."""
+    assert SILVER_FIXTURE_CSV.exists(), (
+        f"{SILVER_FIXTURE_CSV} is missing; regenerate with "
+        "`python scripts/gen_fixtures.py`"
+    )
+    return HistoricalDataProvider(
+        SILVER_FIXTURE_CSV, market_tz=MARKET_TZ, symbol="XAGUSD"
+    ).candles
 
 
 class FakeLiveProvider(BaseMarketDataProvider):
@@ -127,18 +141,50 @@ class FakeLiveProvider(BaseMarketDataProvider):
         return [
             c
             for c in self._all
-            if start <= c.open_time.utc < end and c.close_time <= self._clock
+            # Filtered by SYMBOL as a real terminal does. Without it, polling XAGUSD
+            # returns gold's candles and the observer routes them straight back to gold's
+            # engine -- every multi-symbol test would then pass while proving nothing.
+            if c.symbol == symbol
+            and c.timeframe is timeframe
+            and start <= c.open_time.utc < end
+            and c.close_time <= self._clock
         ]
 
     def get_quote(self, symbol: str) -> QuoteSnapshot:
-        visible = [c for c in self._all if c.close_time <= self._clock]
-        price = visible[-1].close if visible else self._all[0].open
+        """This symbol's own last price, at this symbol's own tick.
+
+        A quote built from another symbol's candles is the same class of error as a
+        candle served under the wrong symbol, and harder to notice: the number looks
+        like a price.
+        """
+        mine = [c for c in self._all if c.symbol == symbol] or self._all
+        visible = [c for c in mine if c.close_time <= self._clock]
+        price = visible[-1].close if visible else mine[0].open
+        point = self.symbol_info(symbol).point
+        spread = point * 15
         return QuoteSnapshot(
-            symbol=symbol, bid=price - 0.15, ask=price + 0.15, captured_at=self._clock, point=0.01
+            symbol=symbol,
+            bid=round(price - spread, 5),
+            ask=round(price + spread, 5),
+            captured_at=self._clock,
+            point=point,
         )
 
     def symbol_info(self, symbol: str) -> SymbolInfo:
-        return self._info
+        """The requested symbol's own metadata, including its tick.
+
+        Silver's point is 0.001 and gold's is 0.01; returning one for the other is how a
+        lot validation or a threshold conversion comes out ten times wrong.
+        """
+        from aureon.config.symbol_tuning import tuning_for
+
+        if symbol == self._info.symbol:
+            return self._info
+        point = tuning_for(symbol).point
+        digits = max(0, round(-math.log10(point)))
+        return self._info.model_copy(
+            update={"symbol": symbol, "point": point, "digits": digits}
+        )
 
     def last_tick_time(self, symbol: str) -> datetime:
         return self._clock
