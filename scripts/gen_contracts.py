@@ -58,6 +58,7 @@ ENUMS: tuple[type[StrEnum], ...] = (
     m.HorizonStatus,
     m.HorizonKind,
     m.ReferencePrice,
+    m.ThresholdUnit,
     m.PathClassification,
     m.ExcursionSource,
     m.ExecutionClassification,
@@ -140,7 +141,10 @@ def render_model(model: type[BaseModel], *, heading: str) -> list[str]:
             factory_name = getattr(field.default_factory, "__name__", "factory")
             default = f"`{factory_name}()`"
         else:
-            default = f"`{field.get_default()!r}`"
+            value = field.get_default()
+            # A StrEnum's repr is "<Unit.POINTS: 'points'>", which tells a reader the
+            # Python class rather than the value that lands in Firestore.
+            default = f"`{value.value!r}`" if isinstance(value, StrEnum) else f"`{value!r}`"
         note = (field.description or "").replace("|", "\\|").replace("\n", " ")
         # Union types render as "A | null"; the bare pipe would split the markdown
         # table cell, so escape it the same way the notes column is escaped.
@@ -237,6 +241,39 @@ def build() -> str:
     )
 
     lines += [
+        "---",
+        "",
+        "## Identity (§12, §34)",
+        "",
+        "Every id is a pure function of its inputs; nothing here reads a clock, a random",
+        "source or a config default. Generated from `aureon/models/identity.py`, so a",
+        "change to the recipe shows up as a diff here rather than as re-keyed data.",
+        "",
+        "### `detection_id` components (§12, frozen)",
+        "",
+        "sha256 over these, in this order, joined by `0x1F` (ASCII unit separator --",
+        "NOT `|`, which `event_key` legitimately contains):",
+        "",
+        "| # | component |",
+        "|---|---|",
+    ]
+    for index, component in enumerate(m.DETECTION_ID_COMPONENTS, start=1):
+        lines.append(f"| {index} | `{component}` |")
+    lines += [
+        "",
+        "`agent_version` is a component, so bumping an agent's version **forks** history:",
+        "the new version's detections sit beside the old version's for the same candles",
+        "rather than replacing them (decision 97). The timestamp is the candle **close**,",
+        "the instant the detection became knowable.",
+        "",
+        "### `comment_token` (§34)",
+        "",
+        f"`{m.COMMENT_PREFIX}` + first {m.COMMENT_HASH_CHARS} base32 chars of",
+        "sha256(request_id) = "
+        f"{len(m.COMMENT_PREFIX) + m.COMMENT_HASH_CHARS} chars, inside MT5's 31-character",
+        "comment field (decision 5). Deterministic so an executor that crashed mid-send",
+        "re-derives exactly the token it stamped.",
+        "",
         "---",
         "",
         "## Sessions",

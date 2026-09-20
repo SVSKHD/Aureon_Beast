@@ -93,6 +93,17 @@ class SymbolState(AureonModel):
     )
     detections_today: int = Field(default=0, ge=0)
 
+    # ── EMA cross tallies (§13, §66) ──────────────────────────────────────────
+    # Six rather than two: "4 crosses today" and "3 up, 1 down" answer different
+    # questions and neither is derivable from the other. Reset on the MARKET clock,
+    # so the evening's crosses land under the broker date a trader would name.
+    ema_crosses_today: int = Field(default=0, ge=0)
+    ema_crosses_session: int = Field(default=0, ge=0)
+    bullish_crosses_today: int = Field(default=0, ge=0)
+    bearish_crosses_today: int = Field(default=0, ge=0)
+    bullish_crosses_session: int = Field(default=0, ge=0)
+    bearish_crosses_session: int = Field(default=0, ge=0)
+
 
 class SystemState(AureonDocument):
     """One document describing the whole system's health (§59, §61-§63).

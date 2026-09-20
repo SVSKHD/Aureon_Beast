@@ -62,7 +62,6 @@ from aureon.models.evaluation import (
     EvaluationRule,
     Horizon,
     HorizonResult,
-    threshold_key,
 )
 from aureon.models.market import Candle
 
@@ -165,6 +164,17 @@ class OutcomeTracker:
         self.rule = rule
         self.market_tz = market_tz
         self.point = point
+        # A PRICE rule's thresholds are converted to points ONCE, here, using the
+        # symbol's own point from symbol_info -- never a hard-coded multiplier. The
+        # excursion maths below stays in points, so nothing downstream has to know
+        # which unit the rule was written in (§21).
+        self._thresholds_points = self.rule.thresholds_in_points(point)
+        #: threshold KEY -> the same threshold in points. The key is derived from the
+        #: rule's own value (3 stays "3" whether it means $3 or 3 points), so stored
+        #: results stay readable in the unit the rule was written in.
+        self._threshold_points_by_key = dict(
+            zip(self.rule.threshold_keys, self._thresholds_points, strict=True)
+        )
         self.gap_tolerance_timeframes = gap_tolerance_timeframes
         self._tracked: dict[str, _Tracked] = {}
 
@@ -347,15 +357,17 @@ class OutcomeTracker:
         seen_at: datetime,
     ) -> None:
         detected_at = tracked.detection.detected_at.utc
-        for threshold in self.rule.thresholds:
-            key = threshold_key(threshold)
+        # `favourable` and `adverse` are in POINTS, so the comparison uses the rule's
+        # thresholds converted to points -- identical for a POINTS rule, scaled by the
+        # symbol's tick for a PRICE one.
+        for key, threshold in self._threshold_points_by_key.items():
             if state.reached.get(key):
                 continue
             if favourable >= threshold:
                 state.reached[key] = True
                 state.time_to[key] = (seen_at - detected_at).total_seconds()
 
-        first = self.rule.thresholds[0]
+        first = self._thresholds_points[0]
         if state.first_favourable_at is None and favourable >= first:
             state.first_favourable_at = seen_at
         if state.first_adverse_at is None and adverse <= -first:

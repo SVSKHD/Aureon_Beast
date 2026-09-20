@@ -37,18 +37,87 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 
 import pandas as pd
 
 from aureon.agents.base_agent import WINDOW_COLUMNS, BaseAgent
 from aureon.config.sessions import SESSION_CONFIG_VERSION, session_for
 from aureon.models.detection import CandleContext, Detection, SessionContext
-from aureon.models.enums import SessionName, Timeframe
+from aureon.models.enums import Direction, SessionName, Timeframe
 from aureon.models.market import Candle
 
 # Extra bars beyond the agents' stated minimum. Zero by default: any margin must be
 # identical in live and replay, so it is explicit rather than incidental.
 DEFAULT_WINDOW_MARGIN = 0
+
+
+#: A "cross" is an ema_cross detection carrying a direction. Named explicitly rather
+#: than inferred from the event key alone so a future agent that happens to emit
+#: "bullish" cannot silently start incrementing the EMA cross counters.
+CROSS_AGENT_NAME = "ema_cross"
+CROSS_EVENT_KEYS = frozenset({"bullish", "bearish"})
+
+
+def is_cross(detection: Detection) -> bool:
+    """Whether a detection is an EMA cross, for counting and numbering (§13)."""
+    return (
+        detection.agent_name == CROSS_AGENT_NAME
+        and detection.event_key in CROSS_EVENT_KEYS
+        and detection.direction is not None
+    )
+
+
+@dataclass
+class CrossCounts:
+    """EMA crosses seen so far today and this session (§13, §66).
+
+    Six numbers rather than two, because "4 crosses today" and "3 up, 1 down" answer
+    different questions and a reader cannot derive the second from the first. Reset on
+    the **market** clock: a broker day rolls at market midnight, not UTC midnight, and
+    a counter that rolled at the wrong hour would put the evening's crosses under the
+    wrong date with nothing in the number to show it.
+    """
+
+    total_today: int = 0
+    total_session: int = 0
+    bullish_today: int = 0
+    bearish_today: int = 0
+    bullish_session: int = 0
+    bearish_session: int = 0
+
+    def record(self, direction: Direction | None) -> None:
+        self.total_today += 1
+        self.total_session += 1
+        if direction is Direction.BUY:
+            self.bullish_today += 1
+            self.bullish_session += 1
+        elif direction is Direction.SELL:
+            self.bearish_today += 1
+            self.bearish_session += 1
+
+    def reset_day(self) -> None:
+        """A new broker day resets both scopes: a day contains its sessions."""
+        self.total_today = 0
+        self.bullish_today = 0
+        self.bearish_today = 0
+        self.reset_session()
+
+    def reset_session(self) -> None:
+        self.total_session = 0
+        self.bullish_session = 0
+        self.bearish_session = 0
+
+    def as_state(self) -> dict[str, int]:
+        """The six fields as ``system_state`` names them (§66)."""
+        return {
+            "ema_crosses_today": self.total_today,
+            "ema_crosses_session": self.total_session,
+            "bullish_crosses_today": self.bullish_today,
+            "bearish_crosses_today": self.bearish_today,
+            "bullish_crosses_session": self.bullish_session,
+            "bearish_crosses_session": self.bearish_session,
+        }
 
 
 class AnalysisEngine:
@@ -86,6 +155,8 @@ class AnalysisEngine:
         self._count_today: dict[tuple[str, Timeframe], int] = {}
         self._count_session: dict[tuple[str, Timeframe], int] = {}
         self._last_open: dict[tuple[str, Timeframe], pd.Timestamp] = {}
+        # Cross counters, reset on the same market-clock boundaries.
+        self._crosses: dict[tuple[str, Timeframe], CrossCounts] = {}
 
     # ── Feeding ───────────────────────────────────────────────────────────────
 
@@ -118,7 +189,38 @@ class AnalysisEngine:
             needed = agent.min_window()
             view = frame if len(frame) <= needed else frame.iloc[-needed:]
             detections.extend(agent.on_closed_candle(view, ctx))
-        return detections
+        return [self._number(detection, key) for detection in detections]
+
+    def _number(self, detection: Detection, key: tuple[str, Timeframe]) -> Detection:
+        """Give a cross detection its ordinal rather than the candle index (§13).
+
+        On a cross, ``sequence_today`` / ``sequence_session`` answer "which cross is
+        this?" -- 1st, 2nd, 3rd of the day and of the session. That is the number a
+        human reads on /status and in a review; the candle index is an implementation
+        detail nobody asked for. Every other agent keeps the candle counters, where
+        the index is the meaningful ordinal.
+
+        Done HERE rather than in the agent because an agent is a pure function of
+        ``(window, ctx)`` -- counting across candles is state, and state in an agent
+        would break the replay/live parity contract the whole engine rests on.
+
+        The id is unaffected: §12 does not include the sequence, so re-numbering
+        cannot re-key a detection.
+        """
+        if not is_cross(detection):
+            return detection
+        counts = self._crosses.setdefault(key, CrossCounts())
+        counts.record(detection.direction)
+        return detection.model_copy(
+            update={
+                "sequence_today": counts.total_today,
+                "sequence_session": counts.total_session,
+            }
+        )
+
+    def cross_counts(self, symbol: str, timeframe: Timeframe) -> CrossCounts:
+        """Current cross tallies for a symbol, for ``system_state`` (§66)."""
+        return self._crosses.get((symbol, timeframe), CrossCounts())
 
     def feed(self, candles: Iterable[Candle]) -> list[Detection]:
         """Feed many candles in order, collecting every detection."""
@@ -135,14 +237,17 @@ class AnalysisEngine:
 
         # Broker day rollover resets both counters; a session change resets only the
         # session counter.
+        counts = self._crosses.setdefault(key, CrossCounts())
         if self._day.get(key) != market_date:
             self._day[key] = market_date
             self._count_today[key] = 0
             self._session[key] = session
             self._count_session[key] = 0
+            counts.reset_day()
         if self._session.get(key) != session:
             self._session[key] = session
             self._count_session[key] = 0
+            counts.reset_session()
 
         self._count_today[key] += 1
         self._count_session[key] += 1
@@ -194,6 +299,7 @@ class AnalysisEngine:
         self._count_today.clear()
         self._count_session.clear()
         self._last_open.clear()
+        self._crosses.clear()
 
     def __repr__(self) -> str:  # pragma: no cover - diagnostics only
         names = ", ".join(a.agent_name for a in self.agents)

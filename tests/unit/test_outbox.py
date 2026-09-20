@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 
-from aureon.agents.ema_cross_agent import EmaCrossAgent
 from aureon.engine.analysis_engine import AnalysisEngine
 from aureon.models.base import utc_now
 from aureon.models.detection import Detection
@@ -25,7 +24,7 @@ from aureon.models.market import Candle
 from aureon.outbox.local_outbox import LocalOutbox
 from aureon.outbox.outbox_worker import OutboxWorker
 from aureon.storage.detection_repository import DetectionRepository
-from tests.conftest import ACCOUNT_SCOPE, MARKET_TZ, InMemoryFirestore
+from tests.conftest import ACCOUNT_SCOPE, MARKET_TZ, InMemoryFirestore, cross_agent
 
 
 @pytest.fixture
@@ -36,7 +35,7 @@ def outbox(tmp_path: Path) -> LocalOutbox:
 @pytest.fixture
 def detections(candles: list[Candle]) -> list[Detection]:
     engine = AnalysisEngine(
-        [EmaCrossAgent()], account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ
+        [cross_agent()], account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ
     )
     produced = engine.feed(candles)
     assert len(produced) >= 50, f"fixture produced only {len(produced)} detections"

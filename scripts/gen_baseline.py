@@ -41,12 +41,20 @@ _FAILURES: list[str] = []
 MARKET_TZ = "Europe/Athens"
 ACCOUNT_SCOPE = "primary"
 
+# The shipped pair (AUREON_EMA_FAST / AUREON_EMA_SLOW defaults) and the pair that
+# shipped before it. Both are replayed: the current one is the baseline Phase 3 and
+# Phase 7 reconcile against, and the historical one stays so the change from 9/21 to
+# 20/50 is a visible diff in counts rather than a claim in a commit message.
+EMA_FAST = 20
+EMA_SLOW = 50
+HISTORICAL_EMA = (9, 21)
+
 
 def build() -> str:
     provider = HistoricalDataProvider(FIXTURE, market_tz=MARKET_TZ)
     candles = provider.candles
 
-    agent = EmaCrossAgent()
+    agent = EmaCrossAgent(fast_period=EMA_FAST, slow_period=EMA_SLOW)
     # Liquidity and breakout share ONE LevelTracker (§15, §17).
     levels = LevelTracker()
     agents = [
@@ -215,7 +223,7 @@ def build() -> str:
     rule = EMA_OUTCOME_V1
     backfill = run_backfill(
         candles,
-        [EmaCrossAgent()],
+        [EmaCrossAgent(fast_period=EMA_FAST, slow_period=EMA_SLOW)],
         rule,
         account_scope=ACCOUNT_SCOPE,
         market_tz=MARKET_TZ,
@@ -287,6 +295,9 @@ def build() -> str:
             "(§21, decision 47).",
         ]
 
+    # ── Historical: the pair that shipped before 20/50 ────────────────────────
+    lines += _historical_section(candles)
+
     # ── Phase 7: weekly reviews must agree ───────────────────────────────────
     lines += _reconciliation_section(backfill, reports, rule, by_day)
 
@@ -301,6 +312,66 @@ def build() -> str:
         "for a rule of their own.",
     ]
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _historical_section(candles) -> list[str]:
+    """The 9/21 counts, kept so the change to 20/50 is visible rather than asserted.
+
+    Regenerated from the same fixture on every run, so it cannot drift into a stale
+    claim about what the old pair did. It is NOT the baseline: Phase 3 and Phase 7
+    reconcile against the current pair, and nothing here is load-bearing.
+
+    Worth keeping because the two pairs are not a tuning preference. 9/21 crosses
+    roughly twice as often on this fixture, and each of those crosses is a different
+    market event with a different outcome -- so a reader comparing a Phase 3 report
+    from before this change with one from after needs to see that the denominator
+    moved, not just the percentages.
+    """
+    fast, slow = HISTORICAL_EMA
+    agent = EmaCrossAgent(fast_period=fast, slow_period=slow)
+    engine = AnalysisEngine([agent], account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ)
+    detections = engine.feed(candles)
+    by_event = Counter(d.event_key for d in detections)
+    by_session = Counter(d.session.session.value for d in detections)
+
+    lines = [
+        "",
+        "---",
+        "",
+        f"## Historical: `ema_cross` v1.0.0 at {fast}/{slow}",
+        "",
+        "**Not the baseline.** The pair that shipped before 20/50, replayed over the same",
+        "fixture so the change is a visible diff in counts. Nothing reconciles against",
+        "these numbers.",
+        "",
+        "Under §12 the agent version is part of the detection id, so these detections do",
+        "not collide with the current ones -- both pairs can describe the same week.",
+        "",
+        "| metric | 9/21 (v1.0.0) | 20/50 (v2.0.0) |",
+        "|---|---|---|",
+    ]
+    current = Counter(
+        d.event_key
+        for d in AnalysisEngine(
+            [EmaCrossAgent(fast_period=EMA_FAST, slow_period=EMA_SLOW)],
+            account_scope=ACCOUNT_SCOPE,
+            market_tz=MARKET_TZ,
+        ).feed(candles)
+    )
+    lines += [
+        f"| total crosses | {len(detections)} | {sum(current.values())} |",
+        f"| bullish | {by_event.get('bullish', 0)} | {current.get('bullish', 0)} |",
+        f"| bearish | {by_event.get('bearish', 0)} | {current.get('bearish', 0)} |",
+        f"| warm-up bars | {min_warmup(slow)} | {min_warmup(EMA_SLOW)} |",
+        "",
+        "### 9/21 by session",
+        "",
+        "| session | detections |",
+        "|---|---|",
+    ]
+    for session in ("asia", "london", "new_york", "off"):
+        lines.append(f"| `{session}` | {by_session.get(session, 0)} |")
+    return lines
 
 
 def _reconciliation_section(backfill, reports, rule, by_day: Counter) -> list[str]:

@@ -10,18 +10,17 @@ from __future__ import annotations
 
 import pytest
 
-from aureon.agents.ema_cross_agent import EmaCrossAgent
 from aureon.evaluation.backfill import build_report, format_report, run_backfill
 from aureon.evaluation.rules import EMA_OUTCOME_V1, HORIZON_5_CANDLES
 from aureon.models.enums import HorizonStatus
 from aureon.models.market import Candle
-from tests.conftest import ACCOUNT_SCOPE, MARKET_TZ, InMemoryFirestore
+from tests.conftest import ACCOUNT_SCOPE, MARKET_TZ, InMemoryFirestore, cross_agent
 
 
 def backfill(candles: list[Candle]):
     return run_backfill(
         candles,
-        [EmaCrossAgent()],
+        [cross_agent()],
         EMA_OUTCOME_V1,
         account_scope=ACCOUNT_SCOPE,
         market_tz=MARKET_TZ,

@@ -177,7 +177,9 @@ def format_report(reports: dict[str, HorizonReport], rule: EvaluationRule) -> st
     )
     lines = [
         f"rule: {rule.rule_id}  (reference={rule.reference_price.value}, "
-        f"thresholds in points={list(rule.thresholds)})",
+        # The unit is named from the rule, not assumed: a PRICE rule reporting "points"
+        # is how $3 gets read as $0.03 by someone trusting the header.
+        f"thresholds in {rule.threshold_unit.value}={list(rule.thresholds)})",
         "",
         "Reached counts use COMPLETE horizons ONLY. Pending and invalid are shown",
         "separately and are never counted as misses.",

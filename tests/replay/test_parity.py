@@ -19,19 +19,18 @@ from typing import Any
 
 import pytest
 
-from aureon.agents.ema_cross_agent import EmaCrossAgent
 from aureon.engine.analysis_engine import AnalysisEngine
 from aureon.engine.market_engine import MarketEngine
 from aureon.engine.replay_engine import ReplayEngine
 from aureon.models.detection import Detection
 from aureon.models.enums import Timeframe
 from aureon.models.market import Candle
-from tests.conftest import ACCOUNT_SCOPE, MARKET_TZ, FakeLiveProvider
+from tests.conftest import ACCOUNT_SCOPE, MARKET_TZ, FakeLiveProvider, cross_agent
 
 
 def build_engine() -> AnalysisEngine:
     return AnalysisEngine(
-        [EmaCrossAgent()], account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ
+        [cross_agent()], account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ
     )
 
 
@@ -128,7 +127,7 @@ def test_the_engine_buffer_size_does_not_change_an_agents_output(
     (64) would silently rewrite the cross agent's history and invalidate the recorded
     Phase 2 baseline.
     """
-    agent = EmaCrossAgent()
+    agent = cross_agent()
     wide = AnalysisEngine(
         [agent], account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ, window_margin=200
     )
@@ -195,7 +194,7 @@ def all_agents() -> list:
 
     levels = LevelTracker()
     return [
-        EmaCrossAgent(),
+        cross_agent(),
         RsiAgent(),
         SessionTrendAgent(),
         WickAgent(),

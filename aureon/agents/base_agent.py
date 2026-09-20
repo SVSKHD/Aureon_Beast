@@ -53,8 +53,10 @@ class BaseAgent(ABC):
     agent_name: str = "base"
 
     #: Semantic version of the agent's LOGIC. Bump it when the detection rule
-    #: changes. It is stamped on each detection but deliberately excluded from the
-    #: detection id (decision 16), so a patch re-run upserts rather than duplicates.
+    #: changes. It is PART OF THE DETECTION ID (§12, decision 97), so a version bump
+    #: forks history: the new version's detections sit beside the old version's for
+    #: the same candles rather than replacing them. Never bump it for a change that
+    #: was meant to correct history in place.
     agent_version: str = "0.0.0"
 
     @abstractmethod
@@ -108,9 +110,12 @@ class BaseAgent(ABC):
                 account_scope=ctx.account_scope,
                 symbol=ctx.symbol,
                 timeframe=ctx.timeframe.value,
+                # The CLOSE, not the open: a detection becomes known when the candle
+                # closes, and §12 keys it on that instant.
+                candle_close=ctx.closed_at.utc,
                 agent_name=self.agent_name,
+                agent_version=self.agent_version,
                 event_key=event_key,
-                candle_time=candle_open.utc,
             ),
             account_scope=ctx.account_scope,
             symbol=ctx.symbol,

@@ -80,7 +80,7 @@ A human-initiated request to trade (§25-§34).
 |---|---|---|---|---|
 | `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
 | `request_id` | `str` | yes | — |  |
-| `status` | `TradeRequestStatus` | no | `<TradeRequestStatus.REQUESTED: 'requested'>` |  |
+| `status` | `TradeRequestStatus` | no | `'requested'` |  |
 | `symbol` | `str` | yes | — |  |
 | `order_type` | `OrderType` | yes | — |  |
 | `volume` | `float` | yes | — |  |
@@ -122,7 +122,7 @@ A real position. MT5 is the truth (§49-§53).
 | `trade_id` | `str` | yes | — |  |
 | `mt5_position_id` | `int` | yes | — |  |
 | `trade_request_id` | `str \| null` | no | `None` | None for externally-opened positions (§52). |
-| `source` | `TradeSource` | no | `<TradeSource.AUREON: 'aureon'>` |  |
+| `source` | `TradeSource` | no | `'aureon'` |  |
 | `symbol` | `str` | yes | — |  |
 | `direction` | `Direction` | yes | — |  |
 | `volume` | `float` | yes | — | Original opened volume. |
@@ -131,7 +131,7 @@ A real position. MT5 is the truth (§49-§53).
 | `sl` | `float \| null` | no | `None` |  |
 | `tp` | `float \| null` | no | `None` |  |
 | `magic` | `int \| null` | no | `None` |  |
-| `status` | `TradeStatus` | no | `<TradeStatus.OPEN: 'open'>` |  |
+| `status` | `TradeStatus` | no | `'open'` |  |
 | `closed_volume` | `float` | no | `0.0` |  |
 | `close_price` | `float \| null` | no | `None` |  |
 | `close_time` | `MarketTime \| null` | no | `None` |  |
@@ -154,7 +154,7 @@ A requested action on something already live (§46, §47).
 | `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
 | `control_id` | `str` | yes | — |  |
 | `kind` | `ControlRequestKind` | yes | — |  |
-| `status` | `ControlRequestStatus` | no | `<ControlRequestStatus.REQUESTED: 'requested'>` |  |
+| `status` | `ControlRequestStatus` | no | `'requested'` |  |
 | `target` | `str` | yes | — | Order ticket for cancel, position id for close. |
 | `symbol` | `str \| null` | no | `None` |  |
 | `volume` | `float \| null` | no | `None` | Partial close volume; None closes all. |
@@ -553,7 +553,7 @@ How far a position ran for and against, while it was open (§45).
 | `mae` | `float \| null` | no | `None` | Max adverse excursion. |
 | `mae_at` | `AwareDatetime \| null` | no | `None` |  |
 | `mae_price` | `float \| null` | no | `None` |  |
-| `source` | `ExcursionSource` | no | `<ExcursionSource.LIVE_TICKS: 'live_ticks'>` |  |
+| `source` | `ExcursionSource` | no | `'live_ticks'` |  |
 
 ### EvaluationRule
 
@@ -564,7 +564,8 @@ A frozen recipe for evaluating detections (§21).
 | `rule_id` | `str` | yes | — |  |
 | `reference_price` | `ReferencePrice` | yes | — |  |
 | `horizons` | `tuple[Horizon]` | yes | — |  |
-| `thresholds` | `tuple[float]` | yes | — | Favourable/adverse distances, in points. |
+| `thresholds` | `tuple[float]` | yes | — | Favourable/adverse distances, in `threshold_unit`. |
+| `threshold_unit` | `ThresholdUnit` | no | `'points'` | Whether `thresholds` are broker points or quote-currency price. |
 | `termination` | `str` | no | `'per_horizon'` | How a horizon ends; 'per_horizon' defers to each horizon's kind. |
 
 ### Horizon
@@ -584,7 +585,7 @@ What happened within one horizon -- or that we do not know yet (§22, §23).
 | field | type | required | default | notes |
 |---|---|---|---|---|
 | `horizon_id` | `str` | yes | — |  |
-| `status` | `HorizonStatus` | no | `<HorizonStatus.PENDING: 'pending'>` |  |
+| `status` | `HorizonStatus` | no | `'pending'` |  |
 | `future_high` | `float \| null` | no | `None` |  |
 | `future_low` | `float \| null` | no | `None` |  |
 | `mfe` | `float \| null` | no | `None` | Max favourable excursion, points. |
@@ -595,7 +596,7 @@ What happened within one horizon -- or that we do not know yet (§22, §23).
 | `mae_price` | `float \| null` | no | `None` |  |
 | `reached` | `dict[str, bool]` | no | `dict()` |  |
 | `time_to` | `dict[str, float \| null]` | no | `dict()` | Seconds from detection to first reach. |
-| `path` | `PathClassification` | no | `<PathClassification.NONE: 'none'>` |  |
+| `path` | `PathClassification` | no | `'none'` |  |
 | `path_ambiguous` | `bool` | no | `False` | True when the favourable and adverse thresholds were first crossed within the SAME candle, so their real order is unknowable from candle data. ``path`` still follows the rule in §23, but a review can exclude these rather than trust an order that was never observed. |
 | `candles_seen` | `int` | no | `0` |  |
 | `completed_at` | `AwareDatetime \| null` | no | `None` |  |
@@ -610,7 +611,7 @@ A guessed association between a detection and a trade (§50).
 | `detection_id` | `str` | yes | — |  |
 | `trade_id` | `str` | yes | — |  |
 | `confidence` | `float` | yes | — |  |
-| `link_type` | `LinkType` | no | `<LinkType.INFERRED: 'inferred'>` |  |
+| `link_type` | `LinkType` | no | `'inferred'` |  |
 | `reason` | `str \| null` | no | `None` | e.g. "same symbol+direction, opened 4m after". |
 
 ### ThresholdOutcome
@@ -644,11 +645,17 @@ Per symbol/timeframe observation state (§59).
 |---|---|---|---|---|
 | `symbol` | `str` | yes | — |  |
 | `timeframe` | `Timeframe` | yes | — |  |
-| `market_state` | `MarketState` | no | `<MarketState.UNKNOWN: 'unknown'>` |  |
+| `market_state` | `MarketState` | no | `'unknown'` |  |
 | `last_closed_candle_time` | `AwareDatetime \| null` | no | `None` |  |
 | `last_tick_at` | `AwareDatetime \| null` | no | `None` |  |
 | `last_quote` | `QuoteSnapshot \| null` | no | `None` | Latest bid/ask as state, for Discord's screens (decision 80). |
 | `detections_today` | `int` | no | `0` |  |
+| `ema_crosses_today` | `int` | no | `0` |  |
+| `ema_crosses_session` | `int` | no | `0` |  |
+| `bullish_crosses_today` | `int` | no | `0` |  |
+| `bearish_crosses_today` | `int` | no | `0` |  |
+| `bullish_crosses_session` | `int` | no | `0` |  |
+| `bearish_crosses_session` | `int` | no | `0` |  |
 
 ---
 
@@ -862,6 +869,15 @@ Which price a horizon measures from (§21).
 | `CLOSE` | `close` |
 | `NEXT_OPEN` | `next_open` |
 
+### ThresholdUnit
+
+What a rule's thresholds are measured in (§21).
+
+| member | value |
+|---|---|
+| `POINTS` | `points` |
+| `PRICE` | `price` |
+
 ### PathClassification
 
 Whether adversity or the target came first (§23).
@@ -952,6 +968,41 @@ Every status write goes through `aureon.models.enums.assert_transition`
 | `completed` | _terminal_ |
 | `failed` | _terminal_ |
 | `failed_stale` | _terminal_ |
+
+---
+
+## Identity (§12, §34)
+
+Every id is a pure function of its inputs; nothing here reads a clock, a random
+source or a config default. Generated from `aureon/models/identity.py`, so a
+change to the recipe shows up as a diff here rather than as re-keyed data.
+
+### `detection_id` components (§12, frozen)
+
+sha256 over these, in this order, joined by `0x1F` (ASCII unit separator --
+NOT `|`, which `event_key` legitimately contains):
+
+| # | component |
+|---|---|
+| 1 | `account_scope` |
+| 2 | `symbol` |
+| 3 | `timeframe` |
+| 4 | `candle_close_utc` |
+| 5 | `agent_name` |
+| 6 | `agent_version` |
+| 7 | `event_key` |
+
+`agent_version` is a component, so bumping an agent's version **forks** history:
+the new version's detections sit beside the old version's for the same candles
+rather than replacing them (decision 97). The timestamp is the candle **close**,
+the instant the detection became knowable.
+
+### `comment_token` (§34)
+
+`AUR:` + first 6 base32 chars of
+sha256(request_id) = 10 chars, inside MT5's 31-character
+comment field (decision 5). Deterministic so an executor that crashed mid-send
+re-derives exactly the token it stamped.
 
 ---
 

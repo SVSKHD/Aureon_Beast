@@ -27,6 +27,22 @@ FIXTURE_CSV = REPO_ROOT / "aureon" / "data" / "fixtures" / "XAUUSD_M5.csv"
 MARKET_TZ = "Europe/Athens"
 ACCOUNT_SCOPE = "primary"
 
+# The shipped pair (AUREON_EMA_FAST / AUREON_EMA_SLOW defaults). EmaCrossAgent takes no
+# default periods on purpose, so tests name them here once rather than each inventing a
+# pair -- which is how a suite ends up proving something about 9/21 while the observer
+# runs 20/50.
+EMA_FAST = 20
+EMA_SLOW = 50
+
+
+def cross_agent(**overrides: object):
+    """An ``EmaCrossAgent`` on the shipped periods unless a test says otherwise."""
+    from aureon.agents.ema_cross_agent import EmaCrossAgent
+
+    params: dict[str, object] = {"fast_period": EMA_FAST, "slow_period": EMA_SLOW}
+    params.update(overrides)
+    return EmaCrossAgent(**params)  # type: ignore[arg-type]
+
 
 @pytest.fixture
 def fixture_path() -> Path:

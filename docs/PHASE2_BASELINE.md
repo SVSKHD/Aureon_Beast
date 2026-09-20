@@ -29,41 +29,41 @@ Gaps (weekend discontinuity):
 
 | property | value |
 |---|---|
-| agent | `ema_cross` v1.0.0 |
-| fast / slow EMA | 9 / 21 |
+| agent | `ema_cross` v2.0.0 |
+| fast / slow EMA | 20 / 50 |
 | RSI period | 14 (context only, never a gate) |
-| warm-up bars | 63 (slow × 3) |
+| warm-up bars | 150 (slow × 3) |
 | engine window | 583 bars (fixed; parity contract) |
 
 ## Detections
 
 | metric | count |
 |---|---|
-| total | 70 |
-| bullish crosses | 35 |
-| bearish crosses | 35 |
-| unique detection ids | 70 |
+| total | 29 |
+| bullish crosses | 14 |
+| bearish crosses | 15 |
+| unique detection ids | 29 |
 
 ### By session
 
 | session | detections |
 |---|---|
-| `asia` | 16 |
-| `london` | 31 |
-| `new_york` | 12 |
-| `off` | 11 |
+| `asia` | 9 |
+| `london` | 13 |
+| `new_york` | 6 |
+| `off` | 1 |
 
 ### By broker trading day
 
 | market date | detections |
 |---|---|
-| `2026-09-14` | 10 |
-| `2026-09-15` | 12 |
-| `2026-09-16` | 11 |
-| `2026-09-17` | 16 |
-| `2026-09-18` | 6 |
-| `2026-09-21` | 8 |
-| `2026-09-22` | 7 |
+| `2026-09-14` | 2 |
+| `2026-09-15` | 6 |
+| `2026-09-16` | 4 |
+| `2026-09-17` | 5 |
+| `2026-09-18` | 4 |
+| `2026-09-21` | 2 |
+| `2026-09-22` | 6 |
 
 ---
 
@@ -75,7 +75,7 @@ alone -- adding an agent never changes another's output.
 
 | agent | version | window | detections |
 |---|---|---|---|
-| `ema_cross` | 1.0.0 | 64 | 70 |
+| `ema_cross` | 2.0.0 | 151 | 29 |
 | `rsi` | 1.0.0 | 44 | 110 |
 | `session_trend` | 1.0.0 | 98 | 19 |
 | `wick` | 1.0.0 | 1 | 235 |
@@ -88,11 +88,11 @@ The three counts the Phase 2 gate asks to be recorded.
 
 | session | crosses | sweeps | breakouts |
 |---|---|---|---|
-| `asia` | 16 | 137 | 59 |
-| `london` | 31 | 220 | 110 |
-| `new_york` | 12 | 124 | 66 |
-| `off` | 11 | 47 | 16 |
-| **total** | **70** | **528** | **251** |
+| `asia` | 9 | 137 | 59 |
+| `london` | 13 | 220 | 110 |
+| `new_york` | 6 | 124 | 66 |
+| `off` | 1 | 47 | 16 |
+| **total** | **29** | **528** | **251** |
 
 ### Liquidity sweeps by level
 
@@ -159,7 +159,7 @@ The three counts the Phase 2 gate asks to be recorded.
 
 Rule `EMA_OUTCOME_V1`, frozen: reference `next_open`,
 thresholds [3.0, 5.0, 10.0, 15.0, 20.0] in **points**.
-70 `ema_cross` detections evaluated.
+29 `ema_cross` detections evaluated.
 
 **Reached counts come from COMPLETE horizons only.** Pending and invalid are
 reported separately and are never counted as misses — an unknown answer is not
@@ -168,36 +168,63 @@ worse than it is.
 
 | horizon | complete | pending | invalid | reach 3 | reach 5 | reach 10 |
 |---|---|---|---|---|---|---|
-| `c5` | 70 | 0 | 0 | 70/70 (100%) | 70/70 (100%) | 70/70 (100%) |
-| `c10` | 70 | 0 | 0 | 70/70 (100%) | 70/70 (100%) | 70/70 (100%) |
-| `c20` | 68 | 2 | 0 | 68/68 (100%) | 68/68 (100%) | 68/68 (100%) |
-| `m60` | 70 | 0 | 0 | 70/70 (100%) | 70/70 (100%) | 70/70 (100%) |
-| `session_close` | 67 | 3 | 0 | 67/67 (100%) | 67/67 (100%) | 67/67 (100%) |
-| `day_close` | 57 | 7 | 6 | 57/57 (100%) | 57/57 (100%) | 57/57 (100%) |
-| `opposite_cross` | 68 | 1 | 1 | 68/68 (100%) | 68/68 (100%) | 68/68 (100%) |
+| `c5` | 29 | 0 | 0 | 29/29 (100%) | 29/29 (100%) | 29/29 (100%) |
+| `c10` | 29 | 0 | 0 | 29/29 (100%) | 29/29 (100%) | 29/29 (100%) |
+| `c20` | 29 | 0 | 0 | 29/29 (100%) | 29/29 (100%) | 29/29 (100%) |
+| `m60` | 29 | 0 | 0 | 29/29 (100%) | 29/29 (100%) | 29/29 (100%) |
+| `session_close` | 27 | 2 | 0 | 27/27 (100%) | 27/27 (100%) | 27/27 (100%) |
+| `day_close` | 19 | 6 | 4 | 19/19 (100%) | 19/19 (100%) | 19/19 (100%) |
+| `opposite_cross` | 27 | 1 | 1 | 27/27 (100%) | 27/27 (100%) | 27/27 (100%) |
 
 ### Path classification (COMPLETE only)
 
 | horizon | MFE_FIRST | MAE_FIRST | NONE | ambiguous |
 |---|---|---|---|---|
-| `c5` | 70 | 0 | 0 | 69 |
-| `c10` | 70 | 0 | 0 | 69 |
-| `c20` | 68 | 0 | 0 | 67 |
-| `m60` | 70 | 0 | 0 | 69 |
-| `session_close` | 67 | 0 | 0 | 66 |
-| `day_close` | 57 | 0 | 0 | 56 |
-| `opposite_cross` | 68 | 0 | 0 | 67 |
+| `c5` | 28 | 1 | 0 | 28 |
+| `c10` | 28 | 1 | 0 | 28 |
+| `c20` | 28 | 1 | 0 | 28 |
+| `m60` | 28 | 1 | 0 | 28 |
+| `session_close` | 26 | 1 | 0 | 26 |
+| `day_close` | 18 | 1 | 0 | 18 |
+| `opposite_cross` | 26 | 1 | 0 | 26 |
 
 ### Diagnostics — read before using these numbers
 
 - thresholds ['3', '5', '10', '15', '20'] are reached >=95% of the time in every horizon. They are smaller than the instrument's typical candle range, so they measure almost nothing. The fix is a NEW rule_id with a larger scale -- never an edit to this one (§21).
-- 463/470 path classifications are ambiguous: the favourable and adverse thresholds were first crossed within the SAME candle, so their order was never observed. MFE_FIRST here is a convention, not a measurement -- treat these as unknown.
+- 182/189 path classifications are ambiguous: the favourable and adverse thresholds were first crossed within the SAME candle, so their order was never observed. MFE_FIRST here is a convention, not a measurement -- treat these as unknown.
 
 In short: at `point = 0.01` the specified thresholds are $0.03–$0.20, well
 inside a single XAUUSD M5 candle's range, so they are crossed on the first
 candle almost every time. The 100% columns above measure the scale, not the
 strategy. Correcting it means a **new `rule_id`**, never an edit to this one
 (§21, decision 47).
+
+---
+
+## Historical: `ema_cross` v1.0.0 at 9/21
+
+**Not the baseline.** The pair that shipped before 20/50, replayed over the same
+fixture so the change is a visible diff in counts. Nothing reconciles against
+these numbers.
+
+Under §12 the agent version is part of the detection id, so these detections do
+not collide with the current ones -- both pairs can describe the same week.
+
+| metric | 9/21 (v1.0.0) | 20/50 (v2.0.0) |
+|---|---|---|
+| total crosses | 70 | 29 |
+| bullish | 35 | 14 |
+| bearish | 35 | 15 |
+| warm-up bars | 63 | 150 |
+
+### 9/21 by session
+
+| session | detections |
+|---|---|
+| `asia` | 16 |
+| `london` | 31 |
+| `new_york` | 12 |
+| `off` | 11 |
 
 ---
 
@@ -210,28 +237,28 @@ numbers must match, and the generator fails if they do not.
 
 | ISO week | market dates | review detections | baseline days |
 |---|---|---|---|
-| `2026-W38` | `2026-09-14` … `2026-09-18` | 55 | 55 |
-| `2026-W39` | `2026-09-21` … `2026-09-22` | 15 | 15 |
-| **total** | 7 days | **70** | **70** |
+| `2026-W38` | `2026-09-14` … `2026-09-18` | 21 | 21 |
+| `2026-W39` | `2026-09-21` … `2026-09-22` | 8 | 8 |
+| **total** | 7 days | **29** | **29** |
 
 | check | reviews | baseline |
 |---|---|---|
-| `c5` COMPLETE | 70 | 70 |
-| `c5` reached at 3 | 70 | 70 |
-| `c10` COMPLETE | 70 | 70 |
-| `c10` reached at 3 | 70 | 70 |
-| `c20` COMPLETE | 68 | 68 |
-| `c20` reached at 3 | 68 | 68 |
-| `m60` COMPLETE | 70 | 70 |
-| `m60` reached at 3 | 70 | 70 |
-| `session_close` COMPLETE | 67 | 67 |
-| `session_close` reached at 3 | 67 | 67 |
-| `day_close` COMPLETE | 57 | 57 |
-| `day_close` reached at 3 | 57 | 57 |
-| `opposite_cross` COMPLETE | 68 | 68 |
-| `opposite_cross` reached at 3 | 68 | 68 |
-| PENDING horizons excluded | 13 | 13 |
-| INVALID horizons excluded | 7 | 7 |
+| `c5` COMPLETE | 29 | 29 |
+| `c5` reached at 3 | 29 | 29 |
+| `c10` COMPLETE | 29 | 29 |
+| `c10` reached at 3 | 29 | 29 |
+| `c20` COMPLETE | 29 | 29 |
+| `c20` reached at 3 | 29 | 29 |
+| `m60` COMPLETE | 29 | 29 |
+| `m60` reached at 3 | 29 | 29 |
+| `session_close` COMPLETE | 27 | 27 |
+| `session_close` reached at 3 | 27 | 27 |
+| `day_close` COMPLETE | 19 | 19 |
+| `day_close` reached at 3 | 19 | 19 |
+| `opposite_cross` COMPLETE | 27 | 27 |
+| `opposite_cross` reached at 3 | 27 | 27 |
+| PENDING horizons excluded | 9 | 9 |
+| INVALID horizons excluded | 5 | 5 |
 
 Reconciled: every figure above agrees.
 

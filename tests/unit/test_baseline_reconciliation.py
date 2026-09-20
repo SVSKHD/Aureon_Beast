@@ -18,15 +18,16 @@ while unreconciled fails even if the generator that produced it has since been f
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from aureon.agents.ema_cross_agent import EmaCrossAgent
 from aureon.data.historical_provider import HistoricalDataProvider
 from aureon.evaluation.backfill import run_backfill
 from aureon.evaluation.rules import EMA_OUTCOME_V1
 from aureon.reviews.reconcile import reconcile, week_reviews, weeks_spanned
+from tests.conftest import cross_agent
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BASELINE = REPO_ROOT / "docs" / "PHASE2_BASELINE.md"
@@ -61,12 +62,45 @@ def _table(name: str) -> list[list[str]]:
     return rows
 
 
+def _synthetic_detection(close: datetime):
+    """One cross detection at an exact instant, for boundary tests."""
+    from aureon.models.base import MarketTime
+    from aureon.models.detection import Detection, SessionContext
+    from aureon.models.enums import Direction, SessionName, Timeframe
+    from aureon.models.identity import detection_id
+
+    return Detection(
+        detection_id=detection_id(
+            account_scope="primary",
+            symbol="XAUUSD",
+            timeframe="M5",
+            candle_close=close,
+            agent_name="ema_cross",
+            agent_version="2.0.0",
+            event_key="bullish",
+        ),
+        account_scope="primary",
+        symbol="XAUUSD",
+        timeframe=Timeframe.M5,
+        agent_name="ema_cross",
+        agent_version="2.0.0",
+        event_key="bullish",
+        direction=Direction.BUY,
+        detected_at=MarketTime.from_utc(close, MARKET_TZ),
+        candle_open_time=MarketTime.from_utc(close - timedelta(minutes=5), MARKET_TZ),
+        price=2400.0,
+        session=SessionContext(session=SessionName.ASIA, session_config_version=1),
+        sequence_today=1,
+        sequence_session=1,
+    )
+
+
 @pytest.fixture(scope="module")
 def replay():
     provider = HistoricalDataProvider(FIXTURE, market_tz=MARKET_TZ)
     return run_backfill(
         provider.candles,
-        [EmaCrossAgent()],
+        [cross_agent()],
         EMA_OUTCOME_V1,
         account_scope="primary",
         market_tz=MARKET_TZ,
@@ -173,35 +207,47 @@ def test_weeks_tile_without_gaps_or_overlaps(replay) -> None:
         )
 
 
-def test_the_weeks_come_from_the_market_clock_not_utc(replay) -> None:
+def test_the_weeks_come_from_the_market_clock_not_utc() -> None:
     """A detection just before broker midnight belongs to the broker's week.
 
-    The fixture's first candle opens at 22:00 UTC on a Sunday, which is already Monday in
-    Athens. If the weeks were derived in UTC, that whole evening would be filed under the
-    previous ISO week and the per-week reconciliation above would be off by exactly those
-    detections -- while the grand total stayed right.
+    Sunday 21:00 UTC is already Monday in Athens. Derived in UTC, that whole evening
+    would be filed under the ISO week that just ended, and the per-week reconciliation
+    above would be off by exactly those detections while the grand total stayed right.
+
+    The detection is placed ON the boundary deliberately rather than hoping the fixture
+    has one there. An earlier version of this test compared the fixture's own crosses
+    under both clocks; it stopped proving anything the moment the agent's periods changed
+    and no cross happened to fall in that three-hour window. A property worth testing is
+    worth constructing an input for.
     """
-    weeks = weeks_spanned(replay.detections, MARKET_TZ)
-    utc_weeks = weeks_spanned(replay.detections, "UTC")
-    assert weeks == [(2026, 38), (2026, 39)]
-    # Not an incidental equality: the fixture genuinely straddles the boundary, so the two
-    # clocks disagree and the market one is the one used.
-    market = week_reviews(
-        replay.detections,
-        {e.detection_id: e for e in replay.evaluations},
-        EMA_OUTCOME_V1,
-        market_tz=MARKET_TZ,
+    from aureon.reviews.periods import week_period
+
+    # Sunday 2026-09-20 21:00 UTC == Monday 2026-09-21 00:00 Athens (UTC+3).
+    boundary = datetime(2026, 9, 20, 21, 0, tzinfo=UTC)
+    detection = _synthetic_detection(boundary)
+
+    assert detection.detected_at.market_date == "2026-09-21"
+    assert boundary.isocalendar().week == 38, "the instant is still ISO week 38 in UTC"
+
+    market_week = week_period(2026, 39, MARKET_TZ)
+    utc_week = week_period(2026, 39, "UTC")
+
+    assert market_week.contains(boundary), (
+        "on the broker clock this detection belongs to week 39"
     )
-    utc = week_reviews(
-        replay.detections,
-        {e.detection_id: e for e in replay.evaluations},
-        EMA_OUTCOME_V1,
-        market_tz="UTC",
+    assert not utc_week.contains(boundary), (
+        "on a UTC clock it would fall in week 38 -- the bug this guards"
     )
-    assert [r.detections_total for _p, r in market] != [
-        r.detections_total for _p, r in utc
-    ], "the fixture no longer straddles a week boundary; this test proves nothing"
-    assert utc_weeks == weeks  # same weeks, different membership
+    # And the reviews built from it agree with the period, not with UTC.
+    market = week_reviews([detection], {}, EMA_OUTCOME_V1, market_tz=MARKET_TZ)
+    assert [(r.iso_year, r.iso_week) for _p, r in market] == [(2026, 39)]
+    utc = week_reviews([detection], {}, EMA_OUTCOME_V1, market_tz="UTC")
+    assert [(r.iso_year, r.iso_week) for _p, r in utc] == [(2026, 38)]
+
+
+def test_the_replay_weeks_are_the_ones_the_baseline_reports(replay) -> None:
+    """The fixture's own span, kept as a cheap sanity check on the ISO labelling."""
+    assert weeks_spanned(replay.detections, MARKET_TZ) == [(2026, 38), (2026, 39)]
 
 
 def test_a_review_of_the_replay_is_byte_identical_on_re_run(replay) -> None:

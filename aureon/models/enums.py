@@ -286,6 +286,24 @@ class HorizonKind(StrEnum):
     OPPOSITE_CROSS = "opposite_cross"
 
 
+class ThresholdUnit(StrEnum):
+    """What a rule's thresholds are measured in (§21).
+
+    ``POINTS`` is the broker's smallest price increment -- meaningful only once you
+    know the symbol's ``point``. ``PRICE`` is the quote currency, which is what a human
+    actually reasons in: "did it move $5?" is a question with a stable meaning, where
+    "did it move 5 points?" silently means $0.05 on gold and $5 on an index.
+
+    The distinction is not cosmetic. ``EMA_OUTCOME_V1`` specified 3-20 POINTS, which at
+    ``point=0.01`` is $0.03-$0.20 -- smaller than a single XAUUSD M5 candle, so every
+    threshold was reached almost always and the resulting 100% columns measured the
+    scale rather than the strategy.
+    """
+
+    POINTS = "points"
+    PRICE = "price"
+
+
 class ReferencePrice(StrEnum):
     """Which price a horizon measures from (§21)."""
 

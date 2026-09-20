@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from aureon.agents.ema_cross_agent import EmaCrossAgent
 from aureon.engine.analysis_engine import AnalysisEngine
 from aureon.models.base import utc_now
 from aureon.models.enums import MarketState, Timeframe
@@ -22,12 +21,12 @@ from aureon.storage.system_state_repository import (
     HeartbeatRepository,
     SystemStateRepository,
 )
-from tests.conftest import ACCOUNT_SCOPE, MARKET_TZ, InMemoryFirestore
+from tests.conftest import ACCOUNT_SCOPE, MARKET_TZ, InMemoryFirestore, cross_agent
 
 
 def some_detections(candles: list[Candle], count: int = 5) -> list:
     engine = AnalysisEngine(
-        [EmaCrossAgent()], account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ
+        [cross_agent()], account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ
     )
     return engine.feed(candles)[:count]
 

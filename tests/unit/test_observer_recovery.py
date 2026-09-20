@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-from aureon.agents.ema_cross_agent import EmaCrossAgent
 from aureon.config import AureonConfig
 from aureon.models.enums import Timeframe
 from aureon.models.market import Candle
@@ -25,7 +24,7 @@ from aureon.outbox.outbox_worker import OutboxWorker
 from aureon.services.observer_state import ObserverState
 from aureon.storage.detection_repository import DetectionRepository
 from main_observer import Observer
-from tests.conftest import MARKET_TZ, FakeLiveProvider, InMemoryFirestore
+from tests.conftest import MARKET_TZ, FakeLiveProvider, InMemoryFirestore, cross_agent
 
 
 def make_config(tmp_path: Path) -> AureonConfig:
@@ -55,7 +54,7 @@ def build(
         outbox=outbox,
         worker=worker,
         state=ObserverState(config.observer_state_path),
-        agents=[EmaCrossAgent()],
+        agents=[cross_agent()],
     )
     return observer, outbox, provider
 
@@ -87,7 +86,14 @@ def stored_ids(firestore: InMemoryFirestore) -> list[str]:
     )
 
 
-@pytest.mark.parametrize("kill_at", [400, 900, 1500])
+#: Kill points, chosen rather than sampled. The fixture has a 49-hour weekend gap
+#: after index 1427, and a restart whose cursor sits in the ~151 candles AFTER that gap
+#: is where a reach-back measured in wall-clock MINUTES rather than in CANDLES starves:
+#: the request lands inside the gap, the fresh engine's EMAs never converge, and the
+#: restart silently loses a detection the uninterrupted run produced. 1500 is the point
+#: that caught it; 1429 is the extreme, with a single post-gap candle to reach back
+#: through. 400 and 900 are ordinary mid-history restarts.
+@pytest.mark.parametrize("kill_at", [400, 900, 1429, 1500])
 def test_restart_produces_no_duplicates_and_no_gap(
     tmp_path: Path, candles: list[Candle], kill_at: int
 ) -> None:

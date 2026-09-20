@@ -78,6 +78,15 @@ class AureonConfig(AureonModel):
     # ── Observation ───────────────────────────────────────────────────────────
     symbols: tuple[str, ...] = ("XAUUSD",)
     timeframes: tuple[Timeframe, ...] = (Timeframe.M5,)
+
+    # ── EMA cross periods (§13) ───────────────────────────────────────────────
+    # Configuration, not a constructor default: EmaCrossAgent takes no defaults at
+    # all, so there is exactly one place the live periods are decided and a replay
+    # cannot quietly disagree with the observer about which pair produced a
+    # detection. Changing these is an agent_version bump -- the periods are in
+    # agent_params_snapshot, and under §12 the version is in the detection id.
+    ema_fast: int = 20
+    ema_slow: int = 50
     state_heartbeat_seconds: float = 5.0
     outbox_path: str = "outbox.db"
     observer_state_path: str = "observer_state.json"
@@ -95,7 +104,7 @@ class AureonConfig(AureonModel):
     monitor_poll_seconds: float = 2.0
 
     # ── Evaluation (§84) ──────────────────────────────────────────────────────
-    evaluation_rule_id: str = "EMA_OUTCOME_V1"
+    evaluation_rule_id: str = "XAU_OUTCOME_V2"
 
     # ── Firestore ─────────────────────────────────────────────────────────────
     firebase_project_id: str | None = None
@@ -165,6 +174,8 @@ class AureonConfig(AureonModel):
             market_tz=_env_str("AUREON_MARKET_TZ", "Europe/Athens"),
             symbols=_env_csv("AUREON_SYMBOLS", ("XAUUSD",)),
             timeframes=timeframes,
+            ema_fast=_env_int("AUREON_EMA_FAST", 20),
+            ema_slow=_env_int("AUREON_EMA_SLOW", 50),
             state_heartbeat_seconds=_env_float("AUREON_STATE_HEARTBEAT_SECONDS", 5.0),
             outbox_path=_env_str("AUREON_OUTBOX_PATH", "outbox.db"),
             observer_state_path=_env_str("AUREON_OBSERVER_STATE_PATH", "observer_state.json"),
@@ -178,7 +189,14 @@ class AureonConfig(AureonModel):
             executor_poll_seconds=_env_float("AUREON_EXECUTOR_POLL_SECONDS", 2.0),
             reconcile_grace_seconds=_env_float("AUREON_RECONCILE_GRACE_SECONDS", 120.0),
             monitor_poll_seconds=_env_float("AUREON_MONITOR_POLL_SECONDS", 2.0),
-            evaluation_rule_id=_env_str("AUREON_EVALUATION_RULE_ID", "EMA_OUTCOME_V1"),
+            # AUREON_EVAL_RULE is the current name. The older
+            # AUREON_EVALUATION_RULE_ID still wins when set, so an existing .env
+            # pinning EMA_OUTCOME_V1 keeps getting V1 rather than silently switching
+            # to a rule with different thresholds and different stored results.
+            evaluation_rule_id=_env_str(
+                "AUREON_EVAL_RULE",
+                _env_str("AUREON_EVALUATION_RULE_ID", "XAU_OUTCOME_V2"),
+            ),
             firebase_project_id=_env_opt("AUREON_FIREBASE_PROJECT_ID"),
             google_application_credentials=_env_opt("GOOGLE_APPLICATION_CREDENTIALS"),
             firestore_emulator_host=_env_opt("FIRESTORE_EMULATOR_HOST"),
