@@ -26,7 +26,6 @@ from typing import Any
 from aureon.models.base import to_utc
 from aureon.models.detection import Detection
 from aureon.models.evaluation import DetectionEvaluation, EvaluationRule
-from aureon.models.identity import evaluation_doc_id
 from aureon.models.review import DailyReview, WeeklyReview
 from aureon.models.session import SessionSummary
 from aureon.models.trade import Trade
@@ -37,7 +36,7 @@ from aureon.reviews.aggregate import (
     excluded_summary,
 )
 from aureon.reviews.periods import Period, day_period, week_period
-from aureon.storage import paths
+from aureon.storage.period_reader import PeriodReader
 from aureon.storage.review_repository import ReviewRepository
 
 log = logging.getLogger(__name__)
@@ -61,6 +60,10 @@ class ReviewService:
         self.infer_window_minutes = infer_window_minutes
         self.account_scope = account_scope
         self.reviews = ReviewRepository(client)
+        # Every read goes through a repository (CLAUDE.md, decision 107). The service
+        # used to stream collections off the client directly; a boundary test now fails
+        # on any .collection( or .document( outside aureon/storage.
+        self.source = PeriodReader(client, account_scope=account_scope)
 
     # ── Loading ───────────────────────────────────────────────────────────────
 
@@ -85,67 +88,24 @@ class ReviewService:
         return data
 
     def _load_detections(self, period: Period) -> list[Detection]:
-        found: list[Detection] = []
-        for doc in self._client.collection(paths.DETECTIONS).stream():
-            data = doc.to_dict() or {}
-            try:
-                detection = Detection.model_validate(data)
-            except Exception:  # noqa: BLE001 - one bad document must not lose the period
-                log.exception("unreadable detection %s", doc.id)
-                continue
-            if period.contains(detection.detected_at.utc):
-                found.append(detection)
-        return found
+        return self.source.detections_in(period.start, period.end)
 
     def _load_evaluations(
         self, detections: list[Detection]
     ) -> dict[str, DetectionEvaluation]:
         """Fetch by exact document id.
 
-        No index, and no chance of a query silently missing one -- which for an evaluation
-        would mean its detection counted as unevaluated rather than as answered.
+        No index, and no chance of a query silently missing one -- which for an
+        evaluation would mean its detection counted as unevaluated rather than as
+        answered.
         """
-        found: dict[str, DetectionEvaluation] = {}
-        for detection in detections:
-            doc_id = evaluation_doc_id(detection.detection_id, self.rule.rule_id)
-            snapshot = self._client.document(
-                f"{paths.DETECTION_EVALUATIONS}/{doc_id}"
-            ).get()
-            if not getattr(snapshot, "exists", False):
-                continue
-            try:
-                found[detection.detection_id] = DetectionEvaluation.model_validate(
-                    snapshot.to_dict()
-                )
-            except Exception:  # noqa: BLE001
-                log.exception("unreadable evaluation %s", doc_id)
-        return found
+        return self.source.evaluations_for(detections, self.rule.rule_id)
 
     def _load_trades(self, period: Period) -> list[Trade]:
-        found: list[Trade] = []
-        for doc in self._client.collection(paths.TRADES).stream():
-            try:
-                trade = Trade.model_validate(doc.to_dict() or {})
-            except Exception:  # noqa: BLE001
-                log.exception("unreadable trade %s", doc.id)
-                continue
-            # By OPEN time: a trade belongs to the period it was entered in, even if it
-            # closed later. Filing it by close would attribute a Monday decision to Tuesday.
-            if period.contains(trade.open_time.utc):
-                found.append(trade)
-        return found
+        return self.source.trades_opened_in(period.start, period.end)
 
     def _load_sessions(self, period: Period) -> list[SessionSummary]:
-        found: list[SessionSummary] = []
-        for doc in self._client.collection(paths.SESSIONS).stream():
-            try:
-                summary = SessionSummary.model_validate(doc.to_dict() or {})
-            except Exception:  # noqa: BLE001
-                log.exception("unreadable session %s", doc.id)
-                continue
-            if period.contains(summary.started_at.utc):
-                found.append(summary)
-        return found
+        return self.source.sessions_in(period.start, period.end)
 
     # ── Generating ────────────────────────────────────────────────────────────
 

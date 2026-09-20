@@ -188,6 +188,73 @@ def test_firestore_clients_are_built_only_in_storage() -> None:
     )
 
 
+def test_no_firestore_access_outside_storage() -> None:
+    """CLAUDE.md: Firestore goes through ``aureon/storage``, with no exceptions.
+
+    The older guard only checked that nobody outside storage IMPORTED a Firestore SDK.
+    That missed the shape the code actually took: an injected client, with
+    ``.collection(...)`` and ``.document(...)`` called on it. Six such call sites existed
+    -- four in the review service, one in the Discord listener, and one in the executor
+    that reached into ``repository._client``, a private attribute.
+
+    All six were reads, so no client-side money write ever existed. That is exactly why
+    this guard matters: the rule that was supposed to prevent one did not constrain this
+    shape of code at all, so the next raw call could have been a ``.set()`` and the suite
+    would have stayed green.
+
+    AST-based, so a docstring or a comment mentioning ``.collection(`` does not fail the
+    suite while a real call does.
+    """
+    forbidden_methods = {"collection", "document", "transaction"}
+    offenders: list[str] = []
+    for path in sorted(AUREON.rglob("*.py")):
+        if path.is_relative_to(AUREON / "storage"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not isinstance(func, ast.Attribute) or func.attr not in forbidden_methods:
+                continue
+            offenders.append(
+                f"{path.relative_to(REPO_ROOT)}:{node.lineno}: "
+                f"{ast.unparse(func)}(...)"
+            )
+    assert not offenders, (
+        "only aureon/storage may call Firestore's .collection()/.document()/"
+        ".transaction(); move the read into a repository method:\n" + "\n".join(offenders)
+    )
+
+
+def test_nothing_reaches_into_a_repositorys_private_client() -> None:
+    """``repository._client`` puts the write discipline one attribute access away.
+
+    Checked separately from the call guard because the access alone is the problem: a
+    caller holding the raw client can do anything the repository was written to prevent,
+    and the next reader has no reason to think the repository is authoritative.
+    """
+    offenders: list[str] = []
+    for path in sorted(AUREON.rglob("*.py")):
+        if path.is_relative_to(AUREON / "storage"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute) or node.attr != "_client":
+                continue
+            # ``self._client`` is a class's own attribute, not a reach into someone
+            # else's repository. The offence is holding ANOTHER object's client.
+            if isinstance(node.value, ast.Name) and node.value.id == "self":
+                continue
+            offenders.append(
+                f"{path.relative_to(REPO_ROOT)}:{node.lineno}: {ast.unparse(node)}"
+            )
+    assert not offenders, (
+        "a repository's private _client must not be reached into from outside "
+        "aureon/storage:\n" + "\n".join(offenders)
+    )
+
+
 # ── Reviews may only read COMPLETE horizons ───────────────────────────────────
 
 

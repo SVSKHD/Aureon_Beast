@@ -535,3 +535,13 @@ def is_terminal(status: object, allowed: Mapping) -> bool:
 TERMINAL_REQUEST_STATUSES: frozenset[TradeRequestStatus] = frozenset(
     s for s in TradeRequestStatus if is_terminal(s, TRADE_REQUEST_TRANSITIONS)
 )
+
+#: Derived from the table rather than listed by hand, so adding a terminal state
+#: protects it automatically instead of waiting for someone to remember this set.
+TERMINAL_TRADE_STATUSES: frozenset[TradeStatus] = frozenset(
+    s for s in TradeStatus if is_terminal(s, TRADE_TRANSITIONS)
+)
+
+TERMINAL_CONTROL_STATUSES: frozenset[ControlRequestStatus] = frozenset(
+    s for s in ControlRequestStatus if is_terminal(s, CONTROL_REQUEST_TRANSITIONS)
+)

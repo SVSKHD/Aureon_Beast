@@ -36,6 +36,7 @@ from typing import Any
 from aureon.models.audit import AuditRecord
 from aureon.models.base import to_utc, utc_now
 from aureon.models.enums import (
+    TERMINAL_REQUEST_STATUSES,
     FailureCode,
     TradeRequestStatus,
     TransitionError,
@@ -46,6 +47,17 @@ from aureon.models.trade import TradeRequest
 from aureon.storage import paths
 
 log = logging.getLogger(__name__)
+
+
+#: The only fields a terminal document may still take. Both are observational: they
+#: record when something was last looked at, and assert nothing about what happened.
+RECONCILIATION_ONLY_FIELDS: frozenset[str] = frozenset(
+    {"last_reconciled_at", "last_synced_at"}
+)
+
+
+class TerminalWriteRejected(RuntimeError):
+    """An attempt to write to a request or trade whose status is terminal."""
 
 
 class ConfirmationRejected(RuntimeError):
@@ -419,6 +431,12 @@ class TradeRequestRepository:
             # updates that came with it -- including the comment_token the executor
             # stamps before sending, leaving reconciliation nothing to search for.
             # PARTIALLY_FILLED is additionally re-entrant as each further fill lands.
+            payload_keys = set(updates or ())
+            if failure_code is not None:
+                payload_keys.add("failure_code")
+            if failure_message is not None:
+                payload_keys.add("failure_message")
+
             nothing_to_write = (
                 current.status is new_status
                 and new_status is not TradeRequestStatus.PARTIALLY_FILLED
@@ -430,10 +448,26 @@ class TradeRequestRepository:
                 return current
 
             if current.status is not new_status:
+                # A status CHANGE is the transition table's business, terminal or not,
+                # so an illegal edge out of a terminal status keeps reporting itself as
+                # an illegal edge.
                 try:
                     assert_trade_request_transition(current.status, new_status)
                 except TransitionError as exc:
                     raise LeaseLost(str(exc)) from exc
+            elif current.status in TERMINAL_REQUEST_STATUSES:
+                # The gap the table cannot see: a SAME-status write carrying `updates`.
+                # A terminal document is history, and this path could rewrite a FILLED
+                # request's volume or a FAILED one's reason. The only write it may still
+                # take is reconciliation stamping when it last looked, which changes no
+                # claim about what happened (§58).
+                disallowed = sorted(set(payload_keys) - RECONCILIATION_ONLY_FIELDS)
+                if disallowed:
+                    raise TerminalWriteRejected(
+                        f"{request_id} is {current.status.value}, which is terminal; "
+                        f"refusing to write {disallowed}. Only "
+                        f"{sorted(RECONCILIATION_ONLY_FIELDS)} may still be written."
+                    )
 
             payload: dict[str, Any] = {"status": new_status, **(updates or {})}
             if failure_code is not None:
@@ -480,3 +514,35 @@ def _where(query: Any, field: str, op: str, value: Any) -> Any:
 def _auditable(value: Any) -> bool:
     """Whether a value is simple enough to copy into an audit detail map."""
     return isinstance(value, (str, int, float, bool, type(None)))
+
+    # ── Listeners ─────────────────────────────────────────────────────────────
+    #
+    # These live here because CLAUDE.md funnels Firestore access through the
+    # repositories and a boundary test now enforces it. The callers used to build the
+    # query themselves -- the executor by reaching into this class's private _client,
+    # which put the repository's write discipline one attribute access from being
+    # sidestepped (decision 107).
+
+    def watch_document(self, request_id: str, on_change: Any) -> Any:
+        """Watch one request for status changes. Returns the watch handle.
+
+        Used by Discord to report the outcome of a request from the document rather than
+        from a button's return value: every terminal status renders, failures included,
+        because a human who authorised real money and heard nothing back has been failed
+        worse than one who was told it was rejected (§8).
+        """
+        return self._ref(request_id).on_snapshot(on_change)
+
+    def watch_confirmed(self, on_change: Any) -> Any:
+        """Watch for CONFIRMED requests. Returns the watch handle.
+
+        Best-effort: the executor's poll is the actual guarantee, and this only shortens
+        the latency between a human confirming and the order going out.
+        """
+        query = _where(
+            self._client.collection(paths.TRADE_REQUESTS),
+            "status",
+            "==",
+            TradeRequestStatus.CONFIRMED.value,
+        )
+        return query.on_snapshot(on_change)

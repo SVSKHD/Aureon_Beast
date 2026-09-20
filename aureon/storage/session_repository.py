@@ -7,10 +7,14 @@ on, for the same reason: a replay must be safe to re-run.
 
 from __future__ import annotations
 
+import logging
+from datetime import datetime
 from typing import Any
 
 from aureon.models.session import SessionSummary
 from aureon.storage import paths
+
+log = logging.getLogger(__name__)
 
 
 class SessionRepository:
@@ -29,3 +33,19 @@ class SessionRepository:
         if not getattr(snapshot, "exists", False):
             return None
         return SessionSummary.model_validate(snapshot.to_dict())
+
+    def in_period(self, start: datetime, end: datetime) -> list[SessionSummary]:
+        """Sessions whose ``started_at`` falls in ``[start, end)`` (see DetectionRepository)."""
+        from aureon.models.base import to_utc
+
+        lower, upper = to_utc(start), to_utc(end)
+        found: list[SessionSummary] = []
+        for doc in self._client.collection(paths.SESSIONS).stream():
+            try:
+                summary = SessionSummary.model_validate(doc.to_dict() or {})
+            except Exception:  # noqa: BLE001
+                log.exception("unreadable session %s", doc.id)
+                continue
+            if lower <= summary.started_at.utc < upper:
+                found.append(summary)
+        return found

@@ -350,16 +350,6 @@ class ExecutionWorker:
         actual guarantee.
         """
         try:
-            from aureon.storage import paths
-            from aureon.storage.trade_request_repository import _where
-
-            query = _where(
-                self.repository._client.collection(paths.TRADE_REQUESTS),  # noqa: SLF001
-                "status",
-                "==",
-                "confirmed",
-            )
-
             def on_snapshot(docs, changes, read_time) -> None:  # noqa: ANN001
                 for doc in docs:
                     try:
@@ -367,7 +357,7 @@ class ExecutionWorker:
                     except Exception:  # noqa: BLE001
                         log.exception("listener failed on %s", doc.id)
 
-            self._listener = query.on_snapshot(on_snapshot)
+            self._listener = self.repository.watch_confirmed(on_snapshot)
             log.info("listening for CONFIRMED trade requests")
         except Exception:  # noqa: BLE001
             log.exception("could not start the snapshot listener; polling only")

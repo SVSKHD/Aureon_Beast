@@ -38,6 +38,13 @@ class ExecutionSettings(AureonDocument):
         default=(), description="Empty means no symbol allowlist is enforced."
     )
 
+    #: Incremented on every write through ``set_trading_enabled`` (§57). The
+    #: transaction's read-then-conditional-write compares it, so two concurrent
+    #: toggles cannot both win: the loser's transaction sees a changed version and
+    #: Firestore aborts it. Without this, a disable racing an enable is last-write-wins
+    #: on the one setting that decides whether real money can move.
+    settings_version: int = Field(default=0, ge=0)
+
     updated_at: UtcDatetime | None = None
     updated_by: str | None = None
     disabled_reason: str | None = None

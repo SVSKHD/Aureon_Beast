@@ -152,6 +152,17 @@ class InMemoryFirestore:
     def collection(self, path: str) -> _FakeCollection:
         return _FakeCollection(self, path)
 
+    def transaction(self) -> _FakeTransaction:
+        """A transaction object with NO isolation and NO retry.
+
+        Enough to exercise a repository's transactional code path in a unit test, and
+        nothing more. It cannot prove the property the transactions exist for -- that a
+        concurrent write aborts the loser -- because a double that defines its own
+        concurrency semantics would be testing my model of Firestore rather than
+        Firestore. That belongs in the emulator suite, which is where it is.
+        """
+        return _FakeTransaction(self)
+
 
 class _FakeSnapshot:
     def __init__(self, data: dict[str, Any] | None) -> None:
@@ -174,8 +185,26 @@ class _FakeDoc:
         self._store.docs[self._path] = dict(payload)
         self._store.writes += 1
 
-    def get(self) -> _FakeSnapshot:
+    def get(self, transaction: Any | None = None) -> _FakeSnapshot:
+        # `transaction` accepted and ignored: reads inside a transaction see the same
+        # store, which is exactly the no-isolation caveat above.
         return _FakeSnapshot(self._store.docs.get(self._path))
+
+    def delete(self) -> None:
+        self._store.docs.pop(self._path, None)
+
+
+class _FakeTransaction:
+    """Applies writes immediately. See ``InMemoryFirestore.transaction``."""
+
+    def __init__(self, store: InMemoryFirestore) -> None:
+        self._store = store
+
+    def set(self, ref: _FakeDoc, payload: dict[str, Any]) -> None:
+        ref.set(payload)
+
+    def delete(self, ref: _FakeDoc) -> None:
+        ref.delete()
 
 
 class _FakeCollection:

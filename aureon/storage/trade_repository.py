@@ -23,13 +23,18 @@ from typing import Any
 from aureon.models.audit import AuditRecord
 from aureon.models.base import to_utc, utc_now
 from aureon.models.enums import (
+    TERMINAL_TRADE_STATUSES,
     TradeStatus,
     TransitionError,
     assert_trade_transition,
 )
 from aureon.models.trade import Trade
 from aureon.storage import paths
-from aureon.storage.trade_request_repository import _where
+from aureon.storage.trade_request_repository import (
+    RECONCILIATION_ONLY_FIELDS,
+    TerminalWriteRejected,
+    _where,
+)
 
 log = logging.getLogger(__name__)
 
@@ -178,13 +183,29 @@ class TradeRepository:
                 raise TradeTransitionRejected(f"no such trade {trade_id}")
             current = Trade.model_validate(snapshot.to_dict())
 
+            if current.status is new_status and not updates:
+                return current  # nothing to write
+
             if current.status is not new_status:
+                # A status CHANGE is the transition table's business, terminal or not:
+                # CLOSED -> OPEN is an illegal edge and must keep saying so.
                 try:
                     assert_trade_transition(current.status, new_status)
                 except TransitionError as exc:
                     raise TradeTransitionRejected(str(exc)) from exc
-            elif not updates:
-                return current  # nothing to write
+            elif current.status in TERMINAL_TRADE_STATUSES:
+                # The gap the table cannot see: a SAME-status write carrying `updates`.
+                # CLOSED is history, and this path could rewrite a settled trade's
+                # realized_pnl -- making the P&L, and every review built on it,
+                # unfalsifiable. Only the observational stamps may still be written;
+                # they say when it was last looked at, not what happened (§58).
+                disallowed = sorted(set(updates or ()) - RECONCILIATION_ONLY_FIELDS)
+                if disallowed:
+                    raise TerminalWriteRejected(
+                        f"{trade_id} is {current.status.value}, which is terminal; "
+                        f"refusing to write {disallowed}. Only "
+                        f"{sorted(RECONCILIATION_ONLY_FIELDS)} may still be written."
+                    )
 
             updated = current.model_copy(update={"status": new_status, **(updates or {})})
             transaction.set(self._ref(trade_id), updated.model_dump(mode="json"))
@@ -232,3 +253,21 @@ class TradeRepository:
 
         _ = moment
         return self._run(self._client.transaction(), txn)
+
+    def opened_in_period(self, start: datetime, end: datetime) -> list[Trade]:
+        """Trades whose OPEN time falls in ``[start, end)``.
+
+        By open time, not close: a trade belongs to the period it was entered in even if
+        it closed later. Filing it by close would attribute a Monday decision to Tuesday.
+        """
+        lower, upper = to_utc(start), to_utc(end)
+        found: list[Trade] = []
+        for doc in self._client.collection(paths.TRADES).stream():
+            try:
+                trade = Trade.model_validate(doc.to_dict() or {})
+            except Exception:  # noqa: BLE001
+                log.exception("unreadable trade %s", doc.id)
+                continue
+            if lower <= trade.open_time.utc < upper:
+                found.append(trade)
+        return found

@@ -11,12 +11,15 @@ Detections are immutable, so there is no update method here -- only upsert and r
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any
 
 from aureon.models.base import to_utc
 from aureon.models.detection import Detection
 from aureon.storage import paths
+
+log = logging.getLogger(__name__)
 
 
 class DetectionRepository:
@@ -73,3 +76,29 @@ class DetectionRepository:
             query = query.where("detected_at.utc", ">=", to_utc(since).isoformat())
         query = query.order_by("detected_at.utc", direction="DESCENDING").limit(limit)
         return [Detection.model_validate(doc.to_dict()) for doc in query.stream()]
+
+    def in_period(self, start: datetime, end: datetime) -> list[Detection]:
+        """Detections whose ``detected_at`` falls in ``[start, end)``.
+
+        Streams the collection and filters in Python rather than issuing a composite
+        query. Deliberate: the alternative needs a declared, deployed index kept in step
+        for a batch job that runs a few times a day, and a query that silently misses an
+        index returns fewer detections with no error -- which for a review means a
+        quietly wrong denominator.
+
+        Lives here rather than in the review service because CLAUDE.md puts Firestore
+        access behind a repository, and a boundary test now enforces it.
+        """
+        from aureon.models.base import to_utc
+
+        lower, upper = to_utc(start), to_utc(end)
+        found: list[Detection] = []
+        for doc in self._client.collection(paths.DETECTIONS).stream():
+            try:
+                detection = Detection.model_validate(doc.to_dict() or {})
+            except Exception:  # noqa: BLE001 - one bad document must not lose the period
+                log.exception("unreadable detection %s", doc.id)
+                continue
+            if lower <= detection.detected_at.utc < upper:
+                found.append(detection)
+        return found

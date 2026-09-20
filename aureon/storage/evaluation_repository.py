@@ -39,3 +39,17 @@ class EvaluationRepository:
         for evaluation in evaluations:
             self.upsert(evaluation)
         return len(evaluations)
+
+    def get_many(self, detection_ids: list[str], rule_id: str) -> dict[str, Any]:
+        """Evaluations for these detections under one rule, by exact document id.
+
+        By id rather than by query: no index, and no chance of a query silently missing
+        one -- which for an evaluation would mean its detection counted as unevaluated
+        rather than as answered.
+        """
+        found: dict[str, Any] = {}
+        for detection_id in detection_ids:
+            evaluation = self.get(detection_id, rule_id)
+            if evaluation is not None:
+                found[detection_id] = evaluation
+        return found

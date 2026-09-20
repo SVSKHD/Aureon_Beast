@@ -112,6 +112,8 @@ A human-initiated request to trade (§25-§34).
 | `filled_volume` | `float \| null` | no | `None` |  |
 | `failure_code` | `FailureCode \| null` | no | `None` |  |
 | `failure_message` | `str \| null` | no | `None` |  |
+| `last_reconciled_at` | `AwareDatetime \| null` | no | `None` |  |
+| `last_synced_at` | `AwareDatetime \| null` | no | `None` |  |
 
 ### Trade
 
@@ -145,6 +147,8 @@ A real position. MT5 is the truth (§49-§53).
 | `excursion` | `Excursion` | no | `Excursion()` |  |
 | `detection_id` | `str \| null` | no | `None` |  |
 | `link_type` | `LinkType \| null` | no | `None` |  |
+| `last_reconciled_at` | `AwareDatetime \| null` | no | `None` |  |
+| `last_synced_at` | `AwareDatetime \| null` | no | `None` |  |
 
 ### ControlRequest
 
@@ -229,6 +233,7 @@ Execution gates and limits (§56, §84).
 | `status_stale_after_seconds` | `float` | no | `45.0` |  |
 | `executor_lease_seconds` | `float` | no | `60.0` |  |
 | `allowed_symbols` | `tuple[str]` | no | `()` | Empty means no symbol allowlist is enforced. |
+| `settings_version` | `int` | no | `0` |  |
 | `updated_at` | `AwareDatetime \| null` | no | `None` |  |
 | `updated_by` | `str \| null` | no | `None` |  |
 | `disabled_reason` | `str \| null` | no | `None` |  |
