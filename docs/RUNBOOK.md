@@ -194,11 +194,12 @@ entry is a valid answer: it means the defaults were reviewed and kept.
 
 | command | what it does |
 |---|---|
-| `/status` | the live panels on an open market, the completed review on a closed one |
+| `/status [symbol]` | the live panels on an open market, the completed review on a closed one. `symbol:` narrows every number — panels, open trades, pending requests — to one instrument, read from that symbol's own state document |
 | `/execute symbol side lot [detection]` | the market-order shortcut. One embed, one CONFIRM. The lot is typed — there is no default — and the filling mode is named on the screen rather than left to the broker |
 | `/execute-trade` | opens the confirmation wizard (order type, stops, execution mode). Nothing is sent until a human confirms, and only the requester may confirm |
-| `/cancel-order` | cancels a resting pending order |
-| `/close-trade` | closes an open position |
+| `/close symbol:` | closes the one open position on that symbol. Two open positions on it, or none, and it says what it found and stops — Aureon does not choose which of your trades to end |
+| `/cancel-order ticket [symbol]` | cancels a resting pending order. Naming the symbol refuses unless the ticket really is that symbol, at Aureon's records **and** at the broker |
+| `/close-trade position_id [volume] [symbol]` | closes an open position, with the same cross-check when a symbol is named |
 | `/trading status` | is trading enabled, and who last changed it |
 | `/trading enable` | requires a confirmation, and lists what to check first |
 | `/trading disable` | immediate, audited, effective on the next request |

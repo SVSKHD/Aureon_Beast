@@ -242,6 +242,40 @@ def market_state_of(state: Any, symbol: str) -> MarketState:
     return entry.market_state if entry is not None else MarketState.UNKNOWN
 
 
+# ── Which symbols this deployment is allowed to talk about (9A) ───────────────
+
+
+def unobserved_symbol_notice(symbol: str, observed: Sequence[str]) -> str | None:
+    """``None`` when this process observes ``symbol``, else why it will not act on it.
+
+    Refused in Discord rather than left to the execution allowlist, because the reason is
+    different: `allowed_symbols` is a policy about what may be traded, and this is a fact
+    about what this process knows. Without an observer for the symbol there is no published
+    quote, no symbol spec and no detection history — so every field on the screen would be
+    missing or, worse, another symbol's.
+    """
+    wanted = symbol.upper()
+    if wanted in {one.upper() for one in observed}:
+        return None
+    return (
+        f"{wanted} is not observed by this deployment ({', '.join(observed)}), so there is "
+        "no quote or symbol spec to show you."
+    )
+
+
+def for_symbol(items: Sequence[Any], symbol: str | None) -> list[Any]:
+    """The subset carrying this symbol, or everything when no symbol is named.
+
+    Used by ``/status symbol:`` for the open-trade and pending-request counts. A count that
+    silently included the other instrument would be the one number a trader reads to decide
+    whether they are exposed.
+    """
+    if symbol is None:
+        return list(items)
+    wanted = symbol.upper()
+    return [item for item in items if str(getattr(item, "symbol", "")).upper() == wanted]
+
+
 # ── /execute: the market-order shortcut (9A) ──────────────────────────────────
 
 
@@ -289,13 +323,9 @@ def plan_market_order(
             False, f"`{side}` is not a side — use {' or '.join(MARKET_SIDES)}"
         )
 
-    if symbol not in {s.upper() for s in observed_symbols}:
-        return MarketOrderPlan(
-            False,
-            f"{symbol} is not observed by this deployment "
-            f"({', '.join(observed_symbols)}), so there is no quote or symbol spec to "
-            "show you.",
-        )
+    unobserved = unobserved_symbol_notice(symbol, observed_symbols)
+    if unobserved:
+        return MarketOrderPlan(False, unobserved)
 
     check = validate_lot(lot, info, settings, symbol=symbol)
     if not check.ok:
@@ -591,6 +621,98 @@ def build_control_request(
     )
 
 
+# ── Naming a symbol on a cancel or a close (9A, §46, §47) ─────────────────────
+
+
+@dataclass
+class TargetCheck:
+    """Whether a ticket or position id may be acted on under the named symbol."""
+
+    ok: bool
+    message: str | None = None
+
+
+def check_target_symbol(
+    *, symbol: str | None, kind: ControlRequestKind, target: str, found_symbol: str | None
+) -> TargetCheck:
+    """Refuse a cancel or close whose target is not the symbol the human named.
+
+    With one symbol observed, ``symbol:`` on these commands would be decoration. With two it
+    is a **cross-check on a number nobody can read**: a broker ticket is eight digits and a
+    mistyped one on a two-symbol account points at a real order belonging to the other
+    instrument. Naming the symbol turns a typo from "closed the wrong position" into a
+    refusal.
+
+    For that to hold, an unverifiable claim has to be refused as well. If Aureon holds no
+    record tying this target to a symbol, it cannot confirm the human is acting on what they
+    think they are, and proceeding would let the guarantee fail silently exactly when the
+    record is missing. Acting on the raw ticket is still available by omitting ``symbol:``,
+    which is then plainly an unchecked action rather than a checked one.
+    """
+    if symbol is None:
+        return TargetCheck(True)
+    wanted = symbol.upper()
+    noun = "order" if kind is ControlRequestKind.CANCEL else "position"
+    if found_symbol is None:
+        return TargetCheck(
+            False,
+            f"Aureon has no record tying {noun} `{target}` to a symbol, so it cannot "
+            f"confirm it is {wanted}. Re-run without `symbol:` to act on the {noun} "
+            "itself — that is an unchecked action, and worth choosing deliberately.",
+        )
+    if found_symbol.upper() != wanted:
+        return TargetCheck(
+            False,
+            f"{noun.title()} `{target}` is {found_symbol}, not {wanted}. Nothing was sent.",
+        )
+    return TargetCheck(True)
+
+
+@dataclass
+class CloseChoice:
+    """Which position ``/close symbol:`` will close, if it can tell."""
+
+    ok: bool
+    message: str | None = None
+    position_id: int | None = None
+    symbol: str | None = None
+
+
+def resolve_close_target(open_trades: Sequence[Any], symbol: str) -> CloseChoice:
+    """The one open position for this symbol, or a refusal that says what it found.
+
+    ``/close symbol:XAGUSD`` is for the common case — one position, close it now, no ids to
+    copy. Two positions on the same symbol is **not** that case, and picking the newest, the
+    largest or the first would be Aureon deciding which of a human's trades to end. It lists
+    them instead and asks for `/close-trade`.
+    """
+    wanted = symbol.upper()
+    # ``mt5_position_id`` is the field name on Trade: the broker's position id, kept under a
+    # name that says whose id it is (§49). Reading a plain ``position_id`` here would find
+    # nothing on any real trade and quietly report "nothing open".
+    matches = [
+        trade
+        for trade in open_trades
+        if str(getattr(trade, "symbol", "")).upper() == wanted
+        and getattr(trade, "mt5_position_id", None)
+    ]
+    if not matches:
+        return CloseChoice(
+            False,
+            f"No open {wanted} position. `/status symbol:{wanted}` shows what Aureon knows.",
+        )
+    if len(matches) > 1:
+        listed = ", ".join(f"`{trade.mt5_position_id}`" for trade in matches)
+        return CloseChoice(
+            False,
+            f"{len(matches)} open {wanted} positions: {listed}. Use "
+            "`/close-trade position_id:` — Aureon will not choose which of your trades to "
+            "close.",
+        )
+    only = matches[0]
+    return CloseChoice(True, position_id=int(only.mt5_position_id), symbol=only.symbol)
+
+
 # ── /status (§59, §61-§63) ────────────────────────────────────────────────────
 
 
@@ -614,6 +736,10 @@ class StatusScreen:
     pending_requests: int = 0
     review_summary: str | None = None
     market_closed: bool = False
+    #: The symbol this screen was scoped to, or ``None`` for every observed symbol (9A).
+    #: Stated rather than implied: with two symbols observed, a panel showing one of them
+    #: and a count covering both would be read as one picture of one instrument.
+    symbol: str | None = None
     #: The live §59 panels, one entry per symbol. Populated only when the market is
     #: OPEN: on a closed market the numbers are a snapshot of whenever it shut, and
     #: showing them beside a live layout invites reading them as current.
@@ -736,6 +862,7 @@ def build_status(
     pending_requests: int = 0,
     latest_review: Any | None = None,
     stale_after: float | None = None,
+    symbol: str | None = None,
     now: datetime | None = None,
 ) -> StatusScreen:
     """Assemble the status screen from Firestore reads only (§59).
@@ -793,6 +920,7 @@ def build_status(
         open_trades=open_trades,
         pending_requests=pending_requests,
         market_closed=market_closed,
+        symbol=symbol.upper() if symbol else None,
     )
 
     # §59 vs §61-§63: the two modes are mutually exclusive, deliberately.

@@ -13,6 +13,22 @@ gone. So a broker refusal resolves the control request to ``FAILED`` with the re
 the **monitor** records what actually happened to the order or position (§46, §47).
 
 That is why Discord reports the reconciled outcome rather than this worker's return value.
+
+## A request that names a symbol is checked against the live one (9A)
+
+``ControlRequest.symbol`` is set only when a human asserted it in Discord (``/close
+symbol:``, or ``symbol:`` on ``/cancel-order`` and ``/close-trade``). When it is present this
+worker re-reads the position or order from the broker and refuses when the symbol differs,
+before anything is cancelled or closed.
+
+Discord already checked the assertion against Firestore. This checks it against the broker,
+which is the only account that matters: a position id typed one digit wrong on a two-symbol
+account names a real position belonging to the other instrument, and the two records could
+also simply disagree. A refusal costs a re-read; closing the wrong instrument costs money and
+cannot be undone.
+
+A target the broker does not report at all is **not** refused here -- that is the market
+having won the race, and it belongs to the broker to say so in its own words.
 """
 
 from __future__ import annotations
@@ -25,6 +41,7 @@ from aureon.execution.broker_interface import BrokerError, BrokerInterface
 from aureon.models.base import utc_now
 from aureon.models.control import ControlRequest
 from aureon.models.enums import ControlRequestKind, ControlRequestStatus, FailureCode
+from aureon.models.trade import BrokerOrderResult
 from aureon.storage.control_request_repository import (
     ControlClaimRejected,
     ControlRequestRepository,
@@ -107,9 +124,52 @@ class ControlWorker:
         )
 
     def _perform(self, request: ControlRequest):
+        mismatch = self._symbol_mismatch(request)
+        if mismatch is not None:
+            return mismatch
         if request.kind is ControlRequestKind.CANCEL:
             return self.broker.cancel_order(int(request.target))
         return self.broker.close_position(int(request.target), request.volume)
+
+    def _symbol_mismatch(self, request: ControlRequest) -> BrokerOrderResult | None:
+        """A refusal when the live target is not the symbol the request names (9A).
+
+        ``None`` when there is nothing to check: no symbol asserted, or the broker does not
+        report this target -- the race case, which the broker itself must answer for.
+        """
+        if not request.symbol:
+            return None
+        target = int(request.target)
+        if request.kind is ControlRequestKind.CANCEL:
+            live = next(
+                (o for o in self.broker.pending_orders() if o.order_ticket == target), None
+            )
+            noun = "order"
+        else:
+            live = next(
+                (p for p in self.broker.open_positions() if p.position_id == target), None
+            )
+            noun = "position"
+        if live is None:
+            return None
+        if live.symbol.upper() == request.symbol.upper():
+            return None
+        log.error(
+            "refusing control %s: %s %s is %s, not %s",
+            request.control_id,
+            noun,
+            target,
+            live.symbol,
+            request.symbol,
+        )
+        return BrokerOrderResult(
+            ok=False,
+            failure_code=FailureCode.SYMBOL_NOT_FOUND,
+            message=(
+                f"{noun} {target} is {live.symbol} at the broker, not the {request.symbol} "
+                "this request names; nothing was sent"
+            ),
+        )
 
     def poll_once(self) -> int:
         handled = 0

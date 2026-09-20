@@ -108,7 +108,12 @@ def status_embed(screen: StatusScreen) -> Any:
         Freshness.OFFLINE: COLOUR_BAD,
     }.get(screen.overall, COLOUR_INFO)
 
-    embed = _embed(f"{icon} Aureon — {screen.overall.value.upper()}", colour=colour)
+    # The scope is in the title, not a footnote: a reader who asked for one symbol must
+    # not mistake its panel for the whole deployment, and vice versa (9A).
+    scope = f" · {screen.symbol}" if screen.symbol else ""
+    embed = _embed(
+        f"{icon} Aureon{scope} — {screen.overall.value.upper()}", colour=colour
+    )
     embed.add_field(
         name="Services",
         value="\n".join(

@@ -29,6 +29,7 @@ from aureon.discord.service import (
     linkable_detections,
     market_state_of,
     quote_of,
+    unobserved_symbol_notice,
     unsupported_mode_notice,
     validate_lot,
 )
@@ -58,6 +59,14 @@ class ExecuteTradeCommands:
         await interaction.response.defer(thinking=True, ephemeral=True)
         context = self.context
         actor = str(interaction.user.id)
+        symbol = symbol.upper()
+
+        # 9A: the same gate as /execute. Without an observer for this symbol there is no
+        # published quote and no spec, so the wizard could only show blanks.
+        unobserved = unobserved_symbol_notice(symbol, context.config.symbols)
+        if unobserved:
+            await self._fail(interaction, unobserved)
+            return
 
         try:
             kind = OrderType(order_type)
@@ -139,7 +148,7 @@ class ExecuteTradeCommands:
         """
         context = self.context
         recent = await context.run(
-            context.detections.recent_for_symbol, symbol, None, 25
+            context.detections.recent_for_symbol, symbol.upper(), None, 25
         )
         candidates = linkable_detections(
             recent,
@@ -158,8 +167,13 @@ def register(tree: Any, context: BotContext) -> None:
     commands = ExecuteTradeCommands(context)
 
     @tree.command(name="execute-trade", description="Place a trade (requires confirmation)")
+    @app_commands.choices(
+        symbol=[
+            app_commands.Choice(name=name, value=name) for name in context.config.symbols
+        ]
+    )
     @app_commands.describe(
-        symbol="Symbol, e.g. XAUUSD",
+        symbol="Which symbol",
         order_type="market_buy, market_sell, buy_stop, sell_stop, buy_limit, sell_limit",
         lot="Lot size, e.g. 0.10",
         stop_loss="Stop loss price",

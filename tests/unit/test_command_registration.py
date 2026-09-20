@@ -28,6 +28,7 @@ EXPECTED = {
     "status",
     "execute",
     "execute-trade",
+    "close",
     "cancel-order",
     "close-trade",
     "trading",
@@ -100,3 +101,29 @@ def test_the_side_is_a_choice_rather_than_free_text(tree) -> None:
         "buy",
         "sell",
     ]
+
+
+# ── 9A: the symbol option, wherever a symbol changes the answer ────────────────
+
+#: Commands whose answer depends on which symbol is meant, and what the option is called
+#: there. ``/close`` requires it -- the symbol IS the target. Everywhere else it is
+#: optional, because a deployment observing one symbol must not have to name it.
+SYMBOL_AWARE = {
+    "status": False,
+    "execute": True,
+    "execute-trade": True,
+    "close": True,
+    "cancel-order": False,
+    "close-trade": False,
+}
+
+
+@pytest.mark.parametrize(("command", "required"), sorted(SYMBOL_AWARE.items()))
+def test_each_symbol_aware_command_offers_the_configured_symbols(
+    tree: app_commands.CommandTree, command: str, required: bool
+) -> None:
+    """One list, from the config, everywhere. A command left behind is the one a trader
+    uses on the symbol it cannot see."""
+    option = options(tree, command)["symbol"]
+    assert [choice.value for choice in option.choices] == [GOLD, SILVER]
+    assert option.required is required

@@ -26,14 +26,18 @@ from aureon.discord.service import (
     build_control_request,
     build_status,
     check_confirm_press,
+    check_target_symbol,
     execution_modes,
+    for_symbol,
     linkable_detections,
     market_filling_mode,
     market_state_of,
     plan_market_order,
     quote_of,
+    resolve_close_target,
     summarise_review,
     trading_change_summary,
+    unobserved_symbol_notice,
     unsupported_mode_notice,
     validate_lot,
 )
@@ -619,6 +623,120 @@ def test_a_pending_order_shows_its_entry_not_the_market() -> None:
     assert ("Entry", "2405") in screen.fields
 
 
+# ── 9A: naming a symbol on the other commands ─────────────────────────────────
+
+
+def open_trade(symbol: str, position_id: int):
+    """A real ``Trade``, not a double (9A).
+
+    A stand-in with a ``position_id`` attribute was the first version of this helper, and it
+    made ``resolve_close_target`` pass while reading a field no ``Trade`` has -- the broker's
+    id lives on ``mt5_position_id``. Against real documents the rule would have reported
+    "nothing open" for every symbol. The same class of gap as decisions 145 and 149, so the
+    helper builds the document the command actually receives.
+    """
+    from aureon.models.trade import Trade
+
+    return Trade(
+        trade_id=f"t-{position_id}",
+        mt5_position_id=position_id,
+        symbol=symbol,
+        direction=Direction.BUY,
+        volume=0.10,
+        open_price=2400.0 if symbol == SYMBOL else 30.0,
+        open_time=MarketTime.from_utc(NOW - timedelta(minutes=5), TZ),
+    )
+
+
+def test_an_observed_symbol_passes_and_an_unobserved_one_says_what_is_here() -> None:
+    assert unobserved_symbol_notice("xagusd", OBSERVED) is None
+    notice = unobserved_symbol_notice("EURUSD", OBSERVED)
+    assert notice is not None
+    assert SYMBOL in notice and SILVER in notice
+
+
+def test_filtering_by_symbol_is_by_name_and_none_means_everything() -> None:
+    """The count on /status is what a trader reads to decide whether they are exposed."""
+    items = [open_trade(SYMBOL, 1), open_trade(SILVER, 2), open_trade(SILVER, 3)]
+    assert len(for_symbol(items, None)) == 3
+    assert [t.mt5_position_id for t in for_symbol(items, "xagusd")] == [2, 3]
+    assert for_symbol(items, "EURUSD") == []
+
+
+def test_no_named_symbol_means_no_cross_check() -> None:
+    """The ticket alone still works; it is simply unchecked, which is the status quo."""
+    assert check_target_symbol(
+        symbol=None, kind=ControlRequestKind.CLOSE, target="900", found_symbol=None
+    ).ok
+
+
+def test_a_named_symbol_that_matches_the_record_passes() -> None:
+    assert check_target_symbol(
+        symbol="xagusd", kind=ControlRequestKind.CLOSE, target="900", found_symbol=SILVER
+    ).ok
+
+
+def test_a_named_symbol_that_disagrees_with_the_record_refuses() -> None:
+    """9A. A mistyped eight-digit ticket points at the other instrument's real order."""
+    check = check_target_symbol(
+        symbol=SILVER, kind=ControlRequestKind.CLOSE, target="900", found_symbol=SYMBOL
+    )
+    assert check.ok is False
+    assert SYMBOL in (check.message or "") and SILVER in (check.message or "")
+    assert "Nothing was sent" in (check.message or "")
+
+
+def test_a_symbol_aureon_cannot_verify_is_refused_rather_than_assumed() -> None:
+    """A guarantee that lapses when the record is missing is not a guarantee.
+
+    The refusal says how to proceed deliberately instead, which keeps the unchecked action
+    available without letting it happen by accident.
+    """
+    check = check_target_symbol(
+        symbol=SILVER, kind=ControlRequestKind.CANCEL, target="900", found_symbol=None
+    )
+    assert check.ok is False
+    assert "no record" in (check.message or "")
+    assert "without `symbol:`" in (check.message or "")
+    # And it calls a cancel's target an order, not a position.
+    assert "order" in (check.message or "")
+
+
+def test_the_close_shortcut_finds_the_one_open_position_for_the_symbol() -> None:
+    trades = [open_trade(SYMBOL, 11), open_trade(SILVER, 22)]
+    choice = resolve_close_target(trades, "xagusd")
+    assert choice.ok is True
+    assert choice.position_id == 22
+    assert choice.symbol == SILVER
+
+
+def test_the_close_shortcut_refuses_to_choose_between_two_positions() -> None:
+    """9A. Newest, largest or first would all be Aureon ending a trade of its own choosing."""
+    trades = [open_trade(SILVER, 22), open_trade(SILVER, 33)]
+    choice = resolve_close_target(trades, SILVER)
+    assert choice.ok is False
+    assert choice.position_id is None
+    assert "22" in (choice.message or "") and "33" in (choice.message or "")
+    assert "/close-trade" in (choice.message or "")
+
+
+def test_the_close_shortcut_says_so_when_there_is_nothing_open() -> None:
+    choice = resolve_close_target([open_trade(SYMBOL, 11)], SILVER)
+    assert choice.ok is False
+    assert SILVER in (choice.message or "")
+
+
+def test_the_shortcut_reads_the_field_a_real_trade_actually_has() -> None:
+    """``mt5_position_id``, not ``position_id`` -- see ``open_trade`` above.
+
+    Asserted directly because the failure is silent: reading the wrong attribute makes every
+    symbol look flat, which is the most reassuring possible way to be wrong.
+    """
+    trade = open_trade(SILVER, 44)
+    assert not hasattr(trade, "position_id")
+    assert resolve_close_target([trade], SILVER).position_id == 44
+
+
 # ── §46, §47: control requests ────────────────────────────────────────────────
 
 
@@ -746,6 +864,45 @@ def test_a_review_summary_reports_the_excluded_pending_count() -> None:
     assert "12 detections" in summary
     assert "40 horizons still pending" in summary
     assert "EMA_OUTCOME_V1" in summary
+
+
+# ── 9A: /status scoped to one symbol ──────────────────────────────────────────
+
+
+def test_a_scoped_status_screen_names_the_symbol_it_is_about() -> None:
+    """Stated, not implied: one symbol's panel beside both symbols' counts would read as
+    one picture of one instrument."""
+    screen = build_status(
+        system_state=SystemState(
+            symbols=(
+                SymbolState(
+                    symbol=SILVER, timeframe=Timeframe.M5, market_state=MarketState.OPEN
+                ),
+            ),
+            updated_at=NOW,
+        ),
+        heartbeats={},
+        settings=settings(),
+        symbol="xagusd",
+        now=NOW,
+    )
+    assert screen.symbol == SILVER
+    assert [name for name, _ in screen.symbols] == [f"{SILVER} {Timeframe.M5.value}"]
+
+    from aureon.discord.embeds import status_embed
+
+    assert SILVER in status_embed(screen).title
+
+
+def test_an_unscoped_status_screen_says_nothing_about_a_symbol() -> None:
+    screen = build_status(
+        system_state=None, heartbeats={}, settings=settings(), now=NOW
+    )
+    assert screen.symbol is None
+
+    from aureon.discord.embeds import status_embed
+
+    assert "·" not in status_embed(screen).title
 
 
 # ── §57: the trading switch ───────────────────────────────────────────────────
