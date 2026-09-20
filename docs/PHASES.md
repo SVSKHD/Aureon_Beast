@@ -18,6 +18,7 @@ passes.** Partial passes do not count.
 | 7 | Reviews — machine observation vs human execution | `/status` on a CLOSED market renders the weekly review; baseline numbers reconcile | ✅ done |
 | 8 | Aureon Vue — read-only dashboard | Dashboard matches `/status` at the same second; STALE banner on observer stop; non-allowlisted account sees nothing; rules tests pass | ⬜ not started |
 | — | **Corrections slice** (§12 identity, EMA 20/50, outcome V2, context tags, live snapshot, safety gaps, collection prefix, live-vs-replay tooling) | pytest green with and without the emulator; baseline carries a 20/50 section; `/status` shows the full snapshot; boundary tests cover identity components, bare collection literals and raw Firestore access | ✅ code done; **real-session leg outstanding** |
+| — | **Defect register D-1…D-15** | each item green | ✅ closed — D-1…D-3, D-5…D-14 landed in the corrections slice (PR #1); D-4 needed only its missing proof (the tracker already filtered on direction, not agent name); D-7 needed its last label (`last updated`); D-15 recorded as placeholders with a per-symbol hook |
 
 ## Cross-phase checklist (run after each phase)
 
