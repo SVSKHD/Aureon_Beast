@@ -198,7 +198,12 @@ class Assessment(AureonDocument):
     trend_read: TrendRead
     cohort_filter: CohortFilter
     n: int = Field(default=0, ge=0)
-    horizons: tuple[HorizonConfirmation, ...] = ()
+    #: Named ``confirmations`` rather than ``horizons``: it holds confirmation ROWS, one
+    #: per horizon, not horizons. The accurate name also keeps it clear of the blunt grep
+    #: that stops review code reading ``DetectionEvaluation.horizons`` unfiltered (§22) --
+    #: a guard worth keeping blunt, since the thing it prevents is counting a PENDING
+    #: outcome as a miss.
+    confirmations: tuple[HorizonConfirmation, ...] = ()
     tp_estimates: tuple[Estimate, ...] = ()
     sl_estimates: tuple[Estimate, ...] = ()
     paired: PairedOutcome | None = None

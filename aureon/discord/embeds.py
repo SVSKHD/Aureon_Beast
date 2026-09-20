@@ -49,7 +49,11 @@ def confirmation_embed(screen: ConfirmationScreen) -> Any:
     should see that before reading a single field.
     """
     colour = COLOUR_WARN if screen.warnings else COLOUR_INFO
-    description = "\n".join(f"⚠️ {w}" for w in screen.warnings) or None
+    lines = [f"⚠️ {w}" for w in screen.warnings]
+    # Info lines come after the warnings and carry no icon: 9D's "last assessment" is
+    # context, and an order screen that decorated it would be nudging.
+    lines += list(getattr(screen, "info", []))
+    description = "\n".join(lines) or None
     embed = _embed(screen.title, colour=colour, description=description)
     for name, value in screen.fields:
         embed.add_field(name=name, value=value or "—", inline=True)

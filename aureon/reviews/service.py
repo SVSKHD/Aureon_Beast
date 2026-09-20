@@ -90,6 +90,10 @@ class ReviewService:
             evaluations=self._load_evaluations(detections),
             trades=self._for_symbol(self._load_trades(period)),
             sessions=self._for_symbol(self._load_sessions(period)),
+            # 9D. Assessments are narrowed by symbol like everything else; notes are keyed
+            # by the trades already narrowed above, so they need no second filter.
+            assessments=self._for_symbol(self._load_assessments(period)),
+            notes=self._load_notes(self._for_symbol(self._load_trades(period))),
         )
         log.info(
             "period %s (%s): %d detections, %d evaluations, %d trades, %d sessions (%s)",
@@ -134,6 +138,12 @@ class ReviewService:
 
     def _load_sessions(self, period: Period) -> list[SessionSummary]:
         return self.source.sessions_in(period.start, period.end)
+
+    def _load_assessments(self, period: Period) -> list[Any]:
+        return self.source.assessments_in(period.start, period.end)
+
+    def _load_notes(self, trades: list[Trade]) -> dict[str, list[Any]]:
+        return self.source.notes_for(trades)
 
     # ── Generating ────────────────────────────────────────────────────────────
 

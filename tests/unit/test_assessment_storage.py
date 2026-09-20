@@ -192,7 +192,7 @@ def assessment(**overrides) -> Assessment:
             dropped=("wick_tag",),
         ),
         n=42,
-        horizons=(
+        confirmations=(
             HorizonConfirmation(
                 horizon_id="h20",
                 evaluated=42,

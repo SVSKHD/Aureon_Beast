@@ -449,6 +449,11 @@ class ConfirmationScreen:
     title: str
     fields: list[tuple[str, str]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    #: Context, not caution (9D). Kept apart from ``warnings`` because a warning colours
+    #: the embed amber and reads as "something is wrong"; "the last readout said X" is
+    #: neither a problem nor an endorsement, and putting it in the warning list would make
+    #: every informed order look like a risky one.
+    info: list[str] = field(default_factory=list)
     quote_age_seconds: float = 0.0
     expires_in_seconds: float = 0.0
 
@@ -1083,7 +1088,7 @@ def build_monitor(assessment: Any, detection: Detection) -> MonitorScreen:
         screen.footer = f"no measurement · {assessment.assessment_id}"
         return screen
 
-    for horizon in assessment.horizons:
+    for horizon in assessment.confirmations:
         rows = []
         for row in horizon.thresholds:
             rows.append(
@@ -1148,7 +1153,7 @@ def _next_move_line(assessment: Any) -> str:
     the cohort is how a headline comes to disagree with the table under it, and the headline
     is the part people quote.
     """
-    horizon = assessment.horizons[0] if assessment.horizons else None
+    horizon = assessment.confirmations[0] if assessment.confirmations else None
     row = horizon.thresholds[0] if horizon and horizon.thresholds else None
     reached = (
         f"reached +{row.threshold:g} within {horizon.horizon_id} in {_pct(row.rate)}"
@@ -1165,6 +1170,66 @@ def _next_move_line(assessment: Any) -> str:
         f"Bias {assessment.trend_read.bias.value} · cohort n={assessment.n} · "
         f"{reached}{adverse}"
     )
+
+
+def assessment_info_line(assessment: Any, *, now: datetime | None = None) -> str | None:
+    """One line about the last `/monitor` readout for this symbol (9D-4, §64).
+
+    An **info** line and nothing more. Deliberately carries the bias, the n and the
+    reached-rate but **not** the target and stop prices: those are quantiles of past
+    excursions, and printing a price on the screen where somebody is about to place an
+    order is one copy-and-paste away from being treated as a level. `/monitor` shows them
+    in a context that says what they are.
+
+    Nothing anywhere prefills an SL or a TP from an assessment, and a test asserts the
+    confirmation carries neither field.
+    """
+    if assessment is None:
+        return None
+    age = ""
+    if assessment.created_at is not None:
+        minutes = (to_utc(now or utc_now()) - to_utc(assessment.created_at)).total_seconds() / 60
+        # Stated plainly: a readout from four hours ago describes a market that may be gone,
+        # and "last assessment" without a time reads as "current".
+        age = f", {minutes:.0f}m ago"
+    if assessment.insufficient:
+        return (
+            f"Last assessment{age}: insufficient history (n={assessment.n}). "
+            "Run `/monitor` for the detail."
+        )
+    rate = ""
+    if assessment.confirmations and assessment.confirmations[0].thresholds:
+        row = assessment.confirmations[0].thresholds[0]
+        rate = (
+            f", reached +{row.threshold:g} in {_pct(row.rate)} of {row.evaluated}"
+        )
+    return (
+        f"Last assessment{age}: bias {assessment.trend_read.bias.value}, "
+        f"cohort n={assessment.n}{rate}. Measured, not advice — `/monitor` for the detail."
+    )
+
+
+async def attach_assessment(context, screen, symbol: str) -> None:
+    """Add the "last assessment" info line, if there is one (9D-4, §64).
+
+    A read, appended to the screen, and nothing else. Never prefills a stop or a target:
+    an assessment's quantiles describe what happened to similar detections, and an order
+    screen is the one place where a number is read as an instruction.
+
+    A failure here is swallowed. The line is context; the confirmation is the thing that
+    matters, and a readout that could not be read must not stop somebody placing the trade
+    they had already decided on.
+    """
+    if getattr(context, "assessments", None) is None:
+        return
+    try:
+        latest = await context.run(context.assessments.latest_for_symbol, symbol)
+    except Exception:  # noqa: BLE001 - context, never critical
+        log.debug("could not read the last assessment for %s", symbol, exc_info=True)
+        return
+    line = assessment_info_line(latest)
+    if line:
+        screen.info.append(line)
 
 
 @dataclass

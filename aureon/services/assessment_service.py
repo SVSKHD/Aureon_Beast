@@ -582,7 +582,7 @@ def build_assessment(
         # No percentage at all below the floor. An interval on n=12 is so wide that
         # printing the point estimate beside it invites reading the estimate and ignoring
         # the interval, so nothing is printed rather than something misleading.
-        horizons=confirmations(cohort, rule) if len(cohort) >= MIN_COHORT else (),
+        confirmations=confirmations(cohort, rule) if len(cohort) >= MIN_COHORT else (),
         tp_estimates=(
             estimates(
                 mfe,

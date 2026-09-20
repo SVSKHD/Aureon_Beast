@@ -223,6 +223,7 @@ re-running one overwrites the same document.
 | `/remind list` | your alerts, armed ones first with their remaining time |
 | `/remind cancel id:` | disarms one of your own alerts |
 | `/monitor symbol: [detection:]` | what the **measured record** says about a detection: the observer's published trend read with its evidence, the cohort of prior detections that matched it and what had to be dropped to reach thirty, how often each threshold was reached with n and a 95% interval, and target/adverse quantiles of measured excursions. Below thirty prior detections it says "insufficient history (n=…)" and shows **no percentage at all**. Nothing here is a forecast and nothing prefills an order |
+| `/note trade:<id\|last> text:` | your own words about a trade, stored **beside** it so a CLOSED trade stays untouched (§45). `#tags` group the week in the weekly review. Nothing automated ever reads a note |
 | `/trading status` | is trading enabled, and who last changed it |
 | `/trading enable` | requires a confirmation, and lists what to check first |
 | `/trading disable` | immediate, audited, effective on the next request |
@@ -292,6 +293,36 @@ knowing before you act on one:
 If the bias reads `sideways` with the single evidence line "no trend read published", the
 observer is not writing state — check `/status`. Discord cannot compute the trend read
 itself; it holds no data provider at all.
+
+## The weekly review scores its own readouts
+
+From 9D the weekly review carries two things it did not before.
+
+**`assessment_hit_rate`** asks, of every `/monitor` readout produced that week, whether
+price reached the target quantile it published before the stop quantile it published. Four
+outcomes, and the split matters more than the rate:
+
+- **hit** — the target's distance was covered and the stop's was not;
+- **miss** — the stop's was and the target's was not;
+- **neither** — neither distance was covered inside the horizon. Counted against the rate,
+  because the question is "did the target come first" and the answer is no, but kept apart:
+  a target nobody got near is a different lesson from one price ran away from;
+- **unresolved** — both were covered, and candle data cannot say which came first. Excluded
+  from the rate entirely rather than guessed at.
+
+The rate is also broken out **per cohort**, because "it holds when the volatility regime
+matched" and "it holds in general" are different claims — a cohort that had to widen is the
+weaker one, and a single blended number would hide which is which. `assessments_not_scored`
+counts the readouts that published nothing because there was not enough history; that number
+should fall as the record grows.
+
+Nothing writes the outcome back onto the assessment. The assessment says what was believed
+and from what evidence; the review says how it turned out.
+
+**Your notes** are printed under each trade beside its outcome, and the week is grouped by
+the `#tags` you used. They are copied into the review document rather than linked, so a
+review read next year still says what you said at the time. No number in the review, and
+nothing in `/monitor`, ever reads one.
 
 ## What the tools refuse to do
 

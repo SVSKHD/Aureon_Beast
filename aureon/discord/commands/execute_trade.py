@@ -25,6 +25,7 @@ from aureon.discord.context import BotContext
 from aureon.discord.embeds import confirmation_embed, notice_embed
 from aureon.discord.service import (
     DraftRequest,
+    attach_assessment,
     build_confirmation,
     linkable_detections,
     market_state_of,
@@ -135,6 +136,7 @@ class ExecuteTradeCommands:
         screen = build_confirmation(
             draft, quote, spec, settings, market_state=market_state, detection=detection
         )
+        await attach_assessment(context, screen, draft.symbol)
         view = ConfirmTradeView(context, request, draft)
         await interaction.followup.send(
             embed=confirmation_embed(screen), view=view, ephemeral=True

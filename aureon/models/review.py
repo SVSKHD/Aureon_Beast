@@ -131,6 +131,46 @@ class ReviewBase(AureonDocument):
 
     notes: str | None = None
 
+    # ── 9D: was the readout any good, and what did the trader say? ────────────
+    #: How the quantiles `/monitor` published fared (§63). Counted here rather than written
+    #: back onto each assessment, which would make a stored document say something different
+    #: from what it said when it was written (decision 195).
+    assessments_total: int = Field(default=0, ge=0)
+    assessments_hit: int = Field(default=0, ge=0)
+    assessments_miss: int = Field(default=0, ge=0)
+    #: Neither distance was reached inside the horizon. Its own count: "it went against you"
+    #: and "it went nowhere" are different lessons.
+    assessments_neither: int = Field(default=0, ge=0)
+    #: Both distances were reached and candle data cannot order them (§23's problem again).
+    #: Excluded from the rate rather than counted either way.
+    assessments_unresolved: int = Field(default=0, ge=0)
+    #: Readouts that published no target at all — `/monitor` refusing for want of history.
+    #: How often that happens is itself a finding, and one that should improve over time.
+    assessments_not_scored: int = Field(default=0, ge=0)
+    #: cohort key -> "hit/resolved". A cohort that had to drop the volatility regime is a
+    #: weaker claim than an exact one, and a single blended rate would hide which is which.
+    assessment_hit_by_cohort: dict[str, str] = Field(default_factory=dict)
+
+    #: trade_id -> what the human wrote about it, oldest first (9D). Copied into the review
+    #: rather than linked, so the document a person reads next year still says what they
+    #: said at the time.
+    trade_notes: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    #: `#tag` -> the trades carrying it, for grouping a week by the trader's own vocabulary
+    #: rather than by anything Aureon invented.
+    trades_by_tag: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+
+    @property
+    def assessment_hit_rate(self) -> float | None:
+        """``None`` on nothing resolved, never 0.0.
+
+        A rate of zero says the target never came first. Nothing resolved says nothing at
+        all, and rendering them alike is how an absence becomes a verdict.
+        """
+        resolved = self.assessments_hit + self.assessments_miss + self.assessments_neither
+        if resolved == 0:
+            return None
+        return self.assessments_hit / resolved
+
     @model_validator(mode="after")
     def _period_ordered(self) -> ReviewBase:
         if self.period_end <= self.period_start:

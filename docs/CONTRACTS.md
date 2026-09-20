@@ -302,6 +302,15 @@ One broker trading day (§61).
 | `explicit_links` | `int` | no | `0` |  |
 | `inferred_links` | `tuple[InferredLink]` | no | `()` |  |
 | `notes` | `str \| null` | no | `None` |  |
+| `assessments_total` | `int` | no | `0` |  |
+| `assessments_hit` | `int` | no | `0` |  |
+| `assessments_miss` | `int` | no | `0` |  |
+| `assessments_neither` | `int` | no | `0` |  |
+| `assessments_unresolved` | `int` | no | `0` |  |
+| `assessments_not_scored` | `int` | no | `0` |  |
+| `assessment_hit_by_cohort` | `dict[str, str]` | no | `dict()` |  |
+| `trade_notes` | `dict[str, tuple[str]]` | no | `dict()` |  |
+| `trades_by_tag` | `dict[str, tuple[str]]` | no | `dict()` |  |
 | `market_date` | `str` | yes | — | Broker-local date, YYYY-MM-DD. |
 | `sessions_covered` | `tuple[SessionName]` | no | `()` |  |
 
@@ -331,6 +340,15 @@ One trading week, generated after Friday's close (§63).
 | `explicit_links` | `int` | no | `0` |  |
 | `inferred_links` | `tuple[InferredLink]` | no | `()` |  |
 | `notes` | `str \| null` | no | `None` |  |
+| `assessments_total` | `int` | no | `0` |  |
+| `assessments_hit` | `int` | no | `0` |  |
+| `assessments_miss` | `int` | no | `0` |  |
+| `assessments_neither` | `int` | no | `0` |  |
+| `assessments_unresolved` | `int` | no | `0` |  |
+| `assessments_not_scored` | `int` | no | `0` |  |
+| `assessment_hit_by_cohort` | `dict[str, str]` | no | `dict()` |  |
+| `trade_notes` | `dict[str, tuple[str]]` | no | `dict()` |  |
+| `trades_by_tag` | `dict[str, tuple[str]]` | no | `dict()` |  |
 | `iso_year` | `int` | yes | — |  |
 | `iso_week` | `int` | yes | — |  |
 | `daily_review_ids` | `tuple[str]` | no | `()` |  |
@@ -386,7 +404,7 @@ One measured readout for one detection (§62-§64, 9D).
 | `trend_read` | `TrendRead` | yes | — |  |
 | `cohort_filter` | `CohortFilter` | yes | — |  |
 | `n` | `int` | no | `0` |  |
-| `horizons` | `tuple[HorizonConfirmation]` | no | `()` |  |
+| `confirmations` | `tuple[HorizonConfirmation]` | no | `()` |  |
 | `tp_estimates` | `tuple[Estimate]` | no | `()` |  |
 | `sl_estimates` | `tuple[Estimate]` | no | `()` |  |
 | `paired` | `PairedOutcome \| null` | no | `None` |  |

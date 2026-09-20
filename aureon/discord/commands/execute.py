@@ -54,6 +54,7 @@ from aureon.discord.context import BotContext
 from aureon.discord.embeds import confirmation_embed, notice_embed
 from aureon.discord.service import (
     MARKET_SIDES,
+    attach_assessment,
     build_confirmation,
     market_state_of,
     plan_market_order,
@@ -133,6 +134,7 @@ class ExecuteCommands:
             # A substitution or an unknown mode is stated on the screen, never implied by
             # its absence (§39).
             screen.warnings.append(plan.filling_note)
+        await attach_assessment(context, screen, symbol)
         await interaction.followup.send(
             embed=confirmation_embed(screen),
             view=ConfirmTradeView(context, request, plan.draft),

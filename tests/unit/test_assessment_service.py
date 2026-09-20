@@ -389,7 +389,7 @@ def test_too_little_history_publishes_no_percentage_at_all() -> None:
 
     assert readout.insufficient is True
     assert readout.n == MIN_COHORT - 1
-    assert readout.horizons == ()
+    assert readout.confirmations == ()
     assert readout.tp_estimates == () and readout.sl_estimates == ()
     assert readout.paired is None
 
@@ -406,7 +406,7 @@ def test_exactly_the_floor_is_enough() -> None:
     )
     assert readout.insufficient is False
     assert readout.n == MIN_COHORT
-    assert readout.horizons
+    assert readout.confirmations
 
 
 # ── Confirmation ──────────────────────────────────────────────────────────────

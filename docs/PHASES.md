@@ -8,7 +8,7 @@ passes.** Partial passes do not count.
 
 | Phase | Scope | Gate ("Done when") | Status | Evidence |
 | --- | --- | --- | --- | --- |
-| 0 | Repo scaffolding, standing rules, boundary guards | `pytest tests/boundary` green | ✅ done | ✅ 14 boundary guards |
+| 0 | Repo scaffolding, standing rules, boundary guards | `pytest tests/boundary` green | ✅ done | ✅ 16 boundary guards |
 | 1 | `aureon/models`, `aureon/config`, `aureon/storage/paths.py`, `docs/CONTRACTS.md`, `docs/PHASE1_DECISIONS.md` | Contracts generated, `--check` clean, suite green | ✅ done | ✅ [CONTRACTS.md](CONTRACTS.md) |
 | 2 | Observer: market data, indicators, agents, engine, durable outbox | Parity + outbox + recovery tests pass; `docs/PHASE2_BASELINE.md` recorded | ✅ Parts A + B done (one MT5-only criterion outstanding) | ✅ [PHASE2_BASELINE.md](PHASE2_BASELINE.md)<br>⬜ missing: verified real session (`scripts/session_run.py, then scripts/session_verify.py`) |
 | 3 | Detection evaluation (`EMA_OUTCOME_V1`, no hindsight) | Backfill over the Phase 2 week completes; reached-3/5/10 counted from COMPLETE horizons only, PENDING reported separately | ✅ done (see the threshold-scale finding) | ✅ [XAU_OUTCOME_V2 outcomes](PHASE2_BASELINE.md) |

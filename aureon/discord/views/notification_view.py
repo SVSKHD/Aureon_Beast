@@ -31,7 +31,13 @@ import discord
 
 from aureon.discord.context import BotContext
 from aureon.discord.embeds import confirmation_embed, notice_embed
-from aureon.discord.service import build_confirmation, market_state_of, plan_market_order, quote_of
+from aureon.discord.service import (
+    attach_assessment,
+    build_confirmation,
+    market_state_of,
+    plan_market_order,
+    quote_of,
+)
 from aureon.discord.views.confirm_view import ConfirmTradeView
 
 log = logging.getLogger(__name__)
@@ -117,6 +123,7 @@ class LotModal(discord.ui.Modal):
         )
         if plan.filling_note:
             screen.warnings.append(plan.filling_note)
+        await attach_assessment(context, screen, self.symbol)
         await interaction.followup.send(
             embed=confirmation_embed(screen),
             view=ConfirmTradeView(context, request, plan.draft),
