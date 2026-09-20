@@ -343,6 +343,19 @@ class ReferencePrice(StrEnum):
     NEXT_OPEN = "next_open"
 
 
+class TrendBias(StrEnum):
+    """What the last N closed candles did, summarised (9D).
+
+    ``SIDEWAYS`` is a real answer, not a fallback for "unsure": a window whose evidence
+    points both ways is a market that is not trending, and a readout that rounded it to the
+    nearer of bullish/bearish would be inventing a direction out of a tie.
+    """
+
+    BULLISH = "bullish"
+    BEARISH = "bearish"
+    SIDEWAYS = "sideways"
+
+
 class PathClassification(StrEnum):
     """Whether adversity or the target came first (§23).
 

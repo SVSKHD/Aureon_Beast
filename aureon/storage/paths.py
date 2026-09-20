@@ -79,6 +79,8 @@ WEEKLY_REVIEWS = collection("weekly_reviews")
 # 9C: what Discord has already said, and what a human asked to be told.
 NOTIFICATIONS = collection("notifications")
 ALERTS = collection("alerts")
+ASSESSMENTS = collection("assessments")
+TRADE_NOTES = collection("trade_notes")
 
 ALL_COLLECTIONS: tuple[str, ...] = (
     DETECTIONS,
@@ -229,6 +231,21 @@ def notification_path(kind: str, ref_id: str) -> str:
 
 def alert_path(alert_id: str) -> str:
     return f"{ALERTS}/{_require(alert_id, 'alert_id')}"
+
+
+def assessment_path(assessment_id: str) -> str:
+    """``assessments/{assessment_id}`` (9D)."""
+    return f"{ASSESSMENTS}/{_require(assessment_id, 'assessment_id')}"
+
+
+def trade_note_path(note_id: str) -> str:
+    """``trade_notes/{note_id}`` (9D).
+
+    Its own collection rather than a subcollection of the trade, so a note cannot be
+    mistaken for a field write on a CLOSED trade (§45) by any code path that iterates a
+    document's children.
+    """
+    return f"{TRADE_NOTES}/{_require(note_id, 'note_id')}"
 
 
 def daily_review_doc_id(market_date: str, symbol: str | None = None) -> str:

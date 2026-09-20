@@ -29,6 +29,10 @@ test run and production and could never be checked in.
 | `aureon_beast_settings` | `execution` | `ExecutionSettings` |
 | `aureon_beast_daily_reviews` | `{market_date}` | `DailyReview` |
 | `aureon_beast_weekly_reviews` | `{iso_year}-W{iso_week}` | `WeeklyReview` |
+| `aureon_beast_alerts` | `alert_id` | `PriceAlert` |
+| `aureon_beast_notifications` | `{kind}__{ref_id}` | `Notification` |
+| `aureon_beast_assessments` | `assessment_id` | `Assessment` |
+| `aureon_beast_trade_notes` | `note_id` | `TradeNote` |
 
 Tick data is never stored in Firestore. There is no `pending_orders`
 collection (decision 9): a pending order *is* the `PENDING` trade request.
@@ -367,6 +371,41 @@ One thing Discord said, so it cannot say it twice (9C).
 | `sent_at` | `AwareDatetime \| null` | no | `None` |  |
 | `status` | `NotificationStatus` | no | `'sent'` |  |
 | `failure_message` | `str \| null` | no | `None` |  |
+
+### Assessment
+
+One measured readout for one detection (§62-§64, 9D).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
+| `assessment_id` | `str` | yes | — |  |
+| `detection_id` | `str` | yes | — |  |
+| `symbol` | `str` | yes | — |  |
+| `rule_id` | `str` | yes | — |  |
+| `trend_read` | `TrendRead` | yes | — |  |
+| `cohort_filter` | `CohortFilter` | yes | — |  |
+| `n` | `int` | no | `0` |  |
+| `horizons` | `tuple[HorizonConfirmation]` | no | `()` |  |
+| `tp_estimates` | `tuple[Estimate]` | no | `()` |  |
+| `sl_estimates` | `tuple[Estimate]` | no | `()` |  |
+| `paired` | `PairedOutcome \| null` | no | `None` |  |
+| `insufficient` | `bool` | no | `False` |  |
+| `disagrees_with_detection` | `bool` | no | `False` |  |
+| `created_at` | `AwareDatetime \| null` | no | `None` |  |
+
+### TradeNote
+
+A human sentence about one trade, kept out of the trade (§45, 9D).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
+| `note_id` | `str` | yes | — |  |
+| `trade_id` | `str` | yes | — |  |
+| `author` | `str` | yes | — |  |
+| `text` | `str` | yes | — |  |
+| `at` | `AwareDatetime \| null` | no | `None` |  |
 
 ---
 
@@ -831,6 +870,81 @@ How big this candle, and this session, are by recent standards (9B).
 | `regime` | `str \| null` | no | `None` | One of ('low', 'normal', 'high'). |
 | `bands_version` | `int \| null` | no | `None` | Which regime bands produced `regime` (9B). |
 
+### TrendRead
+
+What the last N closed candles did, as facts rather than as a verdict (9D).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `bias` | `TrendBias` | yes | — |  |
+| `evidence` | `tuple[str]` | no | `()` |  |
+| `candles` | `int` | no | `0` | How many closed candles were read. |
+| `as_of` | `AwareDatetime \| null` | no | `None` |  |
+
+### CohortFilter
+
+Which prior detections this assessment counted, and what it had to give up.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `symbol` | `str` | yes | — |  |
+| `agent_name` | `str` | yes | — |  |
+| `direction` | `Direction` | yes | — |  |
+| `session` | `SessionName \| null` | no | `None` |  |
+| `trend_aligned` | `bool \| null` | no | `None` |  |
+| `volatility_regime` | `str \| null` | no | `None` |  |
+| `price_vs_va` | `str \| null` | no | `None` |  |
+| `wick_tag` | `str \| null` | no | `None` |  |
+| `dropped` | `tuple[str]` | no | `()` |  |
+
+### ThresholdConfirmation
+
+How often the cohort reached one threshold, with n and its interval.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `threshold` | `float` | yes | — |  |
+| `reached` | `int` | no | `0` |  |
+| `evaluated` | `int` | no | `0` |  |
+| `ci_low` | `float \| null` | no | `None` |  |
+| `ci_high` | `float \| null` | no | `None` |  |
+| `median_seconds_to_first` | `float \| null` | no | `None` |  |
+
+### HorizonConfirmation
+
+One horizon's confirmation table for the cohort.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `horizon_id` | `str` | yes | — |  |
+| `evaluated` | `int` | no | `0` |  |
+| `thresholds` | `tuple[ThresholdConfirmation]` | no | `()` |  |
+| `mae_first` | `int` | no | `0` |  |
+| `path_ambiguous` | `int` | no | `0` |  |
+
+### Estimate
+
+One quantile of the cohort's measured excursion, in points and in price.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `quantile` | `float` | yes | — |  |
+| `points` | `float` | yes | — |  |
+| `price` | `float \| null` | no | `None` | The points applied to this detection's reference price. |
+
+### PairedOutcome
+
+How often the cohort reached +T before -S, for the symbol's configured pair.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `favourable` | `float` | yes | — |  |
+| `adverse` | `float` | yes | — |  |
+| `favourable_first` | `int` | no | `0` |  |
+| `evaluated` | `int` | no | `0` |  |
+| `ci_low` | `float \| null` | no | `None` |  |
+| `ci_high` | `float \| null` | no | `None` |  |
+
 ---
 
 ## Enums
@@ -1061,6 +1175,16 @@ Whether adversity or the target came first (§23).
 | `MFE_FIRST` | `mfe_first` |
 | `MAE_FIRST` | `mae_first` |
 | `NONE` | `none` |
+
+### TrendBias
+
+What the last N closed candles did, summarised (9D).
+
+| member | value |
+|---|---|
+| `BULLISH` | `bullish` |
+| `BEARISH` | `bearish` |
+| `SIDEWAYS` | `sideways` |
 
 ### ExcursionSource
 

@@ -172,6 +172,22 @@ def new_alert_id() -> str:
     return f"al-{uuid.uuid4().hex[:10]}"
 
 
+def new_assessment_id() -> str:
+    """A fresh ``/monitor`` assessment id (9D).
+
+    Random rather than derived from the detection: the SAME detection can be assessed twice
+    -- an hour apart, with an hour more history in the cohort -- and those are two different
+    statements about two different evidence bases. A deterministic id would overwrite the
+    first with the second, which is exactly the record the weekly review needs to score.
+    """
+    return f"as-{uuid.uuid4().hex[:12]}"
+
+
+def new_note_id() -> str:
+    """A fresh trade-note id (9D). Random, because two notes on one trade are two notes."""
+    return f"nt-{uuid.uuid4().hex[:12]}"
+
+
 def evaluation_doc_id(detection_id_value: str, rule_id: str) -> str:
     """Doc id for ``detection_evaluations`` (Phase 3).
 

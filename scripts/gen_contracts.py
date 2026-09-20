@@ -60,6 +60,7 @@ ENUMS: tuple[type[StrEnum], ...] = (
     m.ReferencePrice,
     m.ThresholdUnit,
     m.PathClassification,
+    m.TrendBias,
     m.ExcursionSource,
     m.ExecutionClassification,
     m.DealEntry,
@@ -97,6 +98,12 @@ VALUE_MODELS: tuple[type[BaseModel], ...] = (
     m.VolumeProfile,
     m.VolumeProfileRef,
     m.VolatilityContext,
+    m.TrendRead,
+    m.CohortFilter,
+    m.ThresholdConfirmation,
+    m.HorizonConfirmation,
+    m.Estimate,
+    m.PairedOutcome,
 )
 
 
@@ -218,6 +225,10 @@ def build() -> str:
         f"| `{paths.SETTINGS}` | `{paths.EXECUTION_SETTINGS_DOC}` | `ExecutionSettings` |",
         f"| `{paths.DAILY_REVIEWS}` | `{{market_date}}` | `DailyReview` |",
         f"| `{paths.WEEKLY_REVIEWS}` | `{{iso_year}}-W{{iso_week}}` | `WeeklyReview` |",
+        f"| `{paths.ALERTS}` | `alert_id` | `PriceAlert` |",
+        f"| `{paths.NOTIFICATIONS}` | `{{kind}}__{{ref_id}}` | `Notification` |",
+        f"| `{paths.ASSESSMENTS}` | `assessment_id` | `Assessment` |",
+        f"| `{paths.TRADE_NOTES}` | `note_id` | `TradeNote` |",
         "",
         "Tick data is never stored in Firestore. There is no `pending_orders`",
         "collection (decision 9): a pending order *is* the `PENDING` trade request.",

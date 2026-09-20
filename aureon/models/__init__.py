@@ -13,6 +13,18 @@ from aureon.models.alerts import (
     Notification,
     PriceAlert,
 )
+from aureon.models.assessment import (
+    MIN_COHORT,
+    WIDENING_ORDER,
+    Assessment,
+    CohortFilter,
+    Estimate,
+    HorizonConfirmation,
+    PairedOutcome,
+    ThresholdConfirmation,
+    TradeNote,
+    TrendRead,
+)
 from aureon.models.audit import AuditRecord
 from aureon.models.base import (
     SCHEMA_VERSION,
@@ -70,6 +82,7 @@ from aureon.models.enums import (
     TradeSource,
     TradeStatus,
     TransitionError,
+    TrendBias,
     assert_control_request_transition,
     assert_horizon_transition,
     assert_price_alert_transition,
@@ -163,6 +176,8 @@ DOCUMENT_MODELS: tuple[type[AureonDocument], ...] = (
     WeeklyReview,
     PriceAlert,
     Notification,
+    Assessment,
+    TradeNote,
 )
 
 __all__ = [
@@ -178,6 +193,16 @@ __all__ = [
     "MAX_ARMED_ALERTS_PER_USER",
     "Notification",
     "PriceAlert",
+    "MIN_COHORT",
+    "WIDENING_ORDER",
+    "Assessment",
+    "CohortFilter",
+    "Estimate",
+    "HorizonConfirmation",
+    "PairedOutcome",
+    "ThresholdConfirmation",
+    "TradeNote",
+    "TrendRead",
     "AuditRecord",
     "AccountInfo",
     "BrokerDeal",
@@ -210,6 +235,7 @@ __all__ = [
     "NotificationStatus",
     "OrderType",
     "PriceAlertStatus",
+    "TrendBias",
     "PRICE_ALERT_TRANSITIONS",
     "TERMINAL_ALERT_STATUSES",
     "assert_price_alert_transition",
