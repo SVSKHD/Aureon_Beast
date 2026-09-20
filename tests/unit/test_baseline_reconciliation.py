@@ -25,7 +25,7 @@ import pytest
 
 from aureon.data.historical_provider import HistoricalDataProvider
 from aureon.evaluation.backfill import run_backfill
-from aureon.evaluation.rules import EMA_OUTCOME_V1
+from aureon.evaluation.rules import XAU_OUTCOME_V2
 from aureon.reviews.reconcile import reconcile, week_reviews, weeks_spanned
 from tests.conftest import cross_agent
 
@@ -101,7 +101,7 @@ def replay():
     return run_backfill(
         provider.candles,
         [cross_agent()],
-        EMA_OUTCOME_V1,
+        XAU_OUTCOME_V2,
         account_scope="primary",
         market_tz=MARKET_TZ,
         point=0.01,
@@ -119,21 +119,29 @@ def baseline_by_day() -> dict[str, int]:
     return days
 
 
+#: The committed table this reconciles against: `ema_cross` under the rule the running
+#: system evaluates with. Its `**all**` rows are the whole fixture week, which is what a
+#: weekly review covers. The V1 table above it is explicitly historical and saturated at
+#: 100%, so reconciling against it would agree trivially and prove nothing.
+V2_SECTION = "### `ema_cross` — XAU_OUTCOME_V2"
+ALL_SESSIONS_CELL = "**all**"
+
+
 @pytest.fixture(scope="module")
 def baseline_outcomes() -> dict[str, dict[str, int]]:
     """``{horizon_id: {complete, pending, invalid, reached}}`` from the committed doc."""
     out: dict[str, dict[str, int]] = {}
-    for cells in _table("## Detection outcomes (Phase 3)"):
-        if cells[0] == "horizon" or len(cells) < 7:
+    for cells in _table(V2_SECTION):
+        # | session | horizon | complete | pending | invalid | reach $3 | ...
+        if cells[0] != ALL_SESSIONS_CELL or len(cells) < 6:
             continue
-        reached = cells[4].split("/")[0]
-        out[cells[0]] = {
-            "complete": int(cells[1]),
-            "pending": int(cells[2]),
-            "invalid": int(cells[3]),
-            "reached": int(reached),
+        out[cells[1]] = {
+            "complete": int(cells[2]),
+            "pending": int(cells[3]),
+            "invalid": int(cells[4]),
+            "reached": int(cells[5].split("/")[0]),
         }
-    assert out, "the baseline records no horizon outcomes"
+    assert out, f"the baseline records no horizon outcomes under {V2_SECTION}"
     return out
 
 
@@ -141,14 +149,14 @@ def _reconcile(replay, baseline_by_day, baseline_outcomes):
     return reconcile(
         replay.detections,
         {e.detection_id: e for e in replay.evaluations},
-        EMA_OUTCOME_V1,
+        XAU_OUTCOME_V2,
         market_tz=MARKET_TZ,
         by_market_date=baseline_by_day,
         complete_by_horizon={h: v["complete"] for h, v in baseline_outcomes.items()},
         reached_by_horizon={h: v["reached"] for h, v in baseline_outcomes.items()},
         pending_total=sum(v["pending"] for v in baseline_outcomes.values()),
         invalid_total=sum(v["invalid"] for v in baseline_outcomes.values()),
-        threshold_key=EMA_OUTCOME_V1.threshold_keys[0],
+        threshold_key=XAU_OUTCOME_V2.threshold_keys[0],
     )
 
 
@@ -188,7 +196,7 @@ def test_weeks_tile_without_gaps_or_overlaps(replay) -> None:
     reviews = week_reviews(
         replay.detections,
         {e.detection_id: e for e in replay.evaluations},
-        EMA_OUTCOME_V1,
+        XAU_OUTCOME_V2,
         market_tz=MARKET_TZ,
     )
     assert reviews
@@ -239,9 +247,9 @@ def test_the_weeks_come_from_the_market_clock_not_utc() -> None:
         "on a UTC clock it would fall in week 38 -- the bug this guards"
     )
     # And the reviews built from it agree with the period, not with UTC.
-    market = week_reviews([detection], {}, EMA_OUTCOME_V1, market_tz=MARKET_TZ)
+    market = week_reviews([detection], {}, XAU_OUTCOME_V2, market_tz=MARKET_TZ)
     assert [(r.iso_year, r.iso_week) for _p, r in market] == [(2026, 39)]
-    utc = week_reviews([detection], {}, EMA_OUTCOME_V1, market_tz="UTC")
+    utc = week_reviews([detection], {}, XAU_OUTCOME_V2, market_tz="UTC")
     assert [(r.iso_year, r.iso_week) for _p, r in utc] == [(2026, 38)]
 
 
@@ -253,10 +261,10 @@ def test_the_replay_weeks_are_the_ones_the_baseline_reports(replay) -> None:
 def test_a_review_of_the_replay_is_byte_identical_on_re_run(replay) -> None:
     evaluations = {e.detection_id: e for e in replay.evaluations}
     first = week_reviews(
-        replay.detections, evaluations, EMA_OUTCOME_V1, market_tz=MARKET_TZ
+        replay.detections, evaluations, XAU_OUTCOME_V2, market_tz=MARKET_TZ
     )
     second = week_reviews(
-        replay.detections, evaluations, EMA_OUTCOME_V1, market_tz=MARKET_TZ
+        replay.detections, evaluations, XAU_OUTCOME_V2, market_tz=MARKET_TZ
     )
     assert [r.model_dump_json() for _p, r in first] == [
         r.model_dump_json() for _p, r in second
