@@ -19,6 +19,19 @@ would make the correlation look real while being unfalsifiable.
 So ``derive`` takes only detections whose ``detected_at`` is at or before the subject's,
 and a test feeds it a wick on the following candle to prove it is ignored.
 
+## 9B's tags come from the detection itself
+
+The volume and volatility tags read fields the detection **already carries** -- its Asia
+profile reference and its volatility context, both stamped at its own candle close (9B). That
+makes the no-hindsight rule structural rather than enforced: there is no later data to reach
+for, because the only data is the one the immutable document holds.
+
+``volatility_regime`` is three tags rather than one. The tag map is ``dict[str, bool]`` by
+contract, and a string-valued entry would change the type for every consumer of every stored
+evaluation; three mutually exclusive booleans group identically and keep the contract. Exactly
+one is true when a regime is known, and all three are false when it is not -- which is itself
+a group worth being able to see.
+
 ## These are correlations, not causes
 
 Nothing here claims a wick makes a cross work. The tags partition a population so a
@@ -45,12 +58,43 @@ TAG_UPPER_REJECTION_WICK = "has_upper_rejection_wick"
 TAG_SWEEP_SAME_DIRECTION = "sweep_same_direction_within_N_candles"
 TAG_SESSION_TREND_ALIGNED = "session_trend_aligned"
 
+# ── 9B: where the detection stood in the volume profile, and how loud it was ──
+TAG_PRICE_ABOVE_ASIA_VA = "price_above_asia_va"
+TAG_PRICE_BELOW_ASIA_VA = "price_below_asia_va"
+TAG_AT_LVN = "cross_at_lvn"
+TAG_AT_POC = "cross_at_poc"
+#: One per regime. See the module docstring for why this is three tags, not one.
+TAG_REGIME_LOW = "volatility_regime_low"
+TAG_REGIME_NORMAL = "volatility_regime_normal"
+TAG_REGIME_HIGH = "volatility_regime_high"
+
+#: How close to a node counts as "at" it, as a fraction of the profile's bin width. Half a
+#: bin either side, so "at the POC" means the price is inside the POC's own bin -- a
+#: placeholder like every other threshold, but one whose meaning is fixed by the bin rather
+#: than chosen freely.
+NODE_PROXIMITY_BINS = 0.5
+
 CONTEXT_TAGS: tuple[str, ...] = (
     TAG_LOWER_REJECTION_WICK,
     TAG_UPPER_REJECTION_WICK,
     TAG_SWEEP_SAME_DIRECTION,
     TAG_SESSION_TREND_ALIGNED,
+    TAG_PRICE_ABOVE_ASIA_VA,
+    TAG_PRICE_BELOW_ASIA_VA,
+    TAG_AT_LVN,
+    TAG_AT_POC,
+    TAG_REGIME_LOW,
+    TAG_REGIME_NORMAL,
+    TAG_REGIME_HIGH,
 )
+
+#: regime label -> tag, so a new regime name breaks here rather than silently tagging
+#: nothing.
+REGIME_TAGS: dict[str, str] = {
+    "low": TAG_REGIME_LOW,
+    "normal": TAG_REGIME_NORMAL,
+    "high": TAG_REGIME_HIGH,
+}
 
 # Event keys the tags read. Named rather than inlined so a change to an agent's event
 # vocabulary breaks here, at the mapping, instead of silently producing all-False tags.
@@ -119,7 +163,57 @@ def derive(
         TAG_UPPER_REJECTION_WICK: _has_wick(window, _WICK_UPPER),
         TAG_SWEEP_SAME_DIRECTION: _has_aligned_sweep(window),
         TAG_SESSION_TREND_ALIGNED: _session_trend_aligned(window),
+        **_profile_tags(subject),
+        **_volatility_tags(subject),
     }
+
+
+def _profile_tags(subject: Detection) -> dict[str, bool]:
+    """Where this detection stood in Asia's profile, from its own stored reference (9B).
+
+    All false when the detection carries no reference -- which is a real group: the first
+    candles of a broker day, before Asia has traded. Reporting them as "inside the value
+    area" would put the unmeasured with the measured.
+    """
+    ref = subject.volume_profile_ref
+    if ref is None:
+        return {
+            TAG_PRICE_ABOVE_ASIA_VA: False,
+            TAG_PRICE_BELOW_ASIA_VA: False,
+            TAG_AT_LVN: False,
+            TAG_AT_POC: False,
+        }
+    return {
+        TAG_PRICE_ABOVE_ASIA_VA: ref.price_vs_va == "above",
+        TAG_PRICE_BELOW_ASIA_VA: ref.price_vs_va == "below",
+        TAG_AT_LVN: _near(subject, ref.nearest_lvn),
+        TAG_AT_POC: _near(subject, ref.poc_price),
+    }
+
+
+def _near(subject: Detection, node: float | None) -> bool:
+    """Whether the detection's price is inside that node's own bin (9B).
+
+    The tolerance is the bin width rather than a price, so "at the POC" means the same
+    thing on gold and on silver -- a fixed $0.05 would be half a gold bin and fifty silver
+    ones.
+    """
+    if node is None:
+        return False
+    from aureon.config.symbol_tuning import tuning_for
+
+    try:
+        tuning = tuning_for(subject.symbol)
+    except KeyError:  # pragma: no cover - a stored detection always has a tuned symbol
+        return False
+    width = tuning.volume_bin_points * tuning.point
+    return abs(subject.price - node) <= width * NODE_PROXIMITY_BINS
+
+
+def _volatility_tags(subject: Detection) -> dict[str, bool]:
+    """Exactly one regime tag when the regime is known, none when it is not (9B)."""
+    regime = None if subject.volatility is None else subject.volatility.regime
+    return {tag: (label == regime) for label, tag in REGIME_TAGS.items()}
 
 
 def _has_wick(window: ContextWindow, event_key: str) -> bool:
