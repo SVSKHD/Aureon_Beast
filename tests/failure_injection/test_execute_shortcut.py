@@ -24,9 +24,7 @@ Aureon's.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any
 
 import pytest
 
@@ -44,7 +42,7 @@ from aureon.models.system import SymbolState, SystemState
 from aureon.storage.settings_repository import ExecutionSettingsRepository
 from aureon.storage.symbol_repository import SymbolRepository
 from aureon.storage.system_state_repository import SystemStateRepository
-from tests.failure_injection.conftest import USER
+from tests.failure_injection.conftest import USER, FakeInteraction, embed_text
 
 pytestmark = pytest.mark.emulator
 
@@ -53,67 +51,6 @@ SILVER = "XAGUSD"
 SILVER_INFO = DEFAULT_SYMBOL_INFO.model_copy(
     update={"symbol": SILVER, "point": 0.001, "digits": 3}
 )
-
-
-# ── A Discord interaction, reduced to what the command actually uses ───────────
-
-
-@dataclass
-class FakeResponse:
-    deferred: bool = False
-    messages: list[dict[str, Any]] = field(default_factory=list)
-    edits: list[dict[str, Any]] = field(default_factory=list)
-
-    async def defer(self, **kwargs: Any) -> None:
-        self.deferred = True
-
-    def is_done(self) -> bool:
-        return self.deferred
-
-    async def send_message(self, **kwargs: Any) -> None:
-        self.messages.append(kwargs)
-
-    async def edit_message(self, **kwargs: Any) -> None:
-        self.edits.append(kwargs)
-
-
-@dataclass
-class FakeFollowup:
-    sends: list[dict[str, Any]] = field(default_factory=list)
-
-    async def send(self, **kwargs: Any) -> None:
-        self.sends.append(kwargs)
-
-
-@dataclass
-class FakeUser:
-    id: str
-
-
-class FakeInteraction:
-    def __init__(self, user_id: str = USER) -> None:
-        self.user = FakeUser(user_id)
-        self.response = FakeResponse()
-        self.followup = FakeFollowup()
-
-    # What the assertions read: the embeds this interaction was shown.
-    @property
-    def embeds(self) -> list[Any]:
-        return [
-            call["embed"]
-            for call in [*self.followup.sends, *self.response.messages, *self.response.edits]
-            if "embed" in call
-        ]
-
-    @property
-    def views(self) -> list[Any]:
-        return [call["view"] for call in self.followup.sends if call.get("view")]
-
-
-def embed_text(embed: Any) -> str:
-    parts = [str(embed.title or ""), str(embed.description or "")]
-    parts += [f"{f.name} {f.value}" for f in embed.fields]
-    return "\n".join(parts)
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────

@@ -226,6 +226,44 @@ re-running one overwrites the same document.
 | `/trading enable` | requires a confirmation, and lists what to check first |
 | `/trading disable` | immediate, audited, effective on the next request |
 
+## The channel announces; it never decides
+
+Set `AUREON_ALERT_CHANNEL_ID` and the bot posts each enabled detection there, once, with
+`[Monitor]` and `[Execute]` under it. Leave it unset and it announces **nothing** and says
+so in the log on startup — the alternative is a bot that picks a channel it can see and
+posts market calls into it.
+
+- **What is announced** is decided by `settings/notifications`: `detections_enabled`, and
+  `enabled_kinds` (the agent names). Read fresh on every sweep, so silencing a noisy agent
+  takes effect on the next detection rather than the next deploy. The defaults are the four
+  an eye watching a chart would notice — `ema_cross`, `liquidity`, `breakout` and
+  `wick` — and turning detections off keeps the list, so turning them back on restores what
+  you had.
+- **A fired `/remind` alert goes to you directly**, not to the channel: an alert is one
+  person's question, and the channel is readable by more people than armed it.
+- **Once each.** The record is a document (`{prefix}_notifications`), written with a
+  `create` that Firestore refuses over an existing one — so a restart, a second bot, or two
+  overlapping sweeps produce one message. A post that **fails** is recorded as FAILED for
+  the operator and not retried: a retry over a channel that is rejecting messages either
+  double-posts or hides the outage.
+- **A bot that was down does not catch up.** Each sweep reads only the last
+  `AUREON_NOTIFY_WINDOW_SECONDS` (default 120), so an hour of downtime produces a gap
+  rather than an hour of stale detections arriving at once. The gap is visible; the stale
+  flood reads as live.
+- **`[Execute]` is a shortcut through the typing, not through the authorisation.** It opens
+  a modal asking for the lot — no default, no "same as last time" — and the typed lot then
+  goes through the same confirmation, the same quote check and the same CONFIRM as
+  `/execute`. The symbol and side are prefilled because they are what the embed is about;
+  a detection with no direction has the button removed rather than defaulting to buy.
+- **Every embed is the same neutral colour** and carries `research only · not a
+  recommendation`. A green buy and a red sell would read as approval, and the eye reaches
+  the colour before the words.
+
+If the channel goes quiet, check in this order: is `AUREON_ALERT_CHANNEL_ID` set (the log
+line on startup says); is the observer writing detections at all (`/status`); is the agent
+in `enabled_kinds`; and is there a FAILED row in `{prefix}_notifications` naming a
+permissions error.
+
 ## What the tools refuse to do
 
 Knowing this in advance is cheaper than fighting it at 02:00.

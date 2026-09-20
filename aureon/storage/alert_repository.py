@@ -83,6 +83,26 @@ class PriceAlertRepository:
             found = [a for a in found if a.requested_by == str(user_id)]
         return sorted(found, key=lambda a: (a.symbol, a.level, a.alert_id))
 
+    def fired_since(self, moment: datetime) -> list[PriceAlert]:
+        """Alerts that fired at or after ``moment`` (9C).
+
+        Queried by status and filtered on ``fired_at`` in Python, like every other read
+        here: a composite index for a collection holding tens of documents would have to be
+        declared, deployed and kept in step for no gain.
+        """
+        cutoff = to_utc(moment)
+        query = _where(
+            self._client.collection(paths.ALERTS),
+            "status",
+            "==",
+            PriceAlertStatus.FIRED.value,
+        )
+        found = [PriceAlert.model_validate(doc.to_dict()) for doc in query.stream()]
+        return sorted(
+            (a for a in found if a.fired_at is not None and to_utc(a.fired_at) >= cutoff),
+            key=lambda a: to_utc(a.fired_at),
+        )
+
     def for_user(self, user_id: str) -> list[PriceAlert]:
         """Every alert of one user, armed or not -- what ``/remind list`` shows."""
         query = _where(

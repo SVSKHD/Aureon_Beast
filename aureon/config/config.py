@@ -151,6 +151,14 @@ class AureonConfig(AureonModel):
     discord_guild_id: int | None = None
     authorized_user_ids: tuple[str, ...] = ()
     link_window_minutes: int = 90
+    #: Where detection embeds are posted (9C). Absent means Aureon announces nothing —
+    #: which is the right default: a deployment that has not chosen a channel must not
+    #: start posting into whichever one it can see.
+    alert_channel_id: int | None = None
+    #: How far back the notifier looks for detections it has not announced. Two minutes:
+    #: long enough to survive a restart or a slow Firestore write, short enough that a bot
+    #: which was down for an hour does not wake up and post an hour of history at once.
+    notify_window_seconds: float = 120.0
 
     # ── Reviews ───────────────────────────────────────────────────────────────
     infer_window_minutes: int = 30
@@ -213,6 +221,7 @@ class AureonConfig(AureonModel):
             Timeframe(tf) for tf in _env_csv("AUREON_TIMEFRAMES", ("M5",))
         )
         guild = _env_opt("AUREON_DISCORD_GUILD_ID")
+        channel = _env_opt("AUREON_ALERT_CHANNEL_ID")
         login = _env_opt("AUREON_MT5_LOGIN")
         return cls(
             account_scope=_env_str("AUREON_ACCOUNT_SCOPE", "primary"),
@@ -252,6 +261,8 @@ class AureonConfig(AureonModel):
             discord_guild_id=int(guild) if guild else None,
             authorized_user_ids=_env_csv("AUREON_AUTHORIZED_USER_IDS"),
             link_window_minutes=_env_int("AUREON_LINK_WINDOW_MINUTES", 90),
+            alert_channel_id=int(channel) if channel else None,
+            notify_window_seconds=_env_float("AUREON_NOTIFY_WINDOW_SECONDS", 120.0),
             infer_window_minutes=_env_int("AUREON_INFER_WINDOW_MINUTES", 30),
             mt5_login=int(login) if login else None,
             mt5_password=_env_opt("AUREON_MT5_PASSWORD"),

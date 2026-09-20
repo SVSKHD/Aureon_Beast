@@ -25,7 +25,10 @@ from aureon.storage.control_request_repository import ControlRequestRepository
 from aureon.storage.detection_repository import DetectionRepository
 from aureon.storage.notification_repository import NotificationRepository
 from aureon.storage.review_reader import ReviewReader
-from aureon.storage.settings_repository import ExecutionSettingsRepository
+from aureon.storage.settings_repository import (
+    ExecutionSettingsRepository,
+    NotificationSettingsRepository,
+)
 from aureon.storage.symbol_repository import SymbolRepository
 from aureon.storage.system_state_repository import HeartbeatRepository, SystemStateRepository
 from aureon.storage.trade_repository import TradeRepository
@@ -61,6 +64,10 @@ class BotContext:
     # reader like `reviews` does.
     alerts: PriceAlertRepository | None = None
     notifications: NotificationRepository | None = None
+    #: Which agents are announced (9C). Its own repository, because the document that
+    #: decides whether a message is posted should not be reachable from the one that
+    #: decides whether money can move.
+    notification_settings: NotificationSettingsRepository | None = None
 
     @property
     def authorized_user_ids(self) -> tuple[str, ...]:
@@ -95,4 +102,5 @@ def build_context(config: AureonConfig, client: Any) -> BotContext:
         heartbeats=HeartbeatRepository(client),
         alerts=PriceAlertRepository(client),
         notifications=NotificationRepository(client),
+        notification_settings=NotificationSettingsRepository(client),
     )

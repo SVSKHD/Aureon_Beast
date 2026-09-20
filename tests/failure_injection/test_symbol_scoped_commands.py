@@ -52,14 +52,14 @@ from aureon.storage.system_state_repository import (
     SystemStateRepository,
 )
 from aureon.storage.trade_repository import TradeRepository, trade_id_for
-from tests.failure_injection.conftest import MAGIC, USER, make_request
-from tests.failure_injection.test_execute_shortcut import (
-    GOLD,
-    SILVER,
-    SILVER_INFO,
+from tests.failure_injection.conftest import (
+    MAGIC,
+    USER,
     FakeInteraction,
     embed_text,
+    make_request,
 )
+from tests.failure_injection.test_execute_shortcut import GOLD, SILVER, SILVER_INFO
 
 pytestmark = pytest.mark.emulator
 

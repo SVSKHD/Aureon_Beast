@@ -53,6 +53,10 @@ from aureon.models.trade import TradeRequest
 
 log = logging.getLogger(__name__)
 
+#: What a field with no value renders as, everywhere a human reads one. A blank would be
+#: indistinguishable from a zero at a glance, and a zero is a price.
+UNKNOWN = "—"
+
 
 # ── Authorization (§71) ───────────────────────────────────────────────────────
 
@@ -839,6 +843,252 @@ def resolve_close_target(open_trades: Sequence[Any], symbol: str) -> CloseChoice
     return CloseChoice(True, position_id=int(only.mt5_position_id), symbol=only.symbol)
 
 
+# ── 9C: what a detection notification says ────────────────────────────────────
+
+
+@dataclass
+class NotificationScreen:
+    """One detection, rendered for a channel (9C).
+
+    Built here rather than in ``embeds.py`` for the reason everything else is: the content
+    is a decision about what a human needs to see, and it is tested without a Discord
+    client. ``embeds.py`` only turns it into an embed.
+    """
+
+    title: str
+    symbol: str
+    detection_id: str
+    fields: list[tuple[str, str]] = field(default_factory=list)
+    footer: str = ""
+    #: Prefills the Execute button. The lot is deliberately absent (9C).
+    side: str | None = None
+
+
+#: What the footer says on every detection embed. Not decoration: an embed with a direction
+#: and a price looks like a recommendation, and the only thing separating the two is a
+#: sentence saying which it is.
+RESEARCH_ONLY = "research only · not a recommendation"
+
+
+def build_notification(detection: Detection) -> NotificationScreen:
+    """The §59 detection embed: what the machine saw, and nothing it did not (9C).
+
+    Every line comes from the **stored detection** — its own indicator snapshot, its own
+    session, and 9B's volume and volatility context. Discord computes nothing (CLAUDE.md),
+    and a field it cannot fill reads "—" rather than being dropped, so two embeds of the
+    same agent always have the same shape.
+    """
+    direction = detection.direction.value if detection.direction else "context"
+    screen = NotificationScreen(
+        title=f"{detection.symbol} · {detection.agent_name} · {direction}",
+        symbol=detection.symbol,
+        detection_id=detection.detection_id,
+        side=detection.direction.value if detection.direction else None,
+        footer=f"{RESEARCH_ONLY} · {detection.detection_id}",
+    )
+
+    ema = detection.indicators.ema or {}
+    fast, slow = ema.get("fast"), ema.get("slow")
+    relation = UNKNOWN
+    if isinstance(fast, (int, float)) and isinstance(slow, (int, float)):
+        relation = "fast above slow" if fast >= slow else "fast below slow"
+
+    screen.fields = [
+        ("Price", _fmt(detection.price)),
+        ("Event", detection.event_key),
+        ("EMA", f"{_fmt(fast)} / {_fmt(slow)} — {relation}"),
+        (
+            "RSI",
+            f"{_fmt(detection.indicators.rsi, digits=1)} "
+            f"{_rsi_zone(detection.indicators.rsi)}",
+        ),
+        (
+            "Session",
+            f"{detection.session.session.value}"
+            + (f" · {detection.session.trend}" if getattr(detection.session, "trend", None)
+               else ""),
+        ),
+        ("Volume", _volume_line(detection)),
+        ("Volatility", _volatility_line(detection)),
+    ]
+    wick = _wick_line(detection)
+    if wick:
+        screen.fields.append(("Wick", wick))
+    return screen
+
+
+def _rsi_zone(rsi: float | None) -> str:
+    """Label a stored reading with the CURRENT definition of the zones.
+
+    Detections store the value and not the label on purpose (``IndicatorSnapshot``), so
+    the label has to be applied when the embed is built. It comes from the agent's own
+    function and the agent's own boundaries -- a 70/30 written out here would eventually
+    disagree with what the agent called it, and the embed is where a human would read the
+    disagreement without any way to notice it.
+
+    This is labelling, not computing: nothing here reads a candle (CLAUDE.md).
+    """
+    if rsi is None:
+        return UNKNOWN
+    from aureon.agents.rsi_agent import DEFAULT_OVERBOUGHT, DEFAULT_OVERSOLD, rsi_zone
+
+    return (
+        rsi_zone(rsi, overbought=DEFAULT_OVERBOUGHT, oversold=DEFAULT_OVERSOLD) or UNKNOWN
+    )
+
+
+def _volume_line(detection: Detection) -> str:
+    """Where price stood in Asia's value area, and the nodes nearest it (9B, 9C)."""
+    ref = detection.volume_profile_ref
+    if ref is None:
+        return f"{UNKNOWN} (no profile yet)"
+    parts = [f"{ref.price_vs_va or UNKNOWN} VA"]
+    if ref.va_low is not None and ref.va_high is not None:
+        parts.append(f"({_fmt(ref.va_low)}–{_fmt(ref.va_high)})")
+    parts.append(f"POC {_fmt(ref.poc_price)}")
+    parts.append(f"LVN {_fmt(ref.nearest_lvn)}")
+    parts.append(f"HVN {_fmt(ref.nearest_hvn)}")
+    return " ".join(parts)
+
+
+def _volatility_line(detection: Detection) -> str:
+    context = detection.volatility
+    if context is None:
+        return UNKNOWN
+    regime = context.regime or UNKNOWN
+    atr = _fmt(context.atr_14)
+    ratio = context.session_range_vs_median
+    tail = f" ({ratio:.2f}× median)" if ratio is not None else ""
+    return f"{regime} · ATR14 {atr}{tail}"
+
+
+def _wick_line(detection: Detection) -> str | None:
+    """The wick agent's own classification, when this detection is one (9C)."""
+    if detection.agent_name != "wick":
+        return None
+    return detection.event_key
+
+
+def should_notify(detection: Detection, settings: Any) -> bool:
+    """Whether this detection is announced at all (9C).
+
+    The decision is the settings document's, read fresh: silencing a noisy agent at 02:00
+    must take effect on the next detection rather than on the next deploy.
+    """
+    return bool(settings.announces(detection.agent_name))
+
+
+@dataclass
+class ReminderScreen:
+    """A fired ``/remind`` alert, rendered from its FROZEN snapshot (9C)."""
+
+    title: str
+    symbol: str
+    alert_id: str
+    requested_by: str
+    fields: list[tuple[str, str]] = field(default_factory=list)
+    footer: str = ""
+    note: str | None = None
+    side: str | None = None
+
+
+def build_reminder(alert: PriceAlert) -> ReminderScreen:
+    """What a fired alert says, entirely from what was frozen when it crossed (9C).
+
+    Not one value is read live. The whole point of the snapshot is that the message
+    describes the market that crossed the level rather than the market a few seconds later,
+    by which time the move may have reversed — and a reader has no way to tell those apart
+    once the message is written.
+
+    The ``side`` prefilled on the Execute button follows the alert's own direction: an alert
+    for price going *above* a level is a reason somebody might buy. It is a prefill and
+    nothing more — the lot is still typed and CONFIRM is still required.
+    """
+    snapshot = alert.fired_snapshot or {}
+    screen = ReminderScreen(
+        title=f"{alert.symbol} {alert.side} {alert.level:g} — reached",
+        symbol=alert.symbol,
+        alert_id=alert.alert_id,
+        requested_by=alert.requested_by,
+        note=alert.note,
+        side="buy" if alert.side == "above" else "sell",
+        footer=f"{RESEARCH_ONLY} · {alert.alert_id}",
+    )
+
+    fired_at = alert.fired_at.isoformat() if alert.fired_at else UNKNOWN
+    minutes = snapshot.get("minutes_since_cross")
+    screen.fields = [
+        ("Price", f"{_fmt(alert.fired_price)} (level {alert.level:g})"),
+        ("At", fired_at),
+        (
+            "EMA",
+            f"{_fmt(snapshot.get('ema_fast'))} / {_fmt(snapshot.get('ema_slow'))}"
+            f" — fast {snapshot.get('ema_relation') or UNKNOWN}"
+            + _distance_tail(snapshot.get("ema_distance")),
+        ),
+        (
+            "Last cross",
+            _event(snapshot.get("last_cross"), "direction")
+            + (f", {minutes:g}m ago" if isinstance(minutes, (int, float)) else ""),
+        ),
+        (
+            "RSI",
+            f"{_fmt(snapshot.get('rsi'), digits=1)} {snapshot.get('rsi_zone') or UNKNOWN}",
+        ),
+        (
+            "Session",
+            f"{snapshot.get('session') or UNKNOWN} "
+            f"{snapshot.get('session_trend') or UNKNOWN}",
+        ),
+        (
+            "Session range",
+            f"{_fmt(snapshot.get('session_low'))}–{_fmt(snapshot.get('session_high'))}",
+        ),
+        ("Detections today", str(snapshot.get("detections_today") or 0)),
+        ("Volume", _snapshot_volume_line(snapshot)),
+        ("Volatility", _snapshot_volatility_line(snapshot)),
+        ("Last wick", _event(snapshot.get("last_wick"), "classification")),
+        ("Last sweep", _event(snapshot.get("last_sweep"), "direction", "level_type")),
+        (
+            "Last breakout",
+            _event(snapshot.get("last_breakout"), "direction", "level_type"),
+        ),
+    ]
+    return screen
+
+
+def _distance_tail(distance: Any) -> str:
+    """The EMA gap, when there is one.
+
+    Rendered beside the relation rather than instead of it: "fast above" is the bias and
+    the gap is how convinced it is, and a reader in a hurry needs the first without
+    subtracting the second.
+    """
+    if not isinstance(distance, (int, float)):
+        return ""
+    return f" by {abs(distance):g}"
+
+
+def _snapshot_volume_line(snapshot: dict[str, Any]) -> str:
+    profiles = snapshot.get("volume_profile") or {}
+    asia = profiles.get("asia") or profiles.get("current_session") or {}
+    if not asia:
+        return UNKNOWN
+    return (
+        f"POC {_fmt(asia.get('poc_price'))} "
+        f"VA {_fmt(asia.get('value_area_low'))}–{_fmt(asia.get('value_area_high'))}"
+    )
+
+
+def _snapshot_volatility_line(snapshot: dict[str, Any]) -> str:
+    context = snapshot.get("volatility") or {}
+    if not context:
+        return UNKNOWN
+    ratio = context.get("session_range_vs_median")
+    tail = f" ({ratio:.2f}× median)" if isinstance(ratio, (int, float)) else ""
+    return f"{context.get('regime') or UNKNOWN} · ATR14 {_fmt(context.get('atr_14'))}{tail}"
+
+
 # ── /status (§59, §61-§63) ────────────────────────────────────────────────────
 
 
@@ -889,9 +1139,6 @@ class StatusScreen:
 
 
 NO_REVIEW_YET = "no completed review yet"
-UNKNOWN = "—"
-
-
 def _fmt(value: object, *, digits: int = 2) -> str:
     """A number for a human, or an em dash.
 

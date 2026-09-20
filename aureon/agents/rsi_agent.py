@@ -43,6 +43,13 @@ ZONE_OVERBOUGHT = "overbought"
 ZONE_OVERSOLD = "oversold"
 ZONE_NEUTRAL = "neutral"
 
+#: The shipped boundaries. Named here rather than repeated as literals, because Discord
+#: labels a stored RSI at render time (detections store the value, not the label -- see
+#: ``IndicatorSnapshot``) and a second copy of 70/30 would drift from this one silently:
+#: the embed would say "neutral" about a reading this agent had called overbought.
+DEFAULT_OVERBOUGHT = 70.0
+DEFAULT_OVERSOLD = 30.0
+
 
 def rsi_zone(value: float, *, overbought: float, oversold: float) -> str:
     """Classify an RSI reading into a zone.
@@ -67,8 +74,8 @@ class RsiAgent(BaseAgent):
         self,
         *,
         rsi_period: int = 14,
-        overbought: float = 70.0,
-        oversold: float = 30.0,
+        overbought: float = DEFAULT_OVERBOUGHT,
+        oversold: float = DEFAULT_OVERSOLD,
         price_field: str = "close",
     ) -> None:
         if not 0 < oversold < overbought < 100:

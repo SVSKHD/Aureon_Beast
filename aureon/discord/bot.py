@@ -19,11 +19,22 @@ the way.
 
 It holds no broker and no data provider (see ``BotContext``), imports neither, and a
 boundary test enforces that. It writes only ``trade_requests``, ``control_requests``,
-``settings.trading_enabled`` and ``audit_logs``.
+``settings.trading_enabled``, ``audit_logs`` and -- from 9C -- ``alerts`` and
+``notifications``.
+
+## The announcement loop (9C)
+
+One background task, started once, posts detection embeds and fired reminders. It lives
+here rather than in the notifier because only the client can turn a channel id into
+something to send to; the notifier is handed an ``async send(...)`` and decides nothing
+about transport. It starts only after the gateway is ready -- a channel cannot be fetched
+before then -- and it never stops the bot: a sweep that raises is logged and the next one
+runs.
 """
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import logging
 from collections.abc import Awaitable, Callable
@@ -34,6 +45,7 @@ from discord import app_commands
 
 from aureon.discord.context import BotContext
 from aureon.discord.embeds import notice_embed
+from aureon.discord.notifier import Notifier
 from aureon.discord.service import NotAuthorized, authorize
 
 log = logging.getLogger(__name__)
@@ -79,6 +91,8 @@ class AureonBot(discord.Client):
             if context.config.discord_guild_id
             else None
         )
+        self.notifier = Notifier(context, send=self.announce)
+        self._notifier_task: asyncio.Task[None] | None = None
 
     async def setup_hook(self) -> None:
         """Register commands, scoped to the configured guild (§71).
@@ -98,6 +112,58 @@ class AureonBot(discord.Client):
                 "AUREON_DISCORD_GUILD_ID is not set; commands are NOT synced. Set it — a "
                 "global trading command would appear in every server this app joins."
             )
+
+        if self.context.config.alert_channel_id is None:
+            # Announcing nothing is the right answer to "no channel chosen": the
+            # alternative is a bot that picks a channel it can see and posts market calls
+            # into it.
+            log.warning(
+                "AUREON_ALERT_CHANNEL_ID is not set; detections will NOT be announced"
+            )
+        elif self._notifier_task is None:
+            self._notifier_task = asyncio.create_task(self._announce_forever())
+
+    async def _announce_forever(self) -> None:
+        """One task for the life of the process, started once.
+
+        Waits for the gateway because a channel cannot be fetched before it. Started from
+        ``setup_hook`` rather than ``on_ready``, which fires again on every reconnect --
+        and a second loop would post everything twice for as long as both ran.
+        """
+        await self.wait_until_ready()
+        log.info(
+            "announcing detections in channel %s", self.context.config.alert_channel_id
+        )
+        await self.notifier.run()
+
+    async def announce(
+        self,
+        target: int | str,
+        *,
+        embed: discord.Embed | None = None,
+        view: discord.ui.View | None = None,
+        direct: bool = False,
+    ) -> None:
+        """Send one announcement. The notifier's only way out of the process.
+
+        ``direct`` sends to a user rather than a channel: a fired alert is one person's
+        question, and the channel is readable by more people than armed it.
+        """
+        if direct:
+            recipient: Any = self.get_user(int(target)) or await self.fetch_user(
+                int(target)
+            )
+        else:
+            recipient = self.get_channel(int(target)) or await self.fetch_channel(
+                int(target)
+            )
+        await recipient.send(embed=embed, view=view)
+
+    async def close(self) -> None:
+        self.notifier.stop()
+        if self._notifier_task is not None:
+            self._notifier_task.cancel()
+        await super().close()
 
     async def on_ready(self) -> None:  # pragma: no cover - requires a gateway
         log.info("connected as %s", self.user)

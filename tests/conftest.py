@@ -303,14 +303,47 @@ class _FakeTransaction:
         ref.delete()
 
 
+def _field(doc: dict[str, Any], field: str) -> Any:
+    """Read a possibly-dotted field path, as a Firestore query does.
+
+    ``where("detected_at.utc", ">=", ...)`` addresses a value nested inside a map. A
+    double that only did ``doc.get("detected_at.utc")`` would find nothing, drop the
+    filter's effect on the floor, and pass every test of a windowed read while the
+    window did nothing.
+    """
+    value: Any = doc
+    for part in field.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
+_OPS = {
+    "==": lambda a, b: a == b,
+    "!=": lambda a, b: a != b,
+    ">": lambda a, b: a is not None and a > b,
+    ">=": lambda a, b: a is not None and a >= b,
+    "<": lambda a, b: a is not None and a < b,
+    "<=": lambda a, b: a is not None and a <= b,
+    "in": lambda a, b: a in b,
+    "not-in": lambda a, b: a not in b,
+}
+
+
 class _FakeCollection:
     def __init__(self, store: InMemoryFirestore, path: str) -> None:
         self._store = store
         self._path = path
         self._filters: list[tuple[str, str, Any]] = []
+        self._order: tuple[str, str] | None = None
         self._limit: int | None = None
 
     def where(self, field: str, op: str, value: Any) -> _FakeCollection:
+        if op not in _OPS:
+            # Louder than returning everything: an unimplemented operator that silently
+            # matched every document is how a filter stops filtering without a red test.
+            raise NotImplementedError(f"InMemoryFirestore: unsupported operator {op!r}")
         self._filters.append((field, op, value))
         return self
 
@@ -329,8 +362,18 @@ class _FakeCollection:
             if path.startswith(f"{self._path}/")
         ]
         for field, op, value in self._filters:
-            if op == "==":
-                rows = [(i, r) for i, r in rows if r.get(field) == value]
+            test = _OPS[op]
+            rows = [(i, r) for i, r in rows if test(_field(r, field), value)]
+        if self._order is not None:
+            field, direction = self._order
+            # Ordered BEFORE the limit, as the server does: limiting first and sorting
+            # after returns the oldest N in a "newest first, limit N" query -- the exact
+            # opposite of what the caller asked for, and it looks right in a fixture whose
+            # documents happen to be written in order.
+            rows.sort(
+                key=lambda row: (_field(row[1], field) is None, _field(row[1], field)),
+                reverse=direction.upper().startswith("DESC"),
+            )
         if self._limit is not None:
             rows = rows[: self._limit]
         return [_FakeSnapshot(data, doc_id) for doc_id, data in rows]

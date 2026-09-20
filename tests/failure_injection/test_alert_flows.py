@@ -245,7 +245,7 @@ def test_remind_price_arms_one_alert_and_says_what_it_will_do(
     context, quote_published, firestore_client
 ) -> None:
     """9C's done-when, the arming half."""
-    from tests.failure_injection.test_execute_shortcut import FakeInteraction, embed_text
+    from tests.failure_injection.conftest import FakeInteraction, embed_text
 
     quote_published()
     interaction = FakeInteraction()
@@ -269,7 +269,7 @@ def test_remind_price_arms_one_alert_and_says_what_it_will_do(
 def test_remind_price_refuses_a_level_already_behind_the_market(
     context, quote_published, firestore_client
 ) -> None:
-    from tests.failure_injection.test_execute_shortcut import FakeInteraction, embed_text
+    from tests.failure_injection.conftest import FakeInteraction, embed_text
 
     quote_published()
     interaction = FakeInteraction()
@@ -283,7 +283,7 @@ def test_remind_price_refuses_a_symbol_with_no_published_quote(
     context, firestore_client
 ) -> None:
     """A stopped observer is not a market to set a level in."""
-    from tests.failure_injection.test_execute_shortcut import FakeInteraction, embed_text
+    from tests.failure_injection.conftest import FakeInteraction, embed_text
 
     interaction = FakeInteraction()
     run_remind(context, interaction, symbol=SYMBOL, level=3700.0, side="above")
@@ -297,7 +297,7 @@ def test_remind_list_and_cancel_are_the_users_own(
     import asyncio
 
     from aureon.discord.commands.remind import RemindCommands
-    from tests.failure_injection.test_execute_shortcut import FakeInteraction, embed_text
+    from tests.failure_injection.conftest import FakeInteraction, embed_text
 
     quote_published()
     run_remind(context, FakeInteraction(), symbol=SYMBOL, level=3700.0, side="above")
@@ -534,3 +534,178 @@ def test_a_symbol_with_no_armed_alert_costs_no_extra_quote_read(
     observer.market_engine.poll_once()
     assert provider.quote_calls == without_alerts + 1
     outbox.close()
+
+
+# ── The announcement loop, against real Firestore ─────────────────────────────
+
+
+def stored_detection(firestore_client, ident: str = "det-live-1"):
+    """One detection, as the observer would have written it."""
+    from aureon.models.base import MarketTime
+    from aureon.models.detection import Detection, IndicatorSnapshot, SessionContext
+    from aureon.models.enums import Direction, SessionName, Timeframe
+    from aureon.storage.detection_repository import DetectionRepository
+
+    moment = utc_now()
+    detection = Detection(
+        detection_id=ident,
+        account_scope="primary",
+        symbol=SYMBOL,
+        timeframe=Timeframe.M5,
+        agent_name="ema_cross",
+        agent_version="2.1.0",
+        event_key="bullish",
+        direction=Direction.BUY,
+        detected_at=MarketTime.from_utc(moment, "Europe/Athens"),
+        candle_open_time=MarketTime.from_utc(moment - timedelta(minutes=5), "Europe/Athens"),
+        price=3700.50,
+        indicators=IndicatorSnapshot(ema={"fast": 3701.0, "slow": 3695.0}, rsi=61.4),
+        session=SessionContext(session=SessionName.LONDON, session_config_version=1),
+        sequence_today=1,
+        sequence_session=1,
+    )
+    DetectionRepository(firestore_client).upsert(detection)
+    return detection
+
+
+class Recorder:
+    """The injected send, recording what would have gone to Discord."""
+
+    def __init__(self) -> None:
+        self.posts: list[dict] = []
+
+    async def __call__(self, target, *, embed=None, view=None, direct: bool = False):
+        self.posts.append({"target": target, "direct": direct, "embed": embed})
+
+
+def notifier_over(firestore_client, recorder: Recorder):
+    """A notifier on its OWN repositories over the shared project.
+
+    Separate repository objects on purpose: the question is whether two *processes* agree,
+    and two notifiers sharing one repository instance would agree through Python rather
+    than through Firestore -- which is the thing being tested.
+    """
+    from aureon.config import AureonConfig
+    from aureon.discord.context import build_context
+    from aureon.discord.notifier import Notifier
+
+    config = AureonConfig(
+        symbols=(SYMBOL,), authorized_user_ids=(USER,), alert_channel_id=4242
+    )
+    return Notifier(build_context(config, firestore_client), send=recorder)
+
+
+def sweep(notifier):
+    import asyncio
+
+    return asyncio.run(notifier.sweep())
+
+
+def test_two_bots_announce_a_detection_once_between_them(firestore_client) -> None:
+    """The claim is the whole mechanism: whichever writes the document first posts, and the
+    other finds it and stays quiet. A channel is where a duplicate is most visible."""
+    stored_detection(firestore_client)
+
+    first, second = Recorder(), Recorder()
+    one = sweep(notifier_over(firestore_client, first))
+    two = sweep(notifier_over(firestore_client, second))
+
+    assert one.detections == ["det-live-1"]
+    assert two.detections == []
+    assert len(first.posts) == 1
+    assert second.posts == []
+
+
+def test_a_restarted_bot_re_reads_the_window_and_says_nothing(firestore_client) -> None:
+    """Restarting is the normal case, not the exception: a deploy in the middle of London
+    must not replay the session into the channel."""
+    stored_detection(firestore_client, "det-live-2")
+
+    before = Recorder()
+    assert sweep(notifier_over(firestore_client, before)).detections == ["det-live-2"]
+
+    after = Recorder()
+    assert sweep(notifier_over(firestore_client, after)).detections == []
+    assert after.posts == []
+
+
+def test_a_fired_alert_is_announced_once_to_its_requester(
+    alerts: PriceAlertRepository, firestore_client
+) -> None:
+    """Direct, not the channel -- and once, however many sweeps overlap."""
+    armed = alerts.arm(alert(alert_id="al-live-1"))
+    alerts.fire(armed.alert_id, price=3700.10, snapshot={"rsi": 61.4})
+
+    recorder = Recorder()
+    notifier = notifier_over(firestore_client, recorder)
+    assert sweep(notifier).reminders == ["al-live-1"]
+    assert sweep(notifier).reminders == []
+
+    assert len(recorder.posts) == 1
+    assert recorder.posts[0]["target"] == USER
+    assert recorder.posts[0]["direct"] is True
+
+
+def test_the_phase_done_when_end_to_end(
+    observer_factory, alerts: PriceAlertRepository, candles, firestore_client
+) -> None:
+    """9C's Done-when, from the armed level to the message a human would read.
+
+    A quote the observer already reads crosses the level; the observer freezes the snapshot
+    in the same transaction that fires the alert; the notifier finds it and posts **one**
+    reminder to the requester; and that embed carries the EMA, volume, volatility and wick
+    lines the phase names.
+
+    Assembled end to end on purpose. Each half passes on its own with a snapshot nobody
+    renders or a renderer nobody feeds -- the only question worth asking is whether a
+    trader gets the message, once, with the numbers in it.
+    """
+    from tests.failure_injection.conftest import embed_text
+
+    observer, outbox = observer_factory()
+    provider = observer.provider
+
+    cut = 200
+    provider.set_clock(candles[cut].close_time)
+    start_price = provider.get_quote(SYMBOL).ask
+    later = max(c.close for c in candles[cut : cut + 300])
+    level = round((start_price + later) / 2, 2)
+    assert start_price < level < later, "the fixture does not cross this level"
+
+    stored = alerts.arm(
+        PriceAlert(
+            alert_id=new_alert_id(),
+            symbol=SYMBOL,
+            level=level,
+            side="above",
+            requested_by=USER,
+            note="range high",
+        )
+    )
+    for candle in candles[cut : cut + 300]:
+        provider.advance_to_close_of(candle)
+        observer.market_engine.poll_once()
+        if alerts.get(stored.alert_id).status is PriceAlertStatus.FIRED:
+            break
+    outbox.close()
+    assert alerts.get(stored.alert_id).status is PriceAlertStatus.FIRED
+
+    recorder = Recorder()
+    notifier = notifier_over(firestore_client, recorder)
+    assert sweep(notifier).reminders == [stored.alert_id]
+    assert sweep(notifier).reminders == [], "a second sweep must add nothing"
+
+    assert len(recorder.posts) == 1
+    post = recorder.posts[0]
+    assert post["target"] == USER and post["direct"] is True
+
+    text = embed_text(post["embed"])
+    names = {f.name for f in post["embed"].fields}
+    assert {"EMA", "Volume", "Volatility", "Last wick"} <= names
+    assert "range high" in text
+    # Populated, not merely present: a row of em-dashes would satisfy the names alone.
+    values = {f.name: f.value for f in post["embed"].fields}
+    assert values["EMA"].startswith(tuple("0123456789"))
+    assert "ATR14" in values["Volatility"]
+    assert "POC" in values["Volume"]
+    assert f"level {level:g}" in values["Price"]

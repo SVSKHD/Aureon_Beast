@@ -153,3 +153,30 @@ def status_embed(screen: StatusScreen) -> Any:
 
 def notice_embed(title: str, message: str, *, bad: bool = False) -> Any:
     return _embed(title, colour=COLOUR_BAD if bad else COLOUR_INFO, description=message)
+
+
+def notification_embed(screen: Any) -> Any:
+    """A detection announcement (9C).
+
+    Deliberately the INFO colour whatever the direction. A green embed for a bullish cross
+    and a red one for a bearish one would read as approval and disapproval, which is a
+    recommendation drawn in colour — and the footer says the opposite in words.
+    """
+    embed = _embed(screen.title, colour=COLOUR_INFO)
+    for name, value in screen.fields:
+        embed.add_field(name=name, value=value or "—", inline=True)
+    embed.set_footer(text=screen.footer)
+    return embed
+
+
+def reminder_embed(screen: Any) -> Any:
+    """A fired price alert, rendered from its frozen snapshot (9C)."""
+    embed = _embed(
+        screen.title,
+        colour=COLOUR_INFO,
+        description=(f"> {screen.note}" if screen.note else None),
+    )
+    for name, value in screen.fields:
+        embed.add_field(name=name, value=value or "—", inline=True)
+    embed.set_footer(text=screen.footer)
+    return embed
