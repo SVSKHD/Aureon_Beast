@@ -91,6 +91,18 @@ class GuardContext:
     now: datetime
 
     @property
+    def limits(self):
+        """The limits for THIS request's symbol (9A).
+
+        Resolved as a group rather than read field by field off ``settings``, so a rule
+        cannot compare a volume against a per-symbol ``max_lot`` while another compares a
+        spread against the global ceiling and both believe they are reading one policy.
+        Two of the three limits are in points, and a point is a different amount of money
+        on every instrument.
+        """
+        return self.settings.limits_for(self.request.symbol)
+
+    @property
     def reference_price(self) -> float:
         """The price this side of the book would transact at, from the FRESH quote."""
         quote = self.broker.quote
@@ -233,12 +245,13 @@ def rule_spread_within_limit(ctx: GuardContext) -> GuardResult | None:
             FailureCode.SPREAD_LIMIT,
             f"cannot measure spread for {ctx.request.symbol}: point size unknown",
         )
-    if spread > ctx.settings.max_spread_points:
+    limit = ctx.limits.max_spread_points
+    if spread > limit:
         return GuardResult.block(
             "spread_within_limit",
             FailureCode.SPREAD_LIMIT,
-            f"spread {spread:.1f} points exceeds the limit "
-            f"{ctx.settings.max_spread_points:.1f}",
+            f"spread {spread:.1f} points exceeds the limit for "
+            f"{ctx.request.symbol}: {limit:.1f}",
         )
     return None
 
@@ -267,12 +280,12 @@ def rule_price_has_not_run_away(ctx: GuardContext) -> GuardResult | None:
 
     adverse = (current - confirmed_price) if is_buy else (confirmed_price - current)
     drift = adverse / point
-    if drift > ctx.settings.max_deviation_points:
+    if drift > ctx.limits.max_deviation_points:
         return GuardResult.block(
             "price_has_not_run_away",
             FailureCode.DEVIATION_EXCEEDED,
             f"price moved {drift:.1f} points against the confirmed "
-            f"{confirmed_price} (limit {ctx.settings.max_deviation_points})",
+            f"{confirmed_price} (limit {ctx.limits.max_deviation_points})",
         )
     return None
 
@@ -293,11 +306,13 @@ def rule_volume_valid(ctx: GuardContext) -> GuardResult | None:
 
 def rule_volume_within_max_lot(ctx: GuardContext) -> GuardResult | None:
     """Aureon's own ceiling, tighter than the broker's (§56)."""
-    if ctx.request.volume > ctx.settings.max_lot:
+    limit = ctx.limits.max_lot
+    if ctx.request.volume > limit:
         return GuardResult.block(
             "volume_within_max_lot",
             FailureCode.MAX_LOT_EXCEEDED,
-            f"volume {ctx.request.volume} exceeds max_lot {ctx.settings.max_lot}",
+            f"volume {ctx.request.volume} exceeds max_lot {limit} for "
+            f"{ctx.request.symbol}",
         )
     return None
 
@@ -447,5 +462,7 @@ def check(
         if verdict is not None:
             return verdict
     return GuardResult.allow(
-        deviation_points=min(request.deviation_points, settings.max_deviation_points)
+        deviation_points=min(
+            request.deviation_points, ctx.limits.max_deviation_points
+        )
     )

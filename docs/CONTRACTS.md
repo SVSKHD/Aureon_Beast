@@ -238,6 +238,7 @@ Execution gates and limits (§56, §84).
 | `status_stale_after_seconds` | `float` | no | `45.0` |  |
 | `executor_lease_seconds` | `float` | no | `60.0` |  |
 | `allowed_symbols` | `tuple[str]` | no | `()` | Empty means no symbol allowlist is enforced. |
+| `per_symbol` | `dict[str, SymbolLimits]` | no | `dict()` |  |
 | `settings_version` | `int` | no | `0` |  |
 | `updated_at` | `AwareDatetime \| null` | no | `None` |  |
 | `updated_by` | `str \| null` | no | `None` |  |
@@ -681,6 +682,28 @@ Per symbol/timeframe observation state (§59).
 | `last_sweep` | `dict[str, object] \| null` | no | `None` | {direction, level_type, at} |
 | `last_wick` | `dict[str, object] \| null` | no | `None` | {classification, at} |
 | `last_breakout` | `dict[str, object] \| null` | no | `None` | {direction, level_type, at} |
+
+### SymbolLimits
+
+Per-symbol overrides of the execution limits (9A).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `max_lot` | `float \| null` | no | `None` |  |
+| `max_spread_points` | `float \| null` | no | `None` |  |
+| `max_deviation_points` | `int \| null` | no | `None` |  |
+
+### ResolvedLimits
+
+The limits that actually apply to one symbol, with no ``None`` left.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `symbol` | `str` | yes | — |  |
+| `max_lot` | `float` | yes | — |  |
+| `max_spread_points` | `float` | yes | — |  |
+| `max_deviation_points` | `int` | yes | — |  |
+| `overridden` | `tuple[str]` | no | `()` |  |
 
 ---
 

@@ -89,6 +89,8 @@ VALUE_MODELS: tuple[type[BaseModel], ...] = (
     m.ThresholdOutcome,
     m.HorizonOutcome,
     m.SymbolState,
+    m.SymbolLimits,
+    m.ResolvedLimits,
 )
 
 

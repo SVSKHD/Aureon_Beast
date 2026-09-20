@@ -41,6 +41,28 @@ def quote(*, bid: float = 2400.00, ask: float = 2400.30, age: float = 0.0) -> Qu
     )
 
 
+def silver_quote(*, bid: float = 30.000, ask: float = 30.015) -> QuoteSnapshot:
+    """A quote at silver's own tick. 0.015 of spread is 15 points at 0.001 -- the same
+    point count as gold's default, and a completely different fraction of price."""
+    return QuoteSnapshot(
+        symbol="XAGUSD", bid=bid, ask=ask, point=0.001, captured_at=NOW
+    )
+
+
+def silver_snapshot(**overrides) -> BrokerSnapshot:
+    info = DEFAULT_SYMBOL_INFO.model_copy(
+        update={"symbol": "XAGUSD", "point": 0.001, "digits": 3}
+    )
+    base = dict(
+        symbol_info=info,
+        quote=silver_quote(),
+        account=AccountInfo(login=1, balance=100_000, equity=100_000, margin_free=100_000),
+        open_positions=0,
+        trades_today=0,
+    )
+    return BrokerSnapshot(**(base | overrides))
+
+
 def request(**overrides) -> TradeRequest:
     base = dict(
         request_id="r1",
@@ -332,3 +354,99 @@ def test_every_refusal_names_its_rule_and_explains_itself() -> None:
         assert result.rule
         assert result.message
         assert result.failure_code is not None
+
+
+# ── Per-symbol limits (9A) ────────────────────────────────────────────────────
+
+
+def test_a_per_symbol_max_lot_is_tighter_than_the_global_one() -> None:
+    """One lot is 100 oz of gold and 5000 oz of silver, so one ceiling is two notionals."""
+    from aureon.models.settings import SymbolLimits
+
+    limited = settings(max_lot=1.0, per_symbol={"XAGUSD": SymbolLimits(max_lot=0.2)})
+    verdict = check(
+        request(symbol="XAGUSD", volume=0.5, quote=silver_quote()),
+        limited,
+        market_state=MarketState.OPEN,
+        broker=silver_snapshot(),
+    )
+    assert not verdict.ok
+    assert verdict.failure_code is FailureCode.MAX_LOT_EXCEEDED
+    assert "XAGUSD" in verdict.message
+
+    # And gold keeps the global ceiling: an entry for one symbol touches no other.
+    assert check(
+        request(symbol="XAUUSD", volume=0.5),
+        limited,
+        market_state=MarketState.OPEN,
+        broker=snapshot(),
+    ).ok
+
+
+def test_a_per_symbol_spread_limit_is_used_and_named() -> None:
+    """max_spread_points is in POINTS, and a point is different money per instrument."""
+    from aureon.models.settings import SymbolLimits
+
+    limited = settings(
+        max_spread_points=500.0, per_symbol={"XAGUSD": SymbolLimits(max_spread_points=10.0)}
+    )
+    verdict = check(
+        request(symbol="XAGUSD", quote=silver_quote()),
+        limited,
+        market_state=MarketState.OPEN,
+        broker=silver_snapshot(quote=silver_quote(bid=30.000, ask=30.030)),
+    )
+    assert not verdict.ok
+    assert verdict.failure_code is FailureCode.SPREAD_LIMIT
+    assert "XAGUSD" in verdict.message
+
+
+def test_the_deviation_clamp_uses_the_symbols_own_limit() -> None:
+    """20 points is 0.008% of gold's price and 0.07% of silver's, so one number is not one
+    policy. The guard never WIDENS a request's deviation, only clamps it (§41)."""
+    from aureon.models.settings import SymbolLimits
+
+    limited = settings(
+        max_deviation_points=20, per_symbol={"XAGUSD": SymbolLimits(max_deviation_points=3)}
+    )
+    verdict = check(
+        request(symbol="XAGUSD", deviation_points=50, quote=silver_quote()),
+        limited,
+        market_state=MarketState.OPEN,
+        broker=silver_snapshot(quote=silver_quote(bid=30.000, ask=30.003)),
+    )
+    assert verdict.ok
+    assert verdict.effective_deviation_points == 3
+
+
+def test_with_no_entry_every_symbol_gets_the_global_limits() -> None:
+    """The shipped default, and a known approximation rather than an equivalence."""
+    plain = settings(max_lot=1.0, max_spread_points=50.0, max_deviation_points=20)
+    for symbol in ("XAUUSD", "XAGUSD", "EURUSD"):
+        resolved = plain.limits_for(symbol)
+        assert (resolved.max_lot, resolved.max_spread_points) == (1.0, 50.0)
+        assert resolved.max_deviation_points == 20
+        assert resolved.overridden == ()
+
+
+def test_a_partial_entry_overrides_only_what_it_names() -> None:
+    from aureon.models.settings import SymbolLimits
+
+    resolved = settings(
+        max_lot=1.0,
+        max_spread_points=50.0,
+        max_deviation_points=20,
+        per_symbol={"XAGUSD": SymbolLimits(max_deviation_points=4)},
+    ).limits_for("xagusd")
+    assert resolved.max_deviation_points == 4
+    assert resolved.max_lot == 1.0, "unnamed limits stay global"
+    assert resolved.overridden == ("max_deviation_points",)
+
+
+def test_position_and_trade_counts_stay_global() -> None:
+    """They are counts of account-wide exposure, not money measured in points, so they are
+    not per-symbol and deliberately have no entry to set."""
+    from aureon.models.settings import SymbolLimits
+
+    assert "max_open_positions" not in SymbolLimits.model_fields
+    assert "max_daily_trades" not in SymbolLimits.model_fields

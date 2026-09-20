@@ -98,7 +98,7 @@ from aureon.models.session import (
     TRENDS,
     SessionSummary,
 )
-from aureon.models.settings import ExecutionSettings
+from aureon.models.settings import ExecutionSettings, ResolvedLimits, SymbolLimits
 from aureon.models.system import (
     DEFAULT_OFFLINE_AFTER_SECONDS,
     DEFAULT_STALE_AFTER_SECONDS,
@@ -213,6 +213,8 @@ __all__ = [
     "TREND_DOWN",
     "TREND_FLAT",
     "ExecutionSettings",
+    "ResolvedLimits",
+    "SymbolLimits",
     "DEFAULT_OFFLINE_AFTER_SECONDS",
     "DEFAULT_STALE_AFTER_SECONDS",
     "Heartbeat",
