@@ -1,0 +1,740 @@
+{
+  "generated_at": "2026-09-20T03:01:28Z",
+  "inventory_method": "Read from the working tree at the commit below; docs/ARCHITECTURE.md does not exist in this repository, so no claim here is taken from it. Every § reference is a citation copied out of a code docstring, not a verified spec reading.",
+  "git": {
+    "commit": "1dff651c1770d4283ad0e7d7d5d227ec46ac95e4",
+    "branch": "claude/aureon-phases-2-8-3kc8wy",
+    "dirty": false
+  },
+  "runtime": {
+    "python": "3.11.15",
+    "key_deps": {
+      "pydantic": "2.13.5",
+      "discord.py": "2.7.1",
+      "firebase-admin": null,
+      "MetaTrader5": null
+    },
+    "notes": "firebase-admin and MetaTrader5 are NOT installed in this environment. aureon/storage/firebase_service.py:62 imports firebase_admin lazily and raises RuntimeError when absent (verified: main_review.py fails at that line). The emulator test suite uses google-cloud-firestore 2.31.0 directly (tests/failure_injection/conftest.py:70). Also present: pandas 3.0.6, numpy 2.4.6, pytest 9.1.1, ruff 0.16.8. pyproject.toml declares mt5 and discord as optional extras."
+  },
+
+  "services": [
+    {
+      "name": "observer",
+      "entrypoint": "main_observer.py",
+      "runs_on": "windows",
+      "startup_recovery": {
+        "implemented": true,
+        "file": "main_observer.py:258",
+        "steps": [
+          "provider.connect() (main_observer.py:265)",
+          "outbox worker.flush() — deliver what the previous run queued, before adding to it (main_observer.py:268)",
+          "log any still-undelivered rows; the worker retries (main_observer.py:272)",
+          "_publish_symbol_specs() — best-effort, for Discord (main_observer.py:275, 288)",
+          "_backfill(symbol, timeframe) per symbol/timeframe, chronologically through the live engine (main_observer.py:281, 309)",
+          "heartbeat.start() then worker.start() (main_observer.py:283)"
+        ]
+      },
+      "heartbeat_path": "heartbeats/observer",
+      "reads_collections": ["detections", "system_state", "symbol_specs"],
+      "writes_collections": ["detections", "detection_evaluations", "sessions", "symbol_specs", "system_state", "heartbeats"],
+      "imports_broker": false,
+      "imports_mt5": false,
+      "imports_discord": false,
+      "loop": {
+        "kind": "poll",
+        "interval_seconds": 1.0,
+        "file": "main_observer.py:388"
+      },
+      "notes": "imports_mt5 is false in the literal sense: main_observer.py contains no `import MetaTrader5`. It imports aureon.data.mt5_provider, which imports MetaTrader5 lazily inside a function (aureon/data/mt5_provider.py:108) — hence runs_on windows. Detection evaluation runs INSIDE this process (main_observer.py:130 _track_outcomes, :145 _advance_evaluations, :156 _persist_evaluations); there is no separate evaluator service or entrypoint."
+    },
+    {
+      "name": "executor",
+      "entrypoint": "main_executor.py",
+      "runs_on": "windows",
+      "startup_recovery": {
+        "implemented": true,
+        "file": "main_executor.py:86",
+        "steps": [
+          "broker.connect() (main_executor.py:89)",
+          "reconciliation.reconcile_all() — repair or fail every request left EXECUTING/PENDING (main_executor.py:91)",
+          "log each outcome (main_executor.py:93)",
+          "controls.start() (main_executor.py:103)",
+          "heartbeat.start() (main_executor.py:105)"
+        ]
+      },
+      "heartbeat_path": "heartbeats/executor",
+      "reads_collections": ["trade_requests", "control_requests", "settings"],
+      "writes_collections": ["trade_requests", "control_requests", "audit_logs", "heartbeats"],
+      "imports_broker": true,
+      "imports_mt5": false,
+      "imports_discord": false,
+      "loop": {
+        "kind": "both",
+        "interval_seconds": 2.0,
+        "file": "aureon/execution/execution_worker.py:375"
+      },
+      "notes": "Both: a Firestore on_snapshot listener on status=='confirmed' (aureon/execution/execution_worker.py:346) plus a poll loop (:375) whose interval is AUREON_EXECUTOR_POLL_SECONDS, default 2.0. The poll is described in-code as the actual guarantee and the listener as best-effort."
+    },
+    {
+      "name": "monitor",
+      "entrypoint": "main_monitor.py",
+      "runs_on": "windows",
+      "startup_recovery": {
+        "implemented": true,
+        "file": "main_monitor.py:76",
+        "steps": [
+          "broker.connect() (main_monitor.py:78)",
+          "_reconstruct_offline_excursions() from M1 candles, BEFORE the first poll, only for trades whose stored excursion is empty (main_monitor.py:83, 97)",
+          "monitor.startup() — import open positions, close what closed, resolve pending, import external (main_monitor.py:85; aureon/positions/position_monitor.py:117)",
+          "heartbeat.start() (main_monitor.py:94)"
+        ]
+      },
+      "heartbeat_path": "heartbeats/monitor",
+      "reads_collections": ["trades", "trade_requests"],
+      "writes_collections": ["trades", "trade_requests", "audit_logs", "heartbeats"],
+      "imports_broker": true,
+      "imports_mt5": false,
+      "imports_discord": false,
+      "loop": {
+        "kind": "poll",
+        "interval_seconds": 2.0,
+        "file": "aureon/positions/position_monitor.py:144"
+      }
+    },
+    {
+      "name": "discord",
+      "entrypoint": "main_discord.py",
+      "runs_on": "anywhere",
+      "startup_recovery": {
+        "implemented": false,
+        "file": "main_discord.py:32",
+        "steps": [
+          "check_configuration() refuses to start without a token or with an empty allowlist; a missing guild id is a loud warning only (main_discord.py:32)"
+        ]
+      },
+      "heartbeat_path": "heartbeats/discord",
+      "reads_collections": ["trade_requests", "trades", "detections", "settings", "symbol_specs", "system_state", "heartbeats", "daily_reviews", "weekly_reviews"],
+      "writes_collections": ["trade_requests", "control_requests", "settings", "audit_logs", "heartbeats"],
+      "imports_broker": false,
+      "imports_mt5": false,
+      "imports_discord": true,
+      "loop": {
+        "kind": "listener",
+        "interval_seconds": null,
+        "file": "aureon/discord/result_listener.py:59"
+      },
+      "notes": "startup_recovery.implemented is false because there is no state recovery — only configuration validation. Nothing needs recovering: Discord holds no lease and no in-flight work."
+    },
+    {
+      "name": "review",
+      "entrypoint": "main_review.py",
+      "runs_on": "anywhere",
+      "startup_recovery": {
+        "implemented": false,
+        "file": null,
+        "steps": []
+      },
+      "heartbeat_path": null,
+      "reads_collections": ["detections", "detection_evaluations", "trades", "sessions", "daily_reviews", "weekly_reviews"],
+      "writes_collections": ["daily_reviews", "weekly_reviews"],
+      "imports_broker": false,
+      "imports_mt5": false,
+      "imports_discord": false,
+      "loop": {
+        "kind": null,
+        "interval_seconds": null,
+        "file": null
+      },
+      "notes": "Not a loop and not a daemon: a one-shot CLI (`main_review.py daily|weekly`), idempotent and re-runnable for any past period, with scheduling left to cron/systemd (main_review.py:1-24, decision 88). It writes no heartbeat, so /status cannot tell whether reviews are being generated. Cannot be launched in this environment: build_service -> get_client needs firebase-admin, which is absent."
+    }
+  ],
+
+  "models": [
+    {"name": "AureonModel", "file": "aureon/models/base.py:60", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 0, "validators": [], "notes": "Base for every model. model_config extra='forbid', frozen=False, validate_assignment=True."},
+    {"name": "AureonDocument", "file": "aureon/models/base.py:77", "firestore_path_pattern": null, "frozen": false, "schema_version_field": true, "field_count": 1, "validators": [], "notes": "Adds schema_version (default SCHEMA_VERSION = 1). Every stored model below inherits it."},
+    {"name": "MarketTime", "file": "aureon/models/base.py:86", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 2, "validators": ["_normalise_to_utc", "_zone_must_exist"]},
+    {"name": "Detection", "file": "aureon/models/detection.py:77", "firestore_path_pattern": "detections/{detection_id}", "frozen": true, "schema_version_field": true, "field_count": 17, "validators": [], "notes": "The only model with frozen=True at the document level (aureon/models/detection.py:87). CLAUDE.md requires detections be immutable."},
+    {"name": "IndicatorSnapshot", "file": "aureon/models/detection.py:25", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 3, "validators": []},
+    {"name": "SessionContext", "file": "aureon/models/detection.py:42", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 2, "validators": []},
+    {"name": "CandleContext", "file": "aureon/models/detection.py:55", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 9, "validators": []},
+    {"name": "DetectionEvaluation", "file": "aureon/models/evaluation.py:198", "firestore_path_pattern": "detection_evaluations/{detection_id}__{rule_id}", "frozen": false, "schema_version_field": true, "field_count": 7, "validators": ["_horizon_ids_unique"]},
+    {"name": "HorizonResult", "file": "aureon/models/evaluation.py:117", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 17, "validators": ["_status_and_payload_agree"]},
+    {"name": "Horizon", "file": "aureon/models/evaluation.py:41", "firestore_path_pattern": null, "frozen": true, "schema_version_field": false, "field_count": 3, "validators": ["_counted_kinds_need_a_value"]},
+    {"name": "EvaluationRule", "file": "aureon/models/evaluation.py:70", "firestore_path_pattern": null, "frozen": true, "schema_version_field": false, "field_count": 5, "validators": ["_ids_unique_and_thresholds_sane"]},
+    {"name": "TradeRequest", "file": "aureon/models/trade.py:102", "firestore_path_pattern": "trade_requests/{request_id}", "frozen": false, "schema_version_field": true, "field_count": 32, "validators": ["_reject_inferred_links", "_failure_code_only_with_failure"]},
+    {"name": "Trade", "file": "aureon/models/trade.py:249", "firestore_path_pattern": "trades/{trade_id}", "frozen": false, "schema_version_field": true, "field_count": 25, "validators": ["_reject_inferred_links", "_closed_volume_within_volume"]},
+    {"name": "BrokerOrderRequest", "file": "aureon/models/trade.py:48", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 10, "validators": ["_pending_orders_need_a_price"]},
+    {"name": "BrokerOrderResult", "file": "aureon/models/trade.py:81", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 11, "validators": []},
+    {"name": "PendingOrder", "file": "aureon/models/trade.py:210", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 11, "validators": [], "notes": "There is deliberately no pending_orders collection (decision 9, aureon/storage/paths.py:12); a pending order IS the PENDING trade request."},
+    {"name": "Excursion", "file": "aureon/models/trade.py:231", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 7, "validators": []},
+    {"name": "ControlRequest", "file": "aureon/models/control.py:18", "firestore_path_pattern": "control_requests/{control_id}", "frozen": false, "schema_version_field": true, "field_count": 13, "validators": ["_volume_only_for_close"]},
+    {"name": "SessionSummary", "file": "aureon/models/session.py:26", "firestore_path_pattern": "sessions/{market_date}__{session}", "frozen": false, "schema_version_field": true, "field_count": 18, "validators": ["_coherent"]},
+    {"name": "ReviewBase", "file": "aureon/models/review.py:90", "firestore_path_pattern": null, "frozen": false, "schema_version_field": true, "field_count": 18, "validators": ["_period_ordered"]},
+    {"name": "DailyReview", "file": "aureon/models/review.py:131", "firestore_path_pattern": "daily_reviews/{market_date}", "frozen": false, "schema_version_field": true, "field_count": 2, "validators": [], "notes": "field_count counts fields declared on this class only; it inherits 18 from ReviewBase + schema_version."},
+    {"name": "WeeklyReview", "file": "aureon/models/review.py:138", "firestore_path_pattern": "weekly_reviews/{iso_year:04d}-W{iso_week:02d}", "frozen": false, "schema_version_field": true, "field_count": 3, "validators": [], "notes": "Doc id built by aureon/storage/paths.py:weekly_review_doc_id; sorts chronologically as a string."},
+    {"name": "InferredLink", "file": "aureon/models/review.py:24", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 5, "validators": ["_must_stay_inferred"]},
+    {"name": "ThresholdOutcome", "file": "aureon/models/review.py:49", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 3, "validators": ["_reached_within_evaluated"]},
+    {"name": "HorizonOutcome", "file": "aureon/models/review.py:79", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 6, "validators": []},
+    {"name": "AuditRecord", "file": "aureon/models/audit.py:16", "firestore_path_pattern": "audit_logs/{audit_id}", "frozen": false, "schema_version_field": true, "field_count": 11, "validators": []},
+    {"name": "ExecutionSettings", "file": "aureon/models/settings.py:19", "firestore_path_pattern": "settings/execution", "frozen": false, "schema_version_field": true, "field_count": 14, "validators": []},
+    {"name": "SystemState", "file": "aureon/models/system.py:97", "firestore_path_pattern": "system_state/current", "frozen": false, "schema_version_field": true, "field_count": 5, "validators": []},
+    {"name": "SymbolState", "file": "aureon/models/system.py:72", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 7, "validators": [], "notes": "Carries last_quote: one current snapshot per symbol, overwritten in place (decision 80) — state, not a tick stream."},
+    {"name": "Heartbeat", "file": "aureon/models/system.py:47", "firestore_path_pattern": "heartbeats/{service}", "frozen": false, "schema_version_field": true, "field_count": 4, "validators": []},
+    {"name": "Candle", "file": "aureon/models/market.py:20", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 10, "validators": ["_ohlc_must_be_coherent"]},
+    {"name": "QuoteSnapshot", "file": "aureon/models/market.py:80", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 5, "validators": ["_utc", "_ask_not_below_bid"]},
+    {"name": "SymbolInfo", "file": "aureon/models/market.py:139", "firestore_path_pattern": "symbol_specs/{symbol}", "frozen": false, "schema_version_field": false, "field_count": 10, "validators": ["_volume_bounds_coherent"], "notes": "Stored via SymbolRepository although it is an AureonModel, not an AureonDocument, so this document carries NO schema_version field."},
+    {"name": "AccountInfo", "file": "aureon/models/broker.py:20", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 10, "validators": []},
+    {"name": "BrokerPosition", "file": "aureon/models/broker.py:35", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 13, "validators": []},
+    {"name": "BrokerOrder", "file": "aureon/models/broker.py:57", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 12, "validators": []},
+    {"name": "BrokerDeal", "file": "aureon/models/broker.py:74", "firestore_path_pattern": null, "frozen": false, "schema_version_field": false, "field_count": 16, "validators": []}
+  ],
+
+  "state_machines": [
+    {
+      "name": "trade_request",
+      "file": "aureon/models/enums.py:349",
+      "states": ["requested", "confirmed", "executing", "pending", "partially_filled", "filled", "cancelled", "expired", "failed", "failed_stale", "failed_reconciliation"],
+      "transitions": {
+        "requested": ["confirmed", "cancelled", "expired"],
+        "confirmed": ["executing", "cancelled", "failed_stale", "failed"],
+        "executing": ["filled", "partially_filled", "pending", "failed", "failed_reconciliation"],
+        "pending": ["filled", "partially_filled", "cancelled", "expired", "failed_reconciliation"],
+        "partially_filled": ["filled", "partially_filled", "cancelled", "expired", "failed_reconciliation"],
+        "filled": [],
+        "cancelled": [],
+        "expired": [],
+        "failed": [],
+        "failed_stale": [],
+        "failed_reconciliation": []
+      },
+      "terminal": ["filled", "cancelled", "expired", "failed", "failed_stale", "failed_reconciliation"],
+      "enforced_by": "assert_trade_request_transition",
+      "bypass_writes_found": [
+        "aureon/storage/trade_request_repository.py:431 — resolve() only calls assert_trade_request_transition when `current.status is not new_status`. A same-status write with updates/failure_code therefore writes without consulting the table. This is load-bearing by design for EXECUTING->EXECUTING (aureon/execution/execution_worker.py:155 stamps comment_token that way, and the code comment at :418 says an earlier early-return silently dropped it) and for re-entrant PARTIALLY_FILLED. The residual gap: a TERMINAL status can also be rewritten this way — resolve(FILLED, updates={...}) on an already-FILLED request mutates the document even though `filled` has no outgoing edges.",
+        "aureon/storage/trade_request_repository.py:176 — create() writes status=REQUESTED with from_status=None. A creation, not a transition; no prior state exists to validate."
+      ]
+    },
+    {
+      "name": "trade",
+      "file": "aureon/models/enums.py:398",
+      "states": ["open", "partially_closed", "closed"],
+      "transitions": {
+        "open": ["partially_closed", "closed"],
+        "partially_closed": ["partially_closed", "closed"],
+        "closed": []
+      },
+      "terminal": ["closed"],
+      "enforced_by": "assert_trade_transition",
+      "bypass_writes_found": [
+        "aureon/storage/trade_repository.py:182 — transition() calls assert_trade_transition only when `current.status is not new_status`; a same-status write with updates skips it. CLOSED is terminal, so transition(trade_id, CLOSED, updates={'realized_pnl': ...}) on an already-CLOSED trade rewrites a terminal document's fields.",
+        "aureon/storage/trade_repository.py:145 — upsert_open() sets status=OPEN on creation with from_status=None, and deliberately leaves an already-recorded position alone rather than overwriting it. A creation, not a transition.",
+        "aureon/storage/trade_repository.py:210 — update_excursion() writes excursion figures without changing status and is deliberately not audited (documented as such at that line)."
+      ]
+    },
+    {
+      "name": "control_request",
+      "file": "aureon/models/enums.py:412",
+      "states": ["requested", "executing", "completed", "failed", "failed_stale"],
+      "transitions": {
+        "requested": ["executing", "failed_stale"],
+        "executing": ["completed", "failed"],
+        "completed": [],
+        "failed": [],
+        "failed_stale": []
+      },
+      "terminal": ["completed", "failed", "failed_stale"],
+      "enforced_by": "assert_control_request_transition",
+      "bypass_writes_found": [
+        "aureon/storage/control_request_repository.py:120 — create() writes status=REQUESTED with from_status=None. A creation, not a transition."
+      ],
+      "notes": "resolve() (aureon/storage/control_request_repository.py:189) returns early on an unchanged status BEFORE writing, so unlike the two machines above it has no same-status bypass. It also does not verify the caller holds the lease, where trade_request_repository.resolve does (:410)."
+    },
+    {
+      "name": "horizon",
+      "file": "aureon/models/enums.py:405",
+      "states": ["pending", "complete", "invalid"],
+      "transitions": {
+        "pending": ["complete", "invalid"],
+        "complete": [],
+        "invalid": []
+      },
+      "terminal": ["complete", "invalid"],
+      "enforced_by": "assert_horizon_transition",
+      "bypass_writes_found": [],
+      "notes": "Not in the requested enum list but present in the code. In-memory tracker state, gated at aureon/evaluation/outcome_tracker.py:383 and :388 immediately before each assignment. A COMPLETE horizon is frozen so re-running the tracker cannot change it."
+    }
+  ],
+
+  "identity": {
+    "detection_id": {
+      "file": "aureon/models/identity.py:88",
+      "components": ["account_scope", "symbol", "timeframe", "agent_name", "event_key", "candle_time (UTC, microseconds dropped, isoformat)"],
+      "separator": "\u001f",
+      "hash": "sha256, full hex digest",
+      "length": 64,
+      "notes": "agent_version is deliberately EXCLUDED (decision 16, aureon/models/identity.py:66): a patch release re-running over history must upsert the same document, not mint a parallel detection for a candle that happened once. The separator is ASCII unit separator 0x1F, not '|', because event_key legitimately contains '|' (liquidity/breakout emit '{direction}|{level_type}') and with '|' the pairs ('up','a|b') and ('up|a','b') would hash alike (aureon/models/identity.py:28)."
+    },
+    "comment_token": {
+      "file": "aureon/models/identity.py:105",
+      "format": "'AUR:' + first 6 chars of base32(sha256(request_id))",
+      "length": 10,
+      "notes": "Deterministic on purpose: an executor that crashed mid-send re-derives the exact token it stamped and reconciliation searches the broker's order/deal history for it. Base32 to avoid case-folding and punctuation risks in a field that round-trips through a broker terminal. 10 chars is well inside MT5's 31-character comment field (decision 5)."
+    },
+    "account_scope_source": "aureon/config/config.py:161 — AUREON_ACCOUNT_SCOPE, default 'primary'. Threaded into AnalysisEngine (account_scope=), TradeRepository(account_scope=) and the detection_id hash. The Phase 1 decisions doc states it must be set before Phase 2 and never changed, because changing it re-keys every detection id and every trade id."
+  },
+
+  "agents": [
+    {
+      "name": "ema_cross", "version": "1.0.0", "file": "aureon/agents/ema_cross_agent.py:41",
+      "params": {"fast_period": 9, "slow_period": 21, "rsi_period": 14, "price_field": "close"},
+      "event_key_format": "bullish | bearish",
+      "emits_detections": true, "context_only": false,
+      "parity_test": "tests/replay/test_parity.py:211 test_every_agent_holds_replay_live_parity[ema_cross]",
+      "min_window": 64,
+      "notes": "The only agent that sets a direction (aureon/agents/ema_cross_agent.py:118). RSI is attached as context and never gates the detection."
+    },
+    {
+      "name": "rsi", "version": "1.0.0", "file": "aureon/agents/rsi_agent.py:44",
+      "params": {"rsi_period": 14, "overbought": 70.0, "oversold": 30.0, "price_field": "close"},
+      "event_key_format": "overbought_entry | overbought_exit | oversold_entry | oversold_exit",
+      "emits_detections": true, "context_only": true,
+      "parity_test": "tests/replay/test_parity.py:211 test_every_agent_holds_replay_live_parity[rsi]",
+      "min_window": 44,
+      "notes": "direction=None (aureon/agents/rsi_agent.py:135)."
+    },
+    {
+      "name": "session_trend", "version": "1.0.0", "file": "aureon/agents/session_trend_agent.py",
+      "params": {"timeframe": "M5", "point": 0.01, "max_session_hours": 8.0, "flat_points": 50.0, "include_off_session": false},
+      "event_key_format": "{session}|{trend}  e.g. london|up",
+      "emits_detections": true, "context_only": true,
+      "parity_test": "tests/replay/test_parity.py:211 test_every_agent_holds_replay_live_parity[session_trend]",
+      "min_window": 98,
+      "notes": "direction=None (aureon/agents/session_trend_agent.py:129)."
+    },
+    {
+      "name": "wick", "version": "1.0.0", "file": "aureon/agents/wick_agent.py",
+      "params": {"point": 0.01, "min_wick_range_ratio": 0.55, "min_wick_body_ratio": 1.5, "max_close_position": 0.35, "min_range_points": 20.0},
+      "event_key_format": "upper_rejection | lower_rejection",
+      "emits_detections": true, "context_only": true,
+      "parity_test": "tests/replay/test_parity.py:211 test_every_agent_holds_replay_live_parity[wick]",
+      "min_window": 1,
+      "notes": "direction=None (aureon/agents/wick_agent.py:122), so a wick rejection carries no tradeable side despite having a directional name."
+    },
+    {
+      "name": "liquidity", "version": "1.0.0", "file": "aureon/agents/liquidity_agent.py",
+      "params": {"timeframe": "M5", "point": 0.01, "min_penetration_points": 5.0, "min_rejection_fraction": 0.25},
+      "event_key_format": "{sweep_direction}|{level_type}  e.g. up|previous_day_high",
+      "emits_detections": true, "context_only": false,
+      "parity_test": "tests/replay/test_parity.py:211 test_every_agent_holds_replay_live_parity[liquidity]",
+      "min_window": 583,
+      "notes": "direction is the IMPLIED reversal (aureon/agents/liquidity_agent.py:176): event_key 'up|previous_day_high' carries direction=SELL. Shares one LevelTracker with breakout."
+    },
+    {
+      "name": "breakout", "version": "1.0.0", "file": "aureon/agents/breakout_agent.py",
+      "params": {"timeframe": "M5", "point": 0.01, "min_close_beyond_points": 10.0},
+      "event_key_format": "{break_direction}|{level_type}",
+      "emits_detections": true, "context_only": false,
+      "parity_test": "tests/replay/test_parity.py:211 test_every_agent_holds_replay_live_parity[breakout]",
+      "min_window": 583,
+      "notes": "direction=implied (aureon/agents/breakout_agent.py:134). Shares one LevelTracker with liquidity."
+    }
+  ],
+
+  "evaluation": {
+    "rules": [
+      {
+        "rule_id": "EMA_OUTCOME_V1",
+        "file": "aureon/evaluation/rules.py:41",
+        "horizons": ["c5 (candles 5)", "c10 (candles 10)", "c20 (candles 20)", "m60 (minutes 60)", "session_close", "day_close", "opposite_cross"],
+        "thresholds": [3.0, 5.0, 10.0, 15.0, 20.0],
+        "reference_price": "next_open"
+      }
+    ],
+    "pending_excluded_from_reviews": {
+      "enforced": true,
+      "how": "Three layers. (1) DetectionEvaluation exposes complete_horizons / pending_horizons / invalid_horizons, and aureon/reviews/aggregate.py:168 folds ONLY complete_horizons into the reached/evaluated counts. (2) A boundary test, tests/boundary/test_architecture_boundaries.py:194, is AST-precise and fails if any file under aureon/reviews reads `.horizons` on anything but a whitelisted receiver — verified to catch `evaluation.horizons`. (3) Every review carries pending_horizons_excluded and invalid_horizons_excluded (aureon/models/review.py:105-107) so the omitted count is reported beside the counted one. aureon/reviews/linking.py:classify returns UNKNOWN (never a miss) for a PENDING or INVALID horizon. Reverting layer (1) to fold pending horizons into the denominator is caught on four horizons by the baseline reconciliation (verified by planting it)."
+    },
+    "notes": "There is no separate evaluator service; the tracker runs inside the observer process (main_observer.py:130-170). Rules are frozen once shipped: register() raises if a rule_id is re-registered with a different definition (aureon/evaluation/rules.py:75). The Phase 2 baseline records a finding that these thresholds ($0.03-$0.20 on gold at point=0.01) are reached >=95% of the time in every horizon and that 463/470 path classifications are ambiguous, so they measure the scale rather than the strategy; the sanctioned fix is a new rule_id, never an edit (docs/PHASE2_BASELINE.md)."
+  },
+
+  "execution": {
+    "broker_interface_file": "aureon/execution/broker_interface.py:43",
+    "implementations": ["MT5Broker (aureon/execution/mt5_broker.py:82)", "FakeBroker (aureon/execution/fake_broker.py:85)"],
+    "claim_transaction": {
+      "file": "aureon/storage/trade_request_repository.py:256",
+      "function": "TradeRequestRepository.claim",
+      "sets_lease": true,
+      "notes": "CONFIRMED -> EXECUTING only; anything else raises ClaimRejected. Sets executor_instance_id, lease_expires_at (= now + lease_seconds) and execution_started_at inside the Firestore transaction. An expired confirmation is written FAILED_STALE inside the SAME transaction and the refusal is raised by the caller AFTER the commit (:286, :333) — raising inside would abort the transaction and roll the safety write back, leaving the request CONFIRMED and claimable later at a price the human never saw."
+    },
+    "confirm_transaction": {
+      "file": "aureon/storage/trade_request_repository.py:186",
+      "function": "TradeRequestRepository.confirm",
+      "checks_user_match": true,
+      "checks_quote_ttl": false,
+      "notes": "checks_user_match: aureon/storage/trade_request_repository.py:217 rejects any user_id != requested_by. checks_quote_ttl is false for THIS transaction: it SETS expires_at = now + confirmation_ttl_seconds but does not validate the age of the quote being confirmed. Quote age is gated twice elsewhere — aureon/discord/service.py:353 (check_confirm_press, which re-prompts rather than refusing) and aureon/execution/execution_guard.py:202 (rule_quote_fresh, at execution time). A duplicate confirm is a no-op returning the current document (:212), not a second transition."
+    },
+    "guard_rules": [
+      {"rule": "rule_trading_enabled", "file": "aureon/execution/execution_guard.py:107", "failure_code": "trading_disabled", "unit_test": "tests/unit/test_execution_guard.py:111 test_trading_disabled_blocks_everything"},
+      {"rule": "rule_symbol_allowed", "file": "aureon/execution/execution_guard.py:123", "failure_code": "symbol_not_tradeable", "unit_test": "tests/unit/test_execution_guard.py:124 test_a_symbol_outside_the_allowlist_is_refused"},
+      {"rule": "rule_confirmation_fresh", "file": "aureon/execution/execution_guard.py:138", "failure_code": "confirmation_expired", "unit_test": "tests/unit/test_execution_guard.py:137 test_an_expired_confirmation_is_refused"},
+      {"rule": "rule_market_open", "file": "aureon/execution/execution_guard.py:157", "failure_code": "market_closed", "unit_test": "tests/unit/test_execution_guard.py:154 test_only_an_open_market_is_tradeable (parametrized over PREOPEN/STALE/UNKNOWN/CLOSED)"},
+      {"rule": "rule_symbol_available", "file": "aureon/execution/execution_guard.py:175", "failure_code": "symbol_not_found | symbol_not_tradeable", "unit_test": "tests/unit/test_execution_guard.py:165 test_a_missing_symbol_is_refused; :170 test_a_close_only_symbol_cannot_open_a_position"},
+      {"rule": "rule_quote_available", "file": "aureon/execution/execution_guard.py:192", "failure_code": "stale_quote", "unit_test": "tests/unit/test_execution_guard.py:176 test_a_missing_quote_is_refused"},
+      {"rule": "rule_quote_fresh", "file": "aureon/execution/execution_guard.py:202", "failure_code": "stale_quote", "unit_test": "tests/unit/test_execution_guard.py:182 test_a_stale_execution_quote_is_refused"},
+      {"rule": "rule_spread_within_limit", "file": "aureon/execution/execution_guard.py:221", "failure_code": "spread_limit", "unit_test": "tests/unit/test_execution_guard.py:189 test_a_spread_over_the_limit_is_refused; :194 test_an_unmeasurable_spread_fails_closed"},
+      {"rule": "rule_price_has_not_run_away", "file": "aureon/execution/execution_guard.py:246", "failure_code": "deviation_exceeded", "unit_test": "tests/unit/test_execution_guard.py:204 test_price_running_away_from_the_confirmation_is_refused; :211 test_price_moving_in_the_humans_favour_is_allowed"},
+      {"rule": "rule_volume_valid", "file": "aureon/execution/execution_guard.py:283", "failure_code": "volume_invalid", "unit_test": "tests/unit/test_execution_guard.py:232 test_an_off_step_volume_is_refused"},
+      {"rule": "rule_volume_within_max_lot", "file": "aureon/execution/execution_guard.py:294", "failure_code": "max_lot_exceeded", "unit_test": "tests/unit/test_execution_guard.py:237 test_a_volume_over_max_lot_is_refused"},
+      {"rule": "rule_filling_mode_supported", "file": "aureon/execution/execution_guard.py:305", "failure_code": "filling_mode_unsupported", "unit_test": "tests/unit/test_execution_guard.py:242 test_an_unsupported_filling_mode_is_refused"},
+      {"rule": "rule_stops_valid", "file": "aureon/execution/execution_guard.py:318", "failure_code": "invalid_stops | stops_too_close", "unit_test": "tests/unit/test_execution_guard.py:248 test_a_stop_on_the_wrong_side_is_refused; :254 test_a_stop_inside_the_brokers_minimum_distance_is_refused; :259 test_valid_stops_pass"},
+      {"rule": "rule_pending_entry_valid", "file": "aureon/execution/execution_guard.py:336", "failure_code": "invalid_stops", "unit_test": "tests/unit/test_execution_guard.py:263 test_a_pending_entry_on_the_wrong_side_is_refused; :270 test_a_valid_pending_entry_passes"},
+      {"rule": "rule_margin_sufficient", "file": "aureon/execution/execution_guard.py:357", "failure_code": "insufficient_margin", "unit_test": "tests/unit/test_execution_guard.py:277 test_insufficient_margin_is_refused; :283 test_an_unknown_margin_requirement_does_not_block"},
+      {"rule": "rule_within_open_position_limit", "file": "aureon/execution/execution_guard.py:376", "failure_code": "max_open_positions", "unit_test": "tests/unit/test_execution_guard.py:289 test_the_open_position_limit_is_enforced"},
+      {"rule": "rule_within_daily_trade_limit", "file": "aureon/execution/execution_guard.py:387", "failure_code": "max_daily_trades", "unit_test": "tests/unit/test_execution_guard.py:294 test_the_daily_trade_limit_is_enforced"}
+    ],
+    "guard_notes": "17 rules, run in order by check() (aureon/execution/execution_guard.py:424); EVERY rule must pass and the first refusal wins — order affects only which reason a human is shown. The registered list is itself pinned by tests/unit/test_execution_guard.py:100 test_the_guard_has_all_its_rules_registered, and :312 test_the_guard_is_pure. On success the guard CLAMPS deviation to max_deviation_points and never widens it (:448, test at :216). IMPORTANT: this rule list is inferred, not ratified — docs/ARCHITECTURE.md §41/§56/§57 have never existed in this repository, and docs/PHASE1_DECISIONS.md decision 55 logs all 17 as inferred.",
+    "reconciliation": {
+      "file": "aureon/execution/reconciliation_service.py:88",
+      "matches_on": ["symbol", "magic", "comment (== comment_token)", "direction (order_type.direction)", "volume <= request.volume + tolerance"],
+      "grace_seconds": 120.0,
+      "never_resends": {
+        "verified_by_test": "tests/failure_injection/test_exactly_once_acceptance.py:220 test_the_reconciler_never_places_an_order"
+      },
+      "notes": "Verified by grep: aureon/execution/reconciliation_service.py contains no call to send_market_order, send_pending_order, cancel_order or close_position. No match before the grace period elapses leaves the request EXECUTING and reports 'no match yet' (:173); only past the grace does it become FAILED_RECONCILIATION (:184). Several broker records matching one token is FAILED_RECONCILIATION / reconciliation_ambiguous rather than a guess (:158, test tests/failure_injection/test_scenarios.py:435). grace_seconds default DEFAULT_GRACE_SECONDS = 120.0 (:53), overridable by AUREON_RECONCILE_GRACE_SECONDS."
+    },
+    "magic_source": "aureon/config/config.py:164 — AUREON_MAGIC, default 770177 (config field aureon_magic at :72). Passed to ExecutionWorker(magic=), ReconciliationService(magic=), PositionMonitor(magic=) and stamped on every BrokerOrderRequest.",
+    "comment_set_on_every_order": true,
+    "comment_notes": "aureon/execution/execution_worker.py:148 sets comment=token on the single BrokerOrderRequest the worker builds; there is no other construction site in aureon/execution. The token is persisted to the request BEFORE the send (:152-166) precisely so a crash leaves reconciliation something to search for.",
+    "exactly_once_layers": [
+      "SendGuard (aureon/execution/idempotency.py:32) registers the request id BEFORE sending and raises AlreadySent on a second attempt in the same process. In-memory only — a dict guarded by a lock — so it does NOT survive a restart.",
+      "The durable layer that does survive: the status is written to EXECUTING inside the claim transaction before any send, and claim() refuses anything not CONFIRMED, so a restarted process cannot re-claim an in-flight request.",
+      "An unknown broker result leaves the request EXECUTING for reconciliation and never retries (aureon/execution/execution_worker.py:174-190)."
+    ]
+  },
+
+  "positions": {
+    "monitor_file": "aureon/positions/position_monitor.py:86",
+    "poll_seconds": 2.0,
+    "close_matching_uses": ["position_id"],
+    "close_matching_notes": "Closes are matched on mt5_position_id plus the deal's entry type (aureon/positions/deal_reconciler.py:13, :103 summarise_position filters deals by d.position_id). The comment token is used for a different job: finding which REQUEST opened a position, via the entry deal (aureon/positions/position_monitor.py:281-284), and for resolving pending orders (aureon/positions/pending_order_monitor.py:98). So: position_id for closes, comment for attribution.",
+    "external_trades_imported": true,
+    "external_trades_notes": "aureon/positions/position_monitor.py:213 — a position whose magic != Aureon's, or with no matching request, is recorded with source=EXTERNAL_MT5 and trade_request_id=None. Observed and reported on, never managed (:25).",
+    "excursion_sources_supported": ["live_ticks", "reconstructed"],
+    "excursion_notes": "aureon/models/enums.py ExcursionSource. Live via ExcursionTracker.on_quote (aureon/positions/excursion_tracker.py:116); reconstructed from M1 candles via reconstruct_from_candles (:145), used at monitor startup for positions that were open while the monitor was down (main_monitor.py:97). Once a stored excursion is RECONSTRUCTED the tracker keeps that source (:99).",
+    "partial_close_supported": true,
+    "partial_close_notes": "aureon/positions/position_monitor.py:406 _apply_partial_closes, with PARTIALLY_CLOSED re-entrant in the state machine (aureon/models/enums.py:400) so 0.25 -> 0.10 -> 0.05 is three closes. PollResult.partially_closed tracks them (:67)."
+  },
+
+  "discord": {
+    "commands": [
+      {"name": "/execute-trade", "file": "aureon/discord/commands/execute_trade.py:176", "authorized_only": true, "defers": true, "writes": ["trade_requests"]},
+      {"name": "/cancel-order", "file": "aureon/discord/commands/control.py:100", "authorized_only": true, "defers": true, "writes": ["control_requests"]},
+      {"name": "/close-trade", "file": "aureon/discord/commands/control.py:105", "authorized_only": true, "defers": true, "writes": ["control_requests"]},
+      {"name": "/status", "file": "aureon/discord/commands/status.py:78", "authorized_only": true, "defers": true, "writes": []},
+      {"name": "/trading status", "file": "aureon/discord/commands/trading.py:84", "authorized_only": true, "defers": true, "writes": []},
+      {"name": "/trading disable", "file": "aureon/discord/commands/trading.py:88", "authorized_only": true, "defers": true, "writes": ["settings", "audit_logs"]},
+      {"name": "/trading enable", "file": "aureon/discord/commands/trading.py:93", "authorized_only": true, "defers": true, "writes": ["settings", "audit_logs"]}
+    ],
+    "command_notes": "Every handler carries @requires_authorization (aureon/discord/bot.py) and defers within three seconds before any Firestore read. The confirm button in aureon/discord/views/confirm_view.py:85 writes trade_requests (confirm) and :177 writes settings (enable). /trading disable takes effect immediately with NO confirmation step, while enable requires a confirming press (decision 84) — the safe direction has no speed bump.",
+    "calls_broker": false,
+    "computes_indicators": false,
+    "boundary_evidence": "tests/boundary/test_architecture_boundaries.py:155 (no MetaTrader5, no mt5_broker, no engine.indicators, no order_send/send_market_order/send_pending_order anywhere under aureon/discord), :287 (cannot import the repositories that write detections, evaluations, sessions or reviews), :321 (BotContext has no broker or provider field or annotation). Verified by grep: zero broker calls in aureon/discord.",
+    "confirm_identity_check": {
+      "implemented": true,
+      "file": "aureon/discord/service.py:338"
+    },
+    "confirm_identity_notes": "Checked twice, independently. aureon/discord/service.py:338 (check_confirm_press) rejects a press by anyone but request.requested_by — Discord messages are channel-visible, so this is not hypothetical — and aureon/storage/trade_request_repository.py:217 rejects it again inside the confirm transaction, so a UI bypass still cannot confirm someone else's money. Tests: tests/failure_injection/test_scenarios.py:175 test_scenario_c_variant_only_the_requester_may_confirm."
+  },
+
+  "storage": {
+    "repositories": [
+      {"name": "TradeRequestRepository", "file": "aureon/storage/trade_request_repository.py", "collections": ["trade_requests", "audit_logs"], "uses_transactions": true},
+      {"name": "TradeRepository", "file": "aureon/storage/trade_repository.py", "collections": ["trades", "audit_logs"], "uses_transactions": true},
+      {"name": "ControlRequestRepository", "file": "aureon/storage/control_request_repository.py", "collections": ["control_requests", "audit_logs"], "uses_transactions": true},
+      {"name": "DetectionRepository", "file": "aureon/storage/detection_repository.py", "collections": ["detections"], "uses_transactions": false},
+      {"name": "EvaluationRepository", "file": "aureon/storage/evaluation_repository.py", "collections": ["detection_evaluations"], "uses_transactions": false},
+      {"name": "SessionRepository", "file": "aureon/storage/session_repository.py", "collections": ["sessions"], "uses_transactions": false},
+      {"name": "ReviewRepository", "file": "aureon/storage/review_repository.py", "collections": ["daily_reviews", "weekly_reviews"], "uses_transactions": false},
+      {"name": "ReviewReader", "file": "aureon/storage/review_reader.py", "collections": ["daily_reviews", "weekly_reviews"], "uses_transactions": false},
+      {"name": "ExecutionSettingsRepository", "file": "aureon/storage/settings_repository.py", "collections": ["settings", "audit_logs"], "uses_transactions": false},
+      {"name": "SymbolRepository", "file": "aureon/storage/symbol_repository.py", "collections": ["symbol_specs"], "uses_transactions": false},
+      {"name": "SystemStateRepository", "file": "aureon/storage/system_state_repository.py", "collections": ["system_state"], "uses_transactions": false},
+      {"name": "HeartbeatRepository", "file": "aureon/storage/system_state_repository.py:64", "collections": ["heartbeats"], "uses_transactions": false}
+    ],
+    "repository_notes": "ReviewReader is write-free by construction and is what the Discord BotContext holds instead of ReviewRepository (aureon/discord/context.py:52), so /status cannot overwrite a review. The three money/state repositories use Firestore transactions and write their audit row INSIDE the same transaction (tests/failure_injection/test_scenarios.py:384). ExecutionSettingsRepository.set_trading_enabled does NOT use a transaction: it reads, writes the settings document, then writes the audit row as a separate call (aureon/storage/settings_repository.py:66-92) — see risk_flags.",
+    "raw_firestore_calls_outside_storage": [
+      "aureon/discord/result_listener.py:66 — self._client.document(paths.trade_request_path(...)).on_snapshot(...). A READ (listener).",
+      "aureon/reviews/service.py:89 — self._client.collection(paths.DETECTIONS).stream(). A READ, and an unbounded full-collection scan filtered in Python.",
+      "aureon/reviews/service.py:111 — self._client.document(f'{paths.DETECTION_EVALUATIONS}/{doc_id}').get(). A READ.",
+      "aureon/reviews/service.py:126 — self._client.collection(paths.TRADES).stream(). A READ, full-collection scan.",
+      "aureon/reviews/service.py:140 — self._client.collection(paths.SESSIONS).stream(). A READ, full-collection scan.",
+      "aureon/execution/execution_worker.py:357 — _where(self.repository._client.collection(paths.TRADE_REQUESTS), 'status','==','confirmed') then on_snapshot. A READ, and it reaches into the repository's PRIVATE _client (carries `# noqa: SLF001`)."
+    ],
+    "raw_call_notes": "All six are reads; grep for `).set(`, `).update(`, `).delete(` outside aureon/storage returns nothing, so the 'writes go through repositories' half of the CLAUDE.md rule holds. The 'no raw client calls elsewhere' half does not. The existing guard (tests/boundary/test_architecture_boundaries.py:177) only checks that nobody OUTSIDE aureon/storage imports google.cloud.firestore or firebase_admin — it does not check for .collection()/.document() calls on an injected client, so none of these six is caught.",
+    "outbox": {
+      "file": "aureon/outbox/local_outbox.py",
+      "backend": "sqlite",
+      "delivered_after_success_only": true,
+      "notes": "SQLite with PRAGMA journal_mode=WAL and PRAGMA synchronous=FULL (aureon/outbox/local_outbox.py:87-88). delivered_at is set only by mark_delivered, documented and implemented as 'called ONLY after the remote write succeeded' (:138). A failed attempt calls record_failure, which keeps the row undelivered (:148). Rows are never deleted on delivery, only marked; an already-delivered row is never resurrected (:100). Partial index on undelivered rows (:49)."
+    }
+  },
+
+  "config": {
+    "env_vars": [
+      {"name": "AUREON_ACCOUNT_SCOPE", "default": "primary", "used_in": "aureon/config/config.py:161"},
+      {"name": "AUREON_MARKET_TZ", "default": "Europe/Athens", "used_in": "aureon/config/config.py:163"},
+      {"name": "AUREON_SYMBOLS", "default": "(\"XAUUSD\",)", "used_in": "aureon/config/config.py:157"},
+      {"name": "AUREON_TIMEFRAMES", "default": "(\"M5\",)", "used_in": "aureon/config/config.py:158"},
+      {"name": "AUREON_MAGIC", "default": "770177", "used_in": "aureon/config/config.py:164"},
+      {"name": "AUREON_STATE_HEARTBEAT_SECONDS", "default": "5.0", "used_in": "aureon/config/config.py:166"},
+      {"name": "AUREON_OUTBOX_PATH", "default": "outbox.db", "used_in": "aureon/config/config.py:167"},
+      {"name": "AUREON_OBSERVER_STATE_PATH", "default": "observer_state.json", "used_in": "aureon/config/config.py:168"},
+      {"name": "AUREON_CONFIRMATION_TTL_SECONDS", "default": "60.0", "used_in": "aureon/config/config.py:170"},
+      {"name": "AUREON_QUOTE_TTL_SECONDS", "default": "15.0", "used_in": "aureon/config/config.py:171"},
+      {"name": "AUREON_STATUS_STALE_AFTER_SECONDS", "default": "45.0", "used_in": "aureon/config/config.py:172"},
+      {"name": "AUREON_MAX_DEVIATION_POINTS", "default": "20", "used_in": "aureon/config/config.py:173"},
+      {"name": "AUREON_MAX_SPREAD_POINTS", "default": "50.0", "used_in": "aureon/config/config.py:174"},
+      {"name": "AUREON_MAX_LOT", "default": "1.0", "used_in": "aureon/config/config.py:175"},
+      {"name": "AUREON_EXECUTOR_LEASE_SECONDS", "default": "60.0", "used_in": "aureon/config/config.py:176"},
+      {"name": "AUREON_EXECUTOR_POLL_SECONDS", "default": "2.0", "used_in": "aureon/config/config.py:177"},
+      {"name": "AUREON_RECONCILE_GRACE_SECONDS", "default": "120.0", "used_in": "aureon/config/config.py:178"},
+      {"name": "AUREON_MONITOR_POLL_SECONDS", "default": "2.0", "used_in": "aureon/config/config.py:179"},
+      {"name": "AUREON_EVALUATION_RULE_ID", "default": "EMA_OUTCOME_V1", "used_in": "aureon/config/config.py:180"},
+      {"name": "AUREON_LINK_WINDOW_MINUTES", "default": "90", "used_in": "aureon/config/config.py:188"},
+      {"name": "AUREON_INFER_WINDOW_MINUTES", "default": "30", "used_in": "aureon/config/config.py:189"},
+      {"name": "AUREON_FIREBASE_PROJECT_ID", "default": null, "used_in": "aureon/config/config.py:182"},
+      {"name": "AUREON_DISCORD_TOKEN", "default": null, "used_in": "aureon/config/config.py:185 (Field repr=False); required by main_discord.py:35"},
+      {"name": "AUREON_DISCORD_GUILD_ID", "default": null, "used_in": "aureon/config/config.py:186"},
+      {"name": "AUREON_AUTHORIZED_USER_IDS", "default": null, "used_in": "aureon/config/config.py:187; an empty allowlist refuses to start (main_discord.py:32)"},
+      {"name": "AUREON_MT5_LOGIN", "default": null, "used_in": "aureon/config/config.py:190"},
+      {"name": "AUREON_MT5_PASSWORD", "default": null, "used_in": "aureon/config/config.py:191 (Field repr=False)"},
+      {"name": "AUREON_MT5_SERVER", "default": null, "used_in": "aureon/config/config.py:192"},
+      {"name": "AUREON_MT5_TERMINAL_PATH", "default": null, "used_in": "aureon/config/config.py:193"},
+      {"name": "GOOGLE_APPLICATION_CREDENTIALS", "default": null, "used_in": "aureon/config/config.py:183; aureon/storage/firebase_service.py:71"},
+      {"name": "FIRESTORE_EMULATOR_HOST", "default": null, "used_in": "aureon/config/config.py:184; set on the process by aureon/storage/firebase_service.py:58; gates the emulator test suite (tests/failure_injection/conftest.py:52)"}
+    ],
+    "secrets_in_code": [],
+    "secrets_notes": "Grep for literal assignments to password/token/secret/api_key found nothing. mt5_password and discord_token are declared with Field(repr=False) and listed in _SECRET_FIELDS (aureon/config/config.py:25), so a config repr in a traceback cannot leak them. All 31 variables above appear in .env.example.",
+    "session_config_version": "1 (aureon/config/sessions.py:22, SESSION_CONFIG_VERSION; stamped on every SessionContext and SessionSummary so a later boundary change cannot silently reinterpret a stored document)",
+    "market_timezone_default": "Europe/Athens (aureon/config/config.py:163, overridable by AUREON_MARKET_TZ)",
+    "session_boundaries": "asia 02:00-10:00, london 10:00-18:00, new_york 15:00-23:00 market-local, resolved with precedence london -> new_york -> asia (aureon/config/sessions.py:49-58), anything else 'off'."
+  },
+
+  "tests": {
+    "total": 684,
+    "by_dir": {
+      "unit": 552,
+      "integration": 0,
+      "failure_injection": 101,
+      "replay": 21,
+      "boundary": 10
+    },
+    "by_dir_notes": "There is no tests/integration directory; the emulator-backed integration tests live in tests/failure_injection. 'boundary' is added because tests/boundary exists and its 10 tests would otherwise be unreported. 552+101+21+10 = 684.",
+    "failure_injection_scenarios_present": ["A", "B", "C", "D", "E", "F", "G", "H"],
+    "scenario_files": {
+      "A": "tests/failure_injection/test_scenarios.py:40 crash after send reconciles to one execution (+ variant :77 crash before send fails cleanly)",
+      "B": "tests/failure_injection/test_scenarios.py:102 two workers -> one claim, one execution (+ :119 concurrent claims from threads)",
+      "C": "tests/failure_injection/test_scenarios.py:153 five confirms -> one transition, one execution (+ :175 only the requester may confirm)",
+      "D": "tests/failure_injection/test_scenarios.py:194 a stale confirmation fails and never executes",
+      "E": "tests/failure_injection/test_scenarios.py:217 polling picks up what the listener missed",
+      "F": "tests/failure_injection/test_scenarios.py:236 crash mid-reconciliation still settles on one (+ :264 reconciling twice is idempotent)",
+      "G": "tests/failure_injection/test_scenarios.py:285 a pending order that fills during cancel is filled, not cancelled",
+      "H": "tests/failure_injection/test_scenarios.py:313 closing an already-closed position opens nothing"
+    },
+    "exactly_once_acceptance": {
+      "file": "tests/failure_injection/test_exactly_once_acceptance.py",
+      "n": 50,
+      "seeds": 20
+    },
+    "acceptance_notes": "N_REQUESTS = 50 (:34), SEEDS = tuple(range(20)) (:35), each request independently assigned a failure mode from a seeded RNG (:113). Seeds are fixed so a failure replays exactly. Four tests: :104 exactly-once under randomised failure, :155 every valid request executes exactly once (first 5 seeds), :194 no request is ever left EXECUTING after reconciliation, :220 the reconciler never places an order.",
+    "boundary_tests": [
+      "tests/boundary/test_architecture_boundaries.py:71 test_observer_side_never_imports_execution",
+      "tests/boundary/test_architecture_boundaries.py:88 test_observer_side_has_no_order_placing_calls",
+      "tests/boundary/test_architecture_boundaries.py:110 test_metatrader5_imported_only_in_the_two_permitted_modules",
+      "tests/boundary/test_architecture_boundaries.py:128 test_permitted_mt5_modules_import_it_lazily",
+      "tests/boundary/test_architecture_boundaries.py:155 test_discord_never_touches_broker_or_indicators",
+      "tests/boundary/test_architecture_boundaries.py:177 test_firestore_clients_are_built_only_in_storage",
+      "tests/boundary/test_architecture_boundaries.py:194 test_reviews_never_read_horizons_directly",
+      "tests/boundary/test_architecture_boundaries.py:248 test_reviews_never_write_the_records_they_analyse",
+      "tests/boundary/test_architecture_boundaries.py:287 test_discord_writes_only_what_it_is_permitted_to",
+      "tests/boundary/test_architecture_boundaries.py:321 test_discord_holds_no_broker_or_data_provider"
+    ],
+    "requires_emulator": [
+      "tests/failure_injection/conftest.py:42 (pytestmark applies to the package)",
+      "tests/failure_injection/test_scenarios.py:30",
+      "tests/failure_injection/test_exactly_once_acceptance.py:32",
+      "tests/failure_injection/test_position_lifecycle.py:34",
+      "tests/failure_injection/test_discord_flows.py:42",
+      "tests/failure_injection/test_review_flows.py:52"
+    ],
+    "requires_mt5": [],
+    "requires_mt5_notes": "The 'mt5' marker is declared in pyproject.toml:40 but NO test uses it. Nothing in the suite exercises a real MT5 terminal; the MT5-only legs of the Phase 2/4/5/6 gates are unproven (docs/PHASES.md).",
+    "last_run": {
+      "command": "pytest -q -rs (no FIRESTORE_EMULATOR_HOST)",
+      "passed": 583,
+      "failed": 0,
+      "skipped": 101
+    },
+    "last_run_with_emulator": {
+      "command": "FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GOOGLE_CLOUD_PROJECT=aureon-test no_grpc_proxy=127.0.0.1,localhost pytest -q -rs",
+      "passed": 684,
+      "failed": 0,
+      "skipped": 0,
+      "duration_seconds": 493.46
+    },
+    "skipped_without_emulator": "All 101 tests under tests/failure_injection, each reporting 'FIRESTORE_EMULATOR_HOST is not set...' from the session fixture at tests/failure_injection/conftest.py:52. The skip is loud and module-level by design: a green run that proved nothing would be worse than a red one.",
+    "run_notes": "Plain run 458.74s, emulator run 493.46s. ~6 minutes of each is the 21 tests in tests/replay: test_every_agent_holds_replay_live_parity takes 20.7-23.5s per agent because aureon/engine/levels.py:152 does pandas DatetimeIndex.floor work over a 583-bar window on every candle."
+  },
+
+  "spec_compliance": {
+    "architecture_md_present": false,
+    "invariants_source": "docs/ARCHITECTURE.md DOES NOT EXIST in this repository (docs/ contains only CONTRACTS.md, PHASE0_STATUS.md, PHASE1_DECISIONS.md, PHASE2_BASELINE.md, PHASES.md). §79 could not be read, so the eight invariants below are the non-negotiables enumerated in CLAUDE.md, which is the actual normative list the code was built against. Each is evaluated individually against the code. Every '§' in this file is a citation copied from a code docstring, not a verified spec reading.",
+    "invariants": [
+      {
+        "name": "A detection never creates a trade; no broker call from observer, agents, engine, evaluation or reviews",
+        "spec_section": "§ unavailable (CLAUDE.md non-negotiable 1)",
+        "status": "enforced",
+        "evidence": "Two guards, both structural. tests/boundary/test_architecture_boundaries.py:71 fails if any file under aureon/{agents,engine,outbox,data,evaluation,reviews} imports aureon.execution at all (AST-based, so a lazy in-function import is caught); :88 additionally fails on any textual mention of order_send/BrokerInterface/send_market_order/send_pending_order in those packages. Confirmed by grep: order_send appears only in aureon/execution/mt5_broker.py (lines 217, 221, 224, 257, 296)."
+      },
+      {
+        "name": "Execution only from CONFIRMED, via a Firestore transaction that sets the executor lease; unknown broker result reconciles, never retries",
+        "spec_section": "§ unavailable (CLAUDE.md non-negotiable 2)",
+        "status": "enforced",
+        "evidence": "aureon/storage/trade_request_repository.py:256 claim() refuses any status but CONFIRMED and sets executor_instance_id + lease_expires_at + execution_started_at inside the transaction. aureon/execution/execution_worker.py:174-190: a BrokerError or unexpected exception leaves the status EXECUTING and increments left_executing, never re-sends. aureon/execution/idempotency.py:39 registers the send BEFORE it happens. Reconciliation places no orders (verified by grep and by tests/failure_injection/test_exactly_once_acceptance.py:220). Proven end to end by scenarios A-H and 20 seeds x 50 requests."
+      },
+      {
+        "name": "All state changes go through assert_transition; never write a status field without it",
+        "spec_section": "§ unavailable (CLAUDE.md non-negotiable 3)",
+        "status": "partial",
+        "evidence": "Every genuine status CHANGE is gated: aureon/storage/trade_request_repository.py:225, :292, :317, :434; trade_repository.py:183; control_request_repository.py:148, :192; evaluation/outcome_tracker.py:383, :388. The gap: trade_request_repository.py:431 and trade_repository.py:182 call the assert only when `current.status is not new_status`, so a SAME-status write carrying updates bypasses the table. That path is load-bearing by design (EXECUTING->EXECUTING stamps comment_token; PARTIALLY_FILLED is re-entrant), but it also means a TERMINAL document's other fields can be rewritten — resolve(FILLED, updates={...}) on a FILLED request, or transition(CLOSED, updates={...}) on a CLOSED trade, both write. No test pins terminality against that path."
+      },
+      {
+        "name": "Money-moving logic depends on BrokerInterface, never MetaTrader5 directly; only mt5_provider.py and mt5_broker.py may import MetaTrader5",
+        "spec_section": "§ unavailable (CLAUDE.md non-negotiable 4)",
+        "status": "enforced",
+        "evidence": "grep for `import MetaTrader5` across the repository returns exactly two code sites: aureon/data/mt5_provider.py:108 and aureon/execution/mt5_broker.py:105, both inside a function. tests/boundary/test_architecture_boundaries.py:110 enforces the two-module allowlist over every file under aureon/, and :128 separately enforces that both import it LAZILY (module-scope only, not ast.walk), which is what lets the whole suite run on Linux. Both concrete brokers subclass BrokerInterface (aureon/execution/mt5_broker.py:82, fake_broker.py:85)."
+      },
+      {
+        "name": "Every timestamp is tz-aware; MarketTime for stored records; never datetime.now() without tz, never local OS time",
+        "spec_section": "§ unavailable (CLAUDE.md non-negotiable 5)",
+        "status": "enforced",
+        "evidence": "aureon/models/base.py:43 to_utc() raises on a naive datetime, and UtcDatetime (:30) applies it at validation time, so a naive value cannot reach Firestore. utc_now() (:34) is the single sanctioned clock and returns datetime.now(UTC). grep for datetime.now()/utcnow()/time.time()/date.today() across aureon/, main_*.py and scripts/ finds exactly two calls, both tz-aware: base.py:40 (datetime.now(UTC)) and aureon/data/historical_provider.py:191 (datetime.now(UTC), a fallback when a fixture has no candles). MarketTime validates its zone exists (:104) and derives the market rendering rather than storing it."
+      },
+      {
+        "name": "Detections are immutable; outcomes live in detection_evaluations; no Detection field encodes future information",
+        "spec_section": "§ unavailable (CLAUDE.md non-negotiable 6)",
+        "status": "enforced",
+        "evidence": "Detection is the only document model with frozen=True (aureon/models/detection.py:87). Outcomes live in a separate collection keyed {detection_id}__{rule_id} (aureon/storage/paths.py:detection_evaluation_path). Reviewing all 17 Detection fields (:89-122): detected_at is the candle CLOSE ('when this became known'), price is the close price at detection, and indicators/levels/session/sequence are all as-of that candle — none reads forward. The tracker is independently prevented from measuring a detection against its own candle (aureon/evaluation/backfill.py:14-18)."
+      },
+      {
+        "name": "Firestore writes go through aureon/storage repositories only; no raw client calls elsewhere; tick data never goes to Firestore",
+        "spec_section": "§ unavailable (CLAUDE.md non-negotiable 7)",
+        "status": "partial",
+        "evidence": "The WRITE half holds: grep for `).set(` / `).update(` / `).delete(` outside aureon/storage returns nothing. The 'no raw client calls elsewhere' half does NOT: six raw read call sites exist outside storage (aureon/reviews/service.py:89, :111, :126, :140; aureon/discord/result_listener.py:66; aureon/execution/execution_worker.py:357, which also reaches into the repository's private _client). The existing boundary test (:177) only checks that nobody outside storage IMPORTS a Firestore SDK, so it catches none of them. Tick data: no ticks collection exists in aureon/storage/paths.py; the one live quote is a single overwritten SymbolState.last_quote field (decision 80), which is state rather than a stream."
+      },
+      {
+        "name": "Discord never calls the broker and never computes indicators; it reads Firestore and writes only trade_requests, settings.trading_enabled and audit_logs",
+        "spec_section": "§ unavailable (CLAUDE.md non-negotiable 8)",
+        "status": "partial",
+        "evidence": "The broker/indicator half is fully enforced: tests/boundary/test_architecture_boundaries.py:155 and :321, plus grep (zero broker calls under aureon/discord). The write scope is BROADER than the sentence allows: Discord also writes control_requests (aureon/discord/commands/control.py:86). That is deliberate and documented — CLAUDE.md's list predates Phase 6, and the boundary test at :251 explicitly names control_requests as how §46/§47 ask for cancels and closes to be requested — but the code and the CLAUDE.md sentence do not match as written. Status is 'partial' for that reason alone, not because of an unsafe capability: the executor still performs the action under the same claim/lease discipline, and Discord never reports the outcome from its own return (decision 85)."
+      }
+    ],
+    "mismatches": [
+      {
+        "spec_section": "§ unavailable — docs/ARCHITECTURE.md",
+        "spec_says": "CLAUDE.md line 3 instructs 'Read docs/ARCHITECTURE.md (frozen, §94) ... before any change', and every phase prompt and most code docstrings cite it by section number.",
+        "code_does": "The file does not exist and never has. docs/ contains only CONTRACTS.md, PHASE0_STATUS.md, PHASE1_DECISIONS.md, PHASE2_BASELINE.md and PHASES.md. Every § citation in the codebase is therefore unverifiable against a source, and docs/PHASES.md records a standing caveat saying so.",
+        "file": "CLAUDE.md:3; docs/PHASES.md:35"
+      },
+      {
+        "spec_section": "§ unavailable (CLAUDE.md non-negotiable 8)",
+        "spec_says": "Discord 'writes only trade_requests, settings.trading_enabled and audit_logs'.",
+        "code_does": "Discord also creates control_requests documents for /cancel-order and /close-trade.",
+        "file": "aureon/discord/commands/control.py:86; sanctioned at tests/boundary/test_architecture_boundaries.py:251"
+      },
+      {
+        "spec_section": "§ unavailable (CLAUDE.md non-negotiable 7)",
+        "spec_says": "'No raw client calls elsewhere' than aureon/storage.",
+        "code_does": "Six raw Firestore read calls outside aureon/storage, and the boundary guard checks SDK imports rather than call sites, so none is caught.",
+        "file": "aureon/reviews/service.py:89,111,126,140; aureon/discord/result_listener.py:66; aureon/execution/execution_worker.py:357"
+      },
+      {
+        "spec_section": "§ unavailable (CLAUDE.md non-negotiable 3)",
+        "spec_says": "'Never write a status field without' assert_transition.",
+        "code_does": "A same-status write carrying updates writes the status field without consulting the transition table, which also permits rewriting a terminal document's other fields.",
+        "file": "aureon/storage/trade_request_repository.py:431; aureon/storage/trade_repository.py:182"
+      },
+      {
+        "spec_section": "§21 (as cited in aureon/evaluation/rules.py:9)",
+        "spec_says": "EMA_OUTCOME_V1 is frozen; a retuned threshold is a new rule_id, never an edit.",
+        "code_does": "Honoured — register() raises on a redefinition (aureon/evaluation/rules.py:75). Recorded here because the rule's thresholds are measurably wrong for the instrument: at point=0.01 they are $0.03-$0.20, inside a single XAUUSD M5 candle, so all seven horizons report >=95% reached and 463/470 path classifications are ambiguous. The numbers measure the scale, not the strategy, and no replacement rule_id exists yet.",
+        "file": "docs/PHASE2_BASELINE.md; aureon/evaluation/rules.py:41"
+      },
+      {
+        "spec_section": "§63 (as cited in aureon/reviews/periods.py)",
+        "spec_says": "The weekly review is generated after Friday's close.",
+        "code_does": "Now correct, after a fix in this commit: previous_iso_week() walks back to the most recent completed Friday. It previously subtracted seven days, which on Friday/Saturday/Sunday named the week BEFORE the one that had just traded — i.e. it was wrong precisely for the cron the spec describes. Recorded as decision 96.",
+        "file": "aureon/reviews/periods.py:77; tests/unit/test_reviews.py:648"
+      }
+    ],
+    "todo_markers": [],
+    "todo_notes": "grep for TODO|FIXME|XXX across all .py and .md files returns nothing."
+  },
+
+  "risk_flags": [
+    {
+      "severity": "high",
+      "what": "The 17 execution guard rules — every gate between a human's confirmation and real money — are inferred, not ratified. docs/ARCHITECTURE.md §41/§56/§57 have never existed in this repository, so the rule list, its failure codes and its ordering were derived rather than read.",
+      "file": "aureon/execution/execution_guard.py:403; docs/PHASE1_DECISIONS.md decision 55",
+      "why_it_matters": "A missing rule is a money-losing bug that no test can reveal, because the tests were written from the same inference as the code. Every rule present is individually unit-tested and the registered list is pinned, so the risk is not a broken rule — it is a rule nobody knew to write. This should be reconciled against the real section text before a funded account."
+    },
+    {
+      "severity": "medium",
+      "what": "A same-status write bypasses the transition table, so a TERMINAL document's non-status fields can be rewritten: resolve(FILLED, updates={...}) on an already-FILLED request, or transition(CLOSED, updates={...}) on an already-CLOSED trade, both commit.",
+      "file": "aureon/storage/trade_request_repository.py:431; aureon/storage/trade_repository.py:182",
+      "why_it_matters": "The path exists for a good reason (EXECUTING->EXECUTING must carry comment_token, and an earlier early-return silently dropped it — the code says so at :418), and it cannot change a status. But it can silently overwrite a settled trade's realized_pnl or a filled request's fields, which is exactly the kind of after-the-fact edit that makes P&L and every review built on it unfalsifiable. No test pins terminality against this path."
+    },
+    {
+      "severity": "medium",
+      "what": "ExecutionSettingsRepository.set_trading_enabled is not transactional: it read-modify-writes the settings document and then writes the audit row as a separate, unguarded call.",
+      "file": "aureon/storage/settings_repository.py:66-92",
+      "why_it_matters": "This is the kill switch. Two concurrent toggles are last-write-wins with no read-set check, so a disable racing an enable can be lost. And because the audit write is separate, the switch can flip with no audit row (or an audit row can land for a write that failed) — a gap in the §60 trail on the one setting that decides whether real money can move. Every other money-touching repository writes its audit row inside the same transaction."
+    },
+    {
+      "severity": "medium",
+      "what": "Six raw Firestore read calls live outside aureon/storage and the boundary guard cannot see them, because it checks SDK imports rather than call sites.",
+      "file": "aureon/reviews/service.py:89,111,126,140; aureon/discord/result_listener.py:66; aureon/execution/execution_worker.py:357",
+      "why_it_matters": "Today they are all reads, so no client-side money write exists. But the guard that is supposed to prevent one does not actually constrain this shape of code: the next raw call on an injected client could be a .set() and the suite would stay green. The executor's case is worse in kind — it reaches into repository._client, a private attribute, so the repository's write discipline is one attribute access away from being sidestepped. Separately, the three reviews calls are unbounded full-collection scans filtered in Python (documented as a deliberate trade to avoid composite indexes), which is a scaling rather than a safety concern."
+    },
+    {
+      "severity": "low",
+      "what": "ControlRequestRepository.resolve does not verify the caller holds the lease, where the trade-request equivalent does.",
+      "file": "aureon/storage/control_request_repository.py:170 vs aureon/storage/trade_request_repository.py:410",
+      "why_it_matters": "A stale executor whose lease expired can still record the outcome of a cancel or close it no longer owns, overwriting the outcome the current holder wrote. The transition table keeps it to one EXECUTING->COMPLETED/FAILED edge, so the blast radius is a wrong reason or detail on a control request rather than a duplicated broker action — but it is an asymmetry with the trade-request path, not a documented decision."
+    },
+    {
+      "severity": "low",
+      "what": "SendGuard, the in-process double-send guard, is a plain in-memory dict and does not survive a restart.",
+      "file": "aureon/execution/idempotency.py:32",
+      "why_it_matters": "Listed for completeness because it looks like the duplicate-order defence and is not the durable one. The durable layer does hold: the status is written to EXECUTING inside the claim transaction before any send, and claim() refuses anything not CONFIRMED, so a restarted process cannot re-claim in-flight work. Verified by scenario A and by 20 seeds x 50 requests. The residual exposure is a send whose status write succeeded and whose outcome is unknown — which is left EXECUTING for reconciliation by design, never retried."
+    },
+    {
+      "severity": "low",
+      "what": "The review service writes no heartbeat and has no loop, so nothing reports whether reviews are actually being generated.",
+      "file": "main_review.py",
+      "why_it_matters": "/status derives liveness from heartbeats/{service} for observer, executor, monitor and discord only (aureon/storage/paths.py:SERVICES). A cron that stops firing is invisible: /status would keep showing the last weekly review it found, with nothing to indicate the review process has been dead for a month. Not a money risk — it is a silent-staleness risk in the surface a human uses to judge the system."
+    },
+    {
+      "severity": "low",
+      "what": "No test exercises a real MetaTrader5 terminal; the 'mt5' pytest marker is declared but unused.",
+      "file": "pyproject.toml:40; docs/PHASES.md",
+      "why_it_matters": "Everything about order placement, fills, partial closes and deal history is proven only against FakeBroker. The MT5-only legs of the Phase 2, 4, 5 and 6 gates are explicitly recorded as outstanding in docs/PHASES.md, so this is a known and disclosed gap rather than a hidden one — but it means no byte has ever been exchanged with a broker terminal, and the MT5Broker payload shapes are unverified."
+    },
+    {
+      "severity": "low",
+      "what": "Detections reach Firestore through a durable SQLite outbox on one machine's local disk.",
+      "file": "aureon/outbox/local_outbox.py; AUREON_OUTBOX_PATH default 'outbox.db'",
+      "why_it_matters": "The 'lost detection' path is well defended in software: WAL + synchronous=FULL, delivered_at set only after the remote write returns, failures kept undelivered and retried, and the observer flushes the previous run's queue before adding to it (main_observer.py:268). The residual risk is not logical but physical — undelivered rows live only in a local file, so losing that disk loses detections that were observed but never delivered, with nothing upstream to replay them from except the broker's own candle history."
+    }
+  ]
+}
