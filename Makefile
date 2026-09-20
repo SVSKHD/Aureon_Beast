@@ -12,7 +12,7 @@ EMULATOR_ENV  = FIRESTORE_EMULATOR_HOST=$(EMULATOR_HOST) \
                 no_grpc_proxy=127.0.0.1,localhost
 
 .PHONY: help emulator emulator-stop test test-fast test-emulator contracts baseline
-.PHONY: drills preflight lint check
+.PHONY: drills preflight phases lint check
 
 help:
 	@grep -E '^[a-z-]+:.*?##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -47,10 +47,14 @@ contracts: ## regenerate docs/CONTRACTS.md
 baseline: ## regenerate docs/PHASE2_BASELINE.md
 	python scripts/gen_baseline.py
 
+phases: ## rewrite the Evidence column of docs/PHASES.md from what is on disk
+	python scripts/update_phases.py
+
 lint:
 	ruff check aureon tests scripts main_observer.py main_executor.py
 
 check: lint ## the cross-phase checklist
 	python scripts/gen_contracts.py --check
 	python scripts/gen_baseline.py --check
+	python scripts/update_phases.py --check
 	$(MAKE) test

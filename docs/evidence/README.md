@@ -33,6 +33,17 @@ document that says so in its first paragraph. It is still worth keeping; it is s
 the same artefact, because nothing in it attests to the preflight and its commit is the
 one *verification* ran at.
 
+## The Evidence column reads this directory
+
+`docs/PHASES.md` carries an **Evidence** column, and it is derived rather than typed:
+`python scripts/update_phases.py` rewrites it from what is actually here. A phase says
+`⬜ missing` until a file exists that contains `SESSION VERIFIED`, and goes back to
+`⬜ missing` the moment that file is removed. `--check` fails if the column is stale, so
+the table cannot drift into claiming evidence the repository does not hold.
+
+It never touches the Status column. Whether a partial pass counts is a judgement, and a
+script inferring that from file existence would be making it silently.
+
 ## What a file does and does not prove
 
 It proves that on one broker date, at one commit, against one terminal, the live path and

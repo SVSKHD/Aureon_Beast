@@ -6,19 +6,19 @@ tracks only *which* phase is open and *what gate* closes it.
 **Freeze rule (§94): do not start a phase until the previous phase's "Done when"
 passes.** Partial passes do not count.
 
-| Phase | Scope | Gate ("Done when") | Status |
-|---|---|---|---|
-| 0 | Repo scaffolding, standing rules, boundary guards | `pytest tests/boundary` green | ✅ done |
-| 1 | `aureon/models`, `aureon/config`, `aureon/storage/paths.py`, `docs/CONTRACTS.md`, `docs/PHASE1_DECISIONS.md` | Contracts generated, `--check` clean, suite green | ✅ done |
-| 2 | Observer: market data, indicators, agents, engine, durable outbox | Parity + outbox + recovery tests pass; `docs/PHASE2_BASELINE.md` recorded | ✅ Parts A + B done (one MT5-only criterion outstanding) |
-| 3 | Detection evaluation (`EMA_OUTCOME_V1`, no hindsight) | Backfill over the Phase 2 week completes; reached-3/5/10 counted from COMPLETE horizons only, PENDING reported separately | ✅ done (see the threshold-scale finding) |
-| 4 | Execution safety core — exactly-once (**the money phase**) | Failure-injection scenarios A–H + the seeded acceptance suite pass under the emulator; one demo market order and one pending order end to end | 🟡 code + emulator suite green; **demo-account leg outstanding** |
-| 5 | Position lifecycle — MT5 is the truth | Demo: open via executor, close from mobile; `trades/` shows CLOSED with right close_price/close_reason/P&L within one poll | 🟡 code + emulator suite green; **demo-account leg outstanding** |
-| 6 | Discord — human interface over a safe backend | FOK trade and stop order placed from Discord; `/trading disable` blocks with a clear FAILED embed; every action audited | 🟡 code + emulator suite green; **live-Discord leg outstanding** |
-| 7 | Reviews — machine observation vs human execution | `/status` on a CLOSED market renders the weekly review; baseline numbers reconcile | ✅ done |
-| 8 | Aureon Vue — read-only dashboard | Dashboard matches `/status` at the same second; STALE banner on observer stop; non-allowlisted account sees nothing; rules tests pass | ⬜ not started |
-| — | **Corrections slice** (§12 identity, EMA 20/50, outcome V2, context tags, live snapshot, safety gaps, collection prefix, live-vs-replay tooling) | pytest green with and without the emulator; baseline carries a 20/50 section; `/status` shows the full snapshot; boundary tests cover identity components, bare collection literals and raw Firestore access | ✅ code done; **real-session leg outstanding** |
-| — | **Defect register D-1…D-15** | each item green | ✅ closed — D-1…D-3, D-5…D-14 landed in the corrections slice (PR #1); D-4 needed only its missing proof (the tracker already filtered on direction, not agent name); D-7 needed its last label (`last updated`); D-15 recorded as placeholders with a per-symbol hook |
+| Phase | Scope | Gate ("Done when") | Status | Evidence |
+| --- | --- | --- | --- | --- |
+| 0 | Repo scaffolding, standing rules, boundary guards | `pytest tests/boundary` green | ✅ done | ✅ 14 boundary guards |
+| 1 | `aureon/models`, `aureon/config`, `aureon/storage/paths.py`, `docs/CONTRACTS.md`, `docs/PHASE1_DECISIONS.md` | Contracts generated, `--check` clean, suite green | ✅ done | ✅ [CONTRACTS.md](CONTRACTS.md) |
+| 2 | Observer: market data, indicators, agents, engine, durable outbox | Parity + outbox + recovery tests pass; `docs/PHASE2_BASELINE.md` recorded | ✅ Parts A + B done (one MT5-only criterion outstanding) | ✅ [PHASE2_BASELINE.md](PHASE2_BASELINE.md)<br>⬜ missing: verified real session (`scripts/session_run.py, then scripts/session_verify.py`) |
+| 3 | Detection evaluation (`EMA_OUTCOME_V1`, no hindsight) | Backfill over the Phase 2 week completes; reached-3/5/10 counted from COMPLETE horizons only, PENDING reported separately | ✅ done (see the threshold-scale finding) | ✅ [XAU_OUTCOME_V2 outcomes](PHASE2_BASELINE.md) |
+| 4 | Execution safety core — exactly-once (**the money phase**) | Failure-injection scenarios A–H + the seeded acceptance suite pass under the emulator; one demo market order and one pending order end to end | 🟡 code + emulator suite green; **demo-account leg outstanding** | ⬜ missing: drills on a demo account (`scripts/demo_drills.py --all --broker mt5 --evidence …`) |
+| 5 | Position lifecycle — MT5 is the truth | Demo: open via executor, close from mobile; `trades/` shows CLOSED with right close_price/close_reason/P&L within one poll | 🟡 code + emulator suite green; **demo-account leg outstanding** | ⬜ missing: drills on a demo account (`scripts/demo_drills.py --all --broker mt5 --evidence …`) |
+| 6 | Discord — human interface over a safe backend | FOK trade and stop order placed from Discord; `/trading disable` blocks with a clear FAILED embed; every action audited | 🟡 code + emulator suite green; **live-Discord leg outstanding** | ⬜ missing: live Discord session (`the Phase 6 leg of docs/DEMO_EXECUTION_CHECKLIST.md`) |
+| 7 | Reviews — machine observation vs human execution | `/status` on a CLOSED market renders the weekly review; baseline numbers reconcile | ✅ done | ✅ [review reconciliation](PHASE2_BASELINE.md) |
+| 8 | Aureon Vue — read-only dashboard | Dashboard matches `/status` at the same second; STALE banner on observer stop; non-allowlisted account sees nothing; rules tests pass | ⬜ not started | — |
+| — | **Corrections slice** (§12 identity, EMA 20/50, outcome V2, context tags, live snapshot, safety gaps, collection prefix, live-vs-replay tooling) | pytest green with and without the emulator; baseline carries a 20/50 section; `/status` shows the full snapshot; boundary tests cover identity components, bare collection literals and raw Firestore access | ✅ code done; **real-session leg outstanding** | ⬜ missing: verified real session (`scripts/session_run.py, then scripts/session_verify.py`) |
+| — | **Defect register D-1…D-15** | each item green | ✅ closed — D-1…D-3, D-5…D-14 landed in the corrections slice (PR #1); D-4 needed only its missing proof (the tracker already filtered on direction, not agent name); D-7 needed its last label (`last updated`); D-15 recorded as placeholders with a per-symbol hook | ✅ [decisions 118–120](PHASE1_DECISIONS.md) |
 
 ## Cross-phase checklist (run after each phase)
 
@@ -30,6 +30,10 @@ passes.** Partial passes do not count.
       committed together with the model change.
 - [ ] `python scripts/gen_baseline.py` produces no diff — or the change to an
       agent, the indicators or the fixture that explains it is committed too.
+- [ ] `python scripts/update_phases.py --check` clean, so the Evidence column
+      above describes the files that are actually in the repository. It never
+      touches Status: whether a partial pass counts is a judgement, and a script
+      inferring that from file existence would be making it silently.
 - [ ] New env vars added to `.env.example`.
 - [ ] New decisions appended to the decisions doc **with the spec §**.
 - [ ] Nothing from a later phase was started early (§94).
@@ -244,11 +248,21 @@ result against what reached Firestore, exiting non-zero on any difference. What 
 is a session: this needs Windows and a running terminal, neither of which exists in this
 environment.
 
-`docs/MT5_SESSION_CHECKLIST.md` is the procedure. When a session has run, paste the
-comparison's full output here with the market date, the terminal build, the broker server,
-the commit the observer ran at, and the exit code. The commit hash matters most — a
-comparison is evidence about one build, and without it the output is an anecdote about an
-unknown one.
+`docs/MT5_SESSION_CHECKLIST.md` is the procedure, and it is now bracketed by two tools
+rather than by a paragraph asking for a paste:
 
-Until this section has content, every parity claim in this repository is a claim about the
-**engine** given a fixture, not about the engine and a broker agreeing on what a candle is.
+    python scripts/session_run.py            # preflight, then the observer
+    python scripts/session_verify.py <date>  # six checks, into the evidence file
+
+They write `docs/evidence/session_{market_date}.md`, carrying the market date, the terminal
+build, the broker server, the collection prefix, the commit **and whether the tree was
+dirty**, the comparison's full output and the day's outcomes. The commit hash matters most —
+a comparison is evidence about one build, and without it the output is an anecdote about an
+unknown one, which is why the tool records it rather than asking for it.
+
+The **Evidence** column above is derived from that directory by
+`python scripts/update_phases.py`: it says `⬜ missing` until a file exists that contains
+`SESSION VERIFIED`, and it cannot be talked into saying otherwise.
+
+Until then, every parity claim in this repository is a claim about the **engine** given a
+fixture, not about the engine and a broker agreeing on what a candle is.
