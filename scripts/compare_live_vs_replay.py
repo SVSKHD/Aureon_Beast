@@ -175,7 +175,8 @@ def main(argv: list[str] | None = None) -> int:
     from main_observer import default_agents
 
     engine = AnalysisEngine(
-        default_agents(config, point=0.01),
+        # No point= : the tuning table's tick for this symbol, not gold's.
+        default_agents(config),
         account_scope=config.account_scope,
         market_tz=config.market_tz,
     )

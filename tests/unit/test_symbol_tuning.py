@@ -16,10 +16,17 @@ from __future__ import annotations
 import pytest
 
 from aureon.config.symbol_tuning import (
+    DEFAULT_MAX_CLOSE_POSITION,
     DEFAULT_MIN_PENETRATION_POINTS,
     DEFAULT_MIN_REJECTION_FRACTION,
+    DEFAULT_MIN_WICK_BODY_RATIO,
+    DEFAULT_MIN_WICK_RANGE_RATIO,
     OVERRIDES,
     SymbolTuning,
+    UnknownSymbolTuning,
+    has_tuning,
+    known_symbols,
+    require_tuning,
     tuning_for,
 )
 
@@ -145,3 +152,117 @@ def test_the_roster_carries_a_symbols_overrides(monkeypatch) -> None:
     snapshots = {a.agent_name: a.params_snapshot() for a in default_agents(config)}
 
     assert snapshots["liquidity"]["min_penetration_points"] == 2.5
+
+
+# ── XAGUSD, and the refusal (P-6) ─────────────────────────────────────────────
+
+
+def test_xagusd_carries_scaled_distances() -> None:
+    """A placeholder of a placeholder, derived by arithmetic from gold's unresearched
+    numbers -- pinned here so the derivation can be argued with rather than guessed at.
+
+    Gold's 5 points of penetration is $0.05, ~0.17% of a ~$30 daily range. The same
+    fraction of silver's ~$0.60 range is $0.001, which at a 0.001 tick is ONE point. That
+    result is the finding, not a comfort: a one-tick penetration is inside the spread on
+    most silver feeds.
+    """
+    tuning = tuning_for("XAGUSD")
+    assert tuning.point == 0.001
+    assert tuning.min_penetration_points == 1.0
+    assert tuning.min_close_beyond_points == 2.0
+    assert tuning.min_range_points == 4.0
+    assert tuning.flat_points == 10.0
+    assert tuning.is_default is False
+
+
+def test_the_dimensionless_ratios_are_not_scaled() -> None:
+    """A wick covering 25% of a candle means the same thing on any instrument, so
+    scaling it would invent a difference rather than correct one."""
+    tuning = tuning_for("XAGUSD")
+    assert tuning.min_rejection_fraction == DEFAULT_MIN_REJECTION_FRACTION
+    assert tuning.min_wick_range_ratio == DEFAULT_MIN_WICK_RANGE_RATIO
+    assert tuning.min_wick_body_ratio == DEFAULT_MIN_WICK_BODY_RATIO
+    assert tuning.max_close_position == DEFAULT_MAX_CLOSE_POSITION
+
+
+def test_xauusd_has_an_explicit_entry_that_changes_nothing() -> None:
+    """An empty-ish entry is a statement: "reviewed, and the defaults are the answer",
+    which is a different claim from "nobody has looked"."""
+    assert has_tuning("XAUUSD")
+    assert tuning_for("XAUUSD").is_default is True
+
+
+def test_an_unreviewed_symbol_is_refused_by_name() -> None:
+    with pytest.raises(UnknownSymbolTuning) as excinfo:
+        require_tuning("EURUSD")
+    message = str(excinfo.value)
+    assert "EURUSD" in message
+    assert "XAUUSD" in message and "XAGUSD" in message, "it names what IS reviewed"
+    assert "empty one is a valid answer" in message, "and how to add one"
+
+
+def test_the_tolerant_lookup_stays_tolerant() -> None:
+    """Reporting and verification tools are handed whatever symbol they are handed and
+    must not explode mid-report; ``is_default`` is how a reader tells the cases apart."""
+    assert tuning_for("EURUSD").is_default is True
+    assert not has_tuning("EURUSD")
+    assert known_symbols() == ("XAGUSD", "XAUUSD")
+
+
+def test_a_brokers_own_tick_wins_over_the_tables(monkeypatch) -> None:
+    """The table says what we expect the tick to be; symbol_info.point says what it is."""
+    assert tuning_for("XAGUSD", point=0.00001).point == 0.00001
+    assert require_tuning("XAUUSD", point=0.1).point == 0.1
+
+
+# ── The observer refuses to start (P-6) ───────────────────────────────────────
+
+
+def test_the_observer_refuses_to_build_a_roster_for_an_unreviewed_symbol() -> None:
+    """The behaviour change: it used to start silently on gold's numbers.
+
+    A session of plausible-looking noise costs the session AND everything computed from
+    it afterwards, because a sweep is a sweep once it is written.
+    """
+    from aureon.config import AureonConfig
+    from main_observer import default_agents
+
+    with pytest.raises(UnknownSymbolTuning, match="EURUSD"):
+        default_agents(AureonConfig(symbols=("EURUSD",)))
+
+
+def test_every_configured_symbol_is_checked_not_just_the_first() -> None:
+    """Finding out about the third symbol three hours in is finding out too late."""
+    from aureon.config import AureonConfig
+    from main_observer import default_agents
+
+    with pytest.raises(UnknownSymbolTuning, match="GBPUSD"):
+        default_agents(AureonConfig(symbols=("XAUUSD", "XAGUSD", "GBPUSD")))
+
+
+def test_the_roster_runs_silver_on_silvers_numbers() -> None:
+    from aureon.config import AureonConfig
+    from main_observer import default_agents
+
+    config = AureonConfig(symbols=("XAGUSD",))
+    snapshots = {a.agent_name: a.params_snapshot() for a in default_agents(config)}
+
+    assert snapshots["liquidity"]["min_penetration_points"] == 1.0
+    assert snapshots["breakout"]["min_close_beyond_points"] == 2.0
+    assert snapshots["wick"]["min_range_points"] == 4.0
+    assert snapshots["session_trend"]["flat_points"] == 10.0
+    for name in ("liquidity", "breakout", "wick", "session_trend"):
+        assert snapshots[name]["point"] == 0.001
+    # And the dimensionless ones are gold's, unchanged.
+    assert snapshots["liquidity"]["min_rejection_fraction"] == 0.25
+    assert snapshots["wick"]["min_wick_range_ratio"] == 0.55
+
+
+def test_the_roster_no_longer_forces_golds_tick() -> None:
+    """``default_agents`` defaulted ``point`` to 0.01, which would have given silver
+    gold's tick while using silver's thresholds -- the worst of both."""
+    import inspect
+
+    from main_observer import default_agents
+
+    assert inspect.signature(default_agents).parameters["point"].default is None
