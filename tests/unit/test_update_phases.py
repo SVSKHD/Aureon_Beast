@@ -42,6 +42,7 @@ TABLE = """# Phases
 | 7 | Reviews | reconciled | done |
 | 8 | Vue | dashboard | not started |
 | 9A | Two symbols | both run in one observer | partial |
+| 9B | Volume profile | profile-tagged detections | partial |
 | — | **Corrections slice** (identity, EMA) | suite green | partial |
 | — | **Defect register D-1…D-15** | each item green | closed |
 
@@ -234,4 +235,4 @@ def test_the_committed_table_reports_what_is_genuinely_missing() -> None:
     assert cells["6"].startswith("⬜"), cells["6"]
     # 9A's own real-session leg: nothing has run against a terminal for silver either.
     assert "⬜" in cells["9A"], cells["9A"]
-    assert len(CATALOGUE) == 12
+    assert len(CATALOGUE) == 13

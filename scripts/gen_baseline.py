@@ -354,6 +354,9 @@ def build() -> str:
     )
     lines += _v2_section(v2)
 
+    # ── 9B: outcomes split by volume and volatility context ──────────────────
+    lines += _context_outcomes_section(v2, XAU_OUTCOME_V2, "XAUUSD")
+
     # ── Historical: the pair that shipped before 20/50 ────────────────────────
     lines += _historical_section(candles)
 
@@ -716,6 +719,7 @@ def _silver_section(gold: BackfillResult) -> list[str]:
     ]
     lines += render_markdown(report)
     lines += _silver_diagnostics(report, candles, point, gold)
+    lines += _context_outcomes_section(result, XAG_OUTCOME_V1, SILVER)
     return lines
 
 
@@ -730,6 +734,70 @@ def _reach_by_threshold(report, rule) -> tuple[int, dict[float, int]]:
         for t in rule.thresholds
     }
     return complete, reached
+
+
+def _context_outcomes_section(result: BackfillResult, rule, symbol: str) -> list[str]:
+    """Outcomes split by 9B's volume and volatility tags, for one symbol (§19, §23).
+
+    Both sides of every split, always: a "with" figure alone is unreadable until the
+    "without" number is beside it. The horizon and threshold are the first of each, named in
+    the heading rather than left implicit -- a reached-N split is about one threshold, and a
+    table that hides which one invites reading it as all of them.
+    """
+    from aureon.evaluation.context_tags import (
+        REGIME_TAGS,
+        TAG_AT_LVN,
+        TAG_AT_POC,
+        TAG_PRICE_ABOVE_ASIA_VA,
+        TAG_PRICE_BELOW_ASIA_VA,
+    )
+    from aureon.reviews.aggregate import PeriodData, compare_by_tag
+
+    tags = (
+        TAG_PRICE_ABOVE_ASIA_VA,
+        TAG_PRICE_BELOW_ASIA_VA,
+        TAG_AT_POC,
+        TAG_AT_LVN,
+        *REGIME_TAGS.values(),
+    )
+    data = PeriodData(
+        detections=list(result.detections),
+        evaluations={e.detection_id: e for e in result.evaluations},
+    )
+    comparisons = compare_by_tag(data, rule, tags=tags)
+    if not comparisons:
+        return []
+
+    horizon = comparisons[0].horizon_id
+    threshold = comparisons[0].threshold_key
+    lines = [
+        "",
+        f"### Outcomes by volume and volatility context — {symbol}",
+        "",
+        f"Horizon `{horizon}`, threshold `{threshold}`, COMPLETE horizons only. Every row",
+        "gives both sides, because a `with` rate means nothing until the `without` rate is",
+        "beside it — and most rows here are far too small to read as anything but anecdote.",
+        "",
+        "| tag | with | without |",
+        "|---|---|---|",
+    ]
+    for comparison in sorted(comparisons, key=lambda c: c.tag):
+        with_rate = comparison.with_tag_rate
+        without_rate = comparison.without_tag_rate
+        left = "—" if with_rate is None else f"{with_rate * 100:.0f}%"
+        right = "—" if without_rate is None else f"{without_rate * 100:.0f}%"
+        note = "" if comparison.comparable else " ⚠︎" 
+        lines.append(
+            f"| `{comparison.tag}` | {left} "
+            f"({comparison.with_tag_reached}/{comparison.with_tag_complete}){note} "
+            f"| {right} "
+            f"({comparison.without_tag_reached}/{comparison.without_tag_complete}) |"
+        )
+    lines += [
+        "",
+        "⚠︎ marks a split with too few COMPLETE horizons on one side to compare at all.",
+    ]
+    return lines
 
 
 def _silver_diagnostics(report, candles, point: float, gold: BackfillResult) -> list[str]:

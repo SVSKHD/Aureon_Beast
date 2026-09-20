@@ -379,6 +379,24 @@ Read the columns literally:
 
 235 detections, none evaluable: this agent emits `direction=None`, so there is no favourable side to measure (§16, decision 48).
 
+### Outcomes by volume and volatility context — XAUUSD
+
+Horizon `c5`, threshold `3`, COMPLETE horizons only. Every row
+gives both sides, because a `with` rate means nothing until the `without` rate is
+beside it — and most rows here are far too small to read as anything but anecdote.
+
+| tag | with | without |
+|---|---|---|
+| `cross_at_lvn` | 13% (12/93) | 10% (73/711) |
+| `cross_at_poc` | 18% (2/11) | 10% (83/793) |
+| `price_above_asia_va` | 11% (27/244) | 10% (58/560) |
+| `price_below_asia_va` | 13% (36/277) | 9% (49/527) |
+| `volatility_regime_high` | 12% (4/32) | 10% (81/772) |
+| `volatility_regime_low` | 7% (29/410) | 14% (56/394) |
+| `volatility_regime_normal` | 15% (39/262) | 8% (46/542) |
+
+⚠︎ marks a split with too few COMPLETE horizons on one side to compare at all.
+
 ---
 
 ## Historical: `ema_cross` v1.0.0 at 9/21
@@ -672,6 +690,24 @@ new `rule_id` evaluated alongside, which is the same discipline that kept
 rescaling them (decision 121). Until then, read silver's top thresholds as
 "not measured here" rather than as "silver does not move" — and remember the
 fixture is a random walk, so none of this is evidence about the metal.
+
+### Outcomes by volume and volatility context — XAGUSD
+
+Horizon `c5`, threshold `0.1`, COMPLETE horizons only. Every row
+gives both sides, because a `with` rate means nothing until the `without` rate is
+beside it — and most rows here are far too small to read as anything but anecdote.
+
+| tag | with | without |
+|---|---|---|
+| `cross_at_lvn` | — (0/0) ⚠︎ | 2% (13/697) |
+| `cross_at_poc` | 1% (1/154) | 2% (12/543) |
+| `price_above_asia_va` | 3% (5/174) | 2% (8/523) |
+| `price_below_asia_va` | 3% (2/67) | 2% (11/630) |
+| `volatility_regime_high` | 0% (0/4) ⚠︎ | 2% (13/693) |
+| `volatility_regime_low` | 2% (8/419) | 2% (5/278) |
+| `volatility_regime_normal` | 1% (2/180) | 2% (11/517) |
+
+⚠︎ marks a split with too few COMPLETE horizons on one side to compare at all.
 
 ---
 
