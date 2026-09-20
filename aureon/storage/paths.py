@@ -21,22 +21,61 @@ Firestore and is never needed after the candle closes.
 
 from __future__ import annotations
 
+import os
+
 from aureon.models.identity import evaluation_doc_id
 
+# ── The prefix ────────────────────────────────────────────────────────────────
+
+DEFAULT_COLLECTION_PREFIX = "aureon_beast"
+
+
+def collection_prefix() -> str:
+    """``AUREON_COLLECTION_PREFIX``, read at import time.
+
+    Read from the environment here rather than threaded through every repository, because
+    a prefix that varied between two repositories in one process would split the database
+    in half silently -- the observer writing detections one place and the review reading
+    another, both reporting success.
+    """
+    return os.environ.get("AUREON_COLLECTION_PREFIX", DEFAULT_COLLECTION_PREFIX).strip(
+        "_"
+    ) or DEFAULT_COLLECTION_PREFIX
+
+
+def collection(name: str) -> str:
+    """``{prefix}_{name}``. The ONLY place a collection name is built (§83).
+
+    Every constant below goes through this, so one environment variable moves a whole
+    deployment's data and a boundary test can forbid a bare collection literal anywhere
+    else. That matters because a bare literal is invisible: it does not fail, it reads and
+    writes a second, empty collection that looks exactly like "no data yet".
+    """
+    if not name:
+        raise ValueError("collection name must not be empty")
+    if "/" in name:
+        raise ValueError(f"collection name must not contain '/': {name!r}")
+    return f"{PREFIX}_{name}"
+
+
+PREFIX = collection_prefix()
+
 # ── Collections ───────────────────────────────────────────────────────────────
-DETECTIONS = "detections"
-DETECTION_EVALUATIONS = "detection_evaluations"
-SESSIONS = "sessions"
-TRADE_REQUESTS = "trade_requests"
-TRADES = "trades"
-CONTROL_REQUESTS = "control_requests"
-AUDIT_LOGS = "audit_logs"
-HEARTBEATS = "heartbeats"
-SYSTEM_STATE = "system_state"
-SETTINGS = "settings"
-SYMBOL_SPECS = "symbol_specs"
-DAILY_REVIEWS = "daily_reviews"
-WEEKLY_REVIEWS = "weekly_reviews"
+# The constants keep their names and hold PREFIXED values, so every existing caller is
+# already correct and nothing has to remember to prefix at the call site.
+DETECTIONS = collection("detections")
+DETECTION_EVALUATIONS = collection("detection_evaluations")
+SESSIONS = collection("sessions")
+TRADE_REQUESTS = collection("trade_requests")
+TRADES = collection("trades")
+CONTROL_REQUESTS = collection("control_requests")
+AUDIT_LOGS = collection("audit_logs")
+HEARTBEATS = collection("heartbeats")
+SYSTEM_STATE = collection("system_state")
+SETTINGS = collection("settings")
+SYMBOL_SPECS = collection("symbol_specs")
+DAILY_REVIEWS = collection("daily_reviews")
+WEEKLY_REVIEWS = collection("weekly_reviews")
 
 ALL_COLLECTIONS: tuple[str, ...] = (
     DETECTIONS,

@@ -9,6 +9,15 @@ less and a parity failure could not be distinguished from a data difference.
 
 from __future__ import annotations
 
+import os
+
+# BEFORE any aureon import: aureon.storage.paths reads AUREON_COLLECTION_PREFIX at
+# import time and freezes it, so setting this later would have no effect at all while
+# looking as though it had. A suite writing to the production prefix would, the one time
+# someone runs it against a real project, overwrite live documents and report a clean
+# pass.
+os.environ.setdefault("AUREON_COLLECTION_PREFIX", "aureon_test")
+
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -20,6 +29,13 @@ from aureon.data.historical_provider import DEFAULT_SYMBOL_INFO, HistoricalDataP
 from aureon.models.base import to_utc
 from aureon.models.enums import Timeframe
 from aureon.models.market import Candle, QuoteSnapshot, SymbolInfo
+from aureon.storage.paths import DEFAULT_COLLECTION_PREFIX, PREFIX
+
+if PREFIX == DEFAULT_COLLECTION_PREFIX and not os.environ.get("FIRESTORE_EMULATOR_HOST"):
+    raise RuntimeError(
+        f"AUREON_COLLECTION_PREFIX resolved to {PREFIX!r}, the production default, and "
+        "no FIRESTORE_EMULATOR_HOST is set. Refusing to run the suite."
+    )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_CSV = REPO_ROOT / "aureon" / "data" / "fixtures" / "XAUUSD_M5.csv"

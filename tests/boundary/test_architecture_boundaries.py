@@ -255,6 +255,71 @@ def test_nothing_reaches_into_a_repositorys_private_client() -> None:
     )
 
 
+#: The collection names, unprefixed. A bare occurrence of any of these as a string
+#: literal outside paths.py is almost certainly a forgotten prefix.
+BARE_COLLECTION_NAMES = frozenset(
+    {
+        "detections",
+        "detection_evaluations",
+        "sessions",
+        "trade_requests",
+        "trades",
+        "control_requests",
+        "audit_logs",
+        "heartbeats",
+        "system_state",
+        "settings",
+        "symbol_specs",
+        "daily_reviews",
+        "weekly_reviews",
+    }
+)
+
+
+def test_no_bare_collection_literal_outside_paths() -> None:
+    """Every collection name is built by ``paths.collection()`` (§83, decision 111).
+
+    A bare literal is the worst kind of bug because it does not fail. Reading or writing
+    ``"detections"`` when everything else uses ``"aureon_beast_detections"`` silently
+    touches a second, empty collection -- which looks exactly like "no data yet".
+
+    Checked as string CONSTANTS via the AST, so a docstring or a dict key derived from a
+    path does not trip it while a real ``client.collection("trades")`` does.
+    """
+    paths_module = AUREON / "storage" / "paths.py"
+    offenders: list[str] = []
+    for path in sorted(AUREON.rglob("*.py")):
+        if path == paths_module:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and node.value in BARE_COLLECTION_NAMES
+            ):
+                offenders.append(
+                    f"{path.relative_to(REPO_ROOT)}:{node.lineno}: {node.value!r}"
+                )
+    assert not offenders, (
+        "collection names must come from aureon.storage.paths, never a bare literal:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_every_collection_constant_carries_the_prefix() -> None:
+    """The constants hold prefixed values, so existing callers are already correct."""
+    from aureon.storage import paths
+
+    assert paths.PREFIX, "a prefix must always resolve to something"
+    for name in paths.ALL_COLLECTIONS:
+        assert name.startswith(f"{paths.PREFIX}_"), f"{name} is not prefixed"
+    # And nothing is left unprefixed by accident.
+    assert set(paths.ALL_COLLECTIONS) == {
+        paths.collection(bare) for bare in BARE_COLLECTION_NAMES
+    }
+
+
 # ── Reviews may only read COMPLETE horizons ───────────────────────────────────
 
 

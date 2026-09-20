@@ -12,18 +12,18 @@ stored document.
 
 | collection | document id | model |
 |---|---|---|
-| `detections` | `detection_id` | `Detection` |
-| `detection_evaluations` | `{detection_id}__{rule_id}` | `DetectionEvaluation` |
-| `sessions` | `{market_date}__{session}` | _(Phase 2)_ |
-| `trade_requests` | `request_id` | `TradeRequest` |
-| `trades` | `trade_id` | `Trade` |
-| `control_requests` | `control_id` | `ControlRequest` |
-| `audit_logs` | `audit_id` | `AuditRecord` |
-| `heartbeats` | `{service}` | `Heartbeat` |
-| `system_state` | `current` | `SystemState` |
-| `settings` | `execution` | `ExecutionSettings` |
-| `daily_reviews` | `{market_date}` | `DailyReview` |
-| `weekly_reviews` | `{iso_year}-W{iso_week}` | `WeeklyReview` |
+| `aureon_test_detections` | `detection_id` | `Detection` |
+| `aureon_test_detection_evaluations` | `{detection_id}__{rule_id}` | `DetectionEvaluation` |
+| `aureon_test_sessions` | `{market_date}__{session}` | _(Phase 2)_ |
+| `aureon_test_trade_requests` | `request_id` | `TradeRequest` |
+| `aureon_test_trades` | `trade_id` | `Trade` |
+| `aureon_test_control_requests` | `control_id` | `ControlRequest` |
+| `aureon_test_audit_logs` | `audit_id` | `AuditRecord` |
+| `aureon_test_heartbeats` | `{service}` | `Heartbeat` |
+| `aureon_test_system_state` | `current` | `SystemState` |
+| `aureon_test_settings` | `execution` | `ExecutionSettings` |
+| `aureon_test_daily_reviews` | `{market_date}` | `DailyReview` |
+| `aureon_test_weekly_reviews` | `{iso_year}-W{iso_week}` | `WeeklyReview` |
 
 Tick data is never stored in Firestore. There is no `pending_orders`
 collection (decision 9): a pending order *is* the `PENDING` trade request.
