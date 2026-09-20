@@ -40,7 +40,7 @@ from aureon.agents.session_trend_agent import SessionTrendAgent, summary_from_de
 from aureon.agents.wick_agent import WickAgent
 from aureon.config import AureonConfig
 from aureon.config.sessions import session_for
-from aureon.config.symbol_tuning import tuning_for
+from aureon.config.symbol_tuning import require_tuning
 from aureon.data.base_provider import BaseMarketDataProvider
 from aureon.data.live_candle_archive import LiveCandleArchive
 from aureon.engine.analysis_engine import AnalysisEngine
@@ -511,7 +511,9 @@ class Observer:
         self.provider.close()
 
 
-def default_agents(config: AureonConfig, *, point: float = 0.01) -> list[BaseAgent]:
+def default_agents(
+    config: AureonConfig, *, point: float | None = None
+) -> list[BaseAgent]:
     """The full Part A + Part B roster.
 
     The liquidity and breakout agents are handed **the same** ``LevelTracker``
@@ -522,14 +524,23 @@ def default_agents(config: AureonConfig, *, point: float = 0.01) -> list[BaseAge
     One timeframe is assumed for the level and session agents, because their window
     sizes are derived from it; a multi-timeframe deployment builds one roster per
     timeframe.
+
+    **Refuses a symbol with no tuning entry** (P-6). ``point`` defaults to the tuning
+    table's value rather than to gold's 0.01; a caller that has read ``symbol_info.point``
+    from the broker passes it and it wins, because that is the tick the symbol actually
+    has.
     """
     timeframe = config.timeframes[0]
     levels = LevelTracker()
+    # EVERY configured symbol, not just the one the roster is built for: the observer
+    # watches them all, and finding out about the third one three hours in is finding
+    # out too late.
+    for symbol in config.symbols:
+        require_tuning(symbol)
     # Per-symbol, because the level and wick thresholds are NOT dimensionless:
     # min_penetration_points = 5 is $0.05 on gold and something else entirely on a
-    # symbol with a different tick and a different daily range (D-15). XAUUSD gets the
-    # shipped values; anything else gets them too, knowingly, until researched.
-    tuning = tuning_for(config.symbols[0], point=point)
+    # symbol with a different tick and a different daily range (D-15).
+    tuning = require_tuning(config.symbols[0], point=point)
     if not tuning.is_default:
         log.info(
             "%s runs tuned agent parameters: %s",

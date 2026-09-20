@@ -31,8 +31,14 @@ from aureon.data.historical_provider import HistoricalDataProvider  # noqa: E402
 from aureon.engine.analysis_engine import AnalysisEngine  # noqa: E402
 from aureon.engine.indicators import min_warmup  # noqa: E402
 from aureon.engine.levels import LevelTracker  # noqa: E402
-from aureon.evaluation.backfill import build_report, diagnose, run_backfill  # noqa: E402
-from aureon.evaluation.rules import EMA_OUTCOME_V1  # noqa: E402
+from aureon.evaluation.backfill import (  # noqa: E402
+    BackfillResult,
+    build_report,
+    diagnose,
+    run_backfill,
+)
+from aureon.evaluation.outcome_report import aggregate, render_markdown  # noqa: E402
+from aureon.evaluation.rules import EMA_OUTCOME_V1, XAU_OUTCOME_V2  # noqa: E402
 from aureon.reviews.reconcile import reconcile  # noqa: E402
 
 FIXTURE = REPO_ROOT / "aureon" / "data" / "fixtures" / "XAUUSD_M5.csv"
@@ -40,6 +46,8 @@ OUTPUT = REPO_ROOT / "docs" / "PHASE2_BASELINE.md"
 _FAILURES: list[str] = []
 MARKET_TZ = "Europe/Athens"
 ACCOUNT_SCOPE = "primary"
+#: XAUUSD tick. The V2 thresholds are in PRICE, so this is what converts them.
+POINT = 0.01
 
 # The shipped pair (AUREON_EMA_FAST / AUREON_EMA_SLOW defaults) and the pair that
 # shipped before it. Both are replayed: the current one is the baseline Phase 3 and
@@ -50,21 +58,30 @@ EMA_SLOW = 50
 HISTORICAL_EMA = (9, 21)
 
 
-def build() -> str:
-    provider = HistoricalDataProvider(FIXTURE, market_tz=MARKET_TZ)
-    candles = provider.candles
+def roster() -> list:
+    """A FRESH whole-roster agent list.
 
-    agent = EmaCrossAgent(fast_period=EMA_FAST, slow_period=EMA_SLOW)
-    # Liquidity and breakout share ONE LevelTracker (§15, §17).
-    levels = LevelTracker()
-    agents = [
-        agent,
+    Fresh every call, never reused: ``LevelTracker`` and every agent carry state from
+    the candles they have seen, so feeding one roster to two replays would make the
+    second one's counts depend on the first having run.
+    """
+    levels = LevelTracker()  # liquidity and breakout share ONE tracker (§15, §17)
+    return [
+        EmaCrossAgent(fast_period=EMA_FAST, slow_period=EMA_SLOW),
         RsiAgent(),
         SessionTrendAgent(),
         WickAgent(),
         LiquidityAgent(level_tracker=levels),
         BreakoutAgent(level_tracker=levels),
     ]
+
+
+def build() -> str:
+    provider = HistoricalDataProvider(FIXTURE, market_tz=MARKET_TZ)
+    candles = provider.candles
+
+    agents = roster()
+    agent = agents[0]
     engine = AnalysisEngine(agents, account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ)
     all_detections = engine.feed(candles)
 
@@ -227,7 +244,7 @@ def build() -> str:
         rule,
         account_scope=ACCOUNT_SCOPE,
         market_tz=MARKET_TZ,
-        point=0.01,
+        point=POINT,
     )
     reports = build_report(backfill.evaluations, rule)
 
@@ -235,7 +252,18 @@ def build() -> str:
         "",
         "---",
         "",
-        "## Detection outcomes (Phase 3)",
+        "## Detection outcomes — `EMA_OUTCOME_V1` (HISTORICAL — invalid for research)",
+        "",
+        "**Do not read these numbers as a result.** At `point = 0.01` this rule's",
+        "3-20 are $0.03-$0.20, well inside a single XAUUSD M5 candle, so almost every",
+        "threshold is crossed on the first bar. The table measures the instrument's tick",
+        "size, not the strategy, and its ~100% columns are an artefact of the scale.",
+        "",
+        "It is kept, regenerated, for two reasons: results were stored under this",
+        "`rule_id` and a rule is frozen once shipped (§21, decision 47), and the",
+        "`XAU_OUTCOME_V2` section below is only interpretable next to what it replaced.",
+        "**`XAU_OUTCOME_V2` is the rule to read**, and it is what the running system",
+        "evaluates against (`AUREON_EVAL_RULE`).",
         "",
         f"Rule `{rule.rule_id}`, frozen: reference `{rule.reference_price.value}`,",
         f"thresholds {list(rule.thresholds)} in **points**.",
@@ -292,14 +320,48 @@ def build() -> str:
             "inside a single XAUUSD M5 candle's range, so they are crossed on the first",
             "candle almost every time. The 100% columns above measure the scale, not the",
             "strategy. Correcting it means a **new `rule_id`**, never an edit to this one",
-            "(§21, decision 47).",
+            "(§21, decision 47) — which is what `XAU_OUTCOME_V2` below is.",
         ]
+
+    # ── P-1: XAU_OUTCOME_V2, the rule to read ────────────────────────────────
+    # ONE whole-roster replay, used twice: for the per-agent section and, sliced to
+    # ema_cross, for the reconciliation below. Re-running it would cost half a minute
+    # and could not produce different numbers -- the engine gives each agent its own
+    # window slice, and a detection's horizons are evaluated independently of every
+    # other agent's detections.
+    v2 = run_backfill(
+        candles,
+        roster(),
+        XAU_OUTCOME_V2,
+        account_scope=ACCOUNT_SCOPE,
+        market_tz=MARKET_TZ,
+        point=POINT,
+    )
+    lines += _v2_section(v2)
 
     # ── Historical: the pair that shipped before 20/50 ────────────────────────
     lines += _historical_section(candles)
 
     # ── Phase 7: weekly reviews must agree ───────────────────────────────────
-    lines += _reconciliation_section(backfill, reports, rule, by_day)
+    # Against V2, because that is the rule the reviews actually run
+    # (AUREON_EVAL_RULE defaults to XAU_OUTCOME_V2). Reconciling V1 would prove two
+    # code paths agree about a rule nothing evaluates any more -- and would agree
+    # trivially, since every V1 reached count is saturated at 100%.
+    cross = BackfillResult(
+        detections=[d for d in v2.detections if d.agent_name == "ema_cross"],
+        evaluations=[
+            e
+            for e in v2.evaluations
+            if e.detection_id in {d.detection_id for d in v2.detections
+                                  if d.agent_name == "ema_cross"}
+        ],
+    )
+    lines += _reconciliation_section(
+        cross,
+        build_report(cross.evaluations, XAU_OUTCOME_V2),
+        XAU_OUTCOME_V2,
+        by_day,
+    )
 
     lines += [
         "",
@@ -307,11 +369,73 @@ def build() -> str:
         "",
         "## Not yet measured",
         "",
-        "Outcomes for the Part B agents. `EMA_OUTCOME_V1` is written for `ema_cross`;",
-        "whether the same horizons and thresholds suit sweeps and breakouts is a question",
-        "for a rule of their own.",
+        "* **Anything from a real session.** Every number in this document is a replay of",
+        "  a synthetic fixture (decision 28). It proves the pipeline computes what it says",
+        "  it computes; it says nothing about gold. `docs/MT5_SESSION_CHECKLIST.md` is the",
+        "  manual leg that turns this into evidence about a market.",
+        "* **Whether the thresholds discriminate.** $3-$20 is a distance a gold trader",
+        "  holds for, not a distance a study showed separates good detections from bad.",
+        "* **Whether the level and wick parameters select anything real.** They are",
+        "  v1.0.0 placeholders researched on nothing (decision 120), so every `liquidity`,",
+        "  `breakout`, `wick` and `session_trend` count here is a count of what those",
+        "  arbitrary numbers happened to select.",
     ]
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _v2_section(v2: BackfillResult) -> list[str]:
+    """`XAU_OUTCOME_V2` per agent, per session and per horizon (P-1).
+
+    The rule the running system evaluates against, over the same fixture week, with the
+    **whole roster** rather than ``ema_cross`` alone -- a sweep and a cross are different
+    events and averaging them produces a number that describes neither.
+
+    Everything here comes from ``aureon.evaluation.outcome_report``, the same module
+    ``scripts/report_outcomes.py`` renders for a real week, so the document and the
+    operator's terminal cannot disagree about a figure.
+    """
+    rule = XAU_OUTCOME_V2
+    report = aggregate(v2.detections, v2.evaluations, rule, point=POINT)
+    total = report.total()
+
+    lines = [
+        "",
+        "---",
+        "",
+        "## Detection outcomes — `XAU_OUTCOME_V2`",
+        "",
+        f"**The rule to read.** Reference `{rule.reference_price.value}`, thresholds "
+        + " / ".join(f"${t:g}" for t in rule.thresholds)
+        + " in **price** (§21),",
+        f"converted to points with `point = {POINT}` at evaluation time rather than",
+        "written down as a multiplier.",
+        "",
+        f"{total.detections} detections from the whole roster, {total.evaluated} "
+        f"evaluated, {total.with_complete} with at least",
+        f"one COMPLETE horizon. {total.context_only} carry `direction=None` and have no",
+        "favourable side to measure, so they are not evaluable at all (§16, decision 48)",
+        "— they are context for the reviews, not outcomes.",
+        "",
+        "Read the columns literally:",
+        "",
+        "* `complete` / `pending` / `invalid` are horizon counts, not detection counts: one",
+        "  detection contributes one row to each of the rule's seven horizons.",
+        "* every reached count, median and path figure is from **COMPLETE horizons only**;",
+        "  `pending` and `invalid` are never folded into a denominator.",
+        "* `invalid` here is almost entirely the fixture's 49-hour weekend gap: a horizon",
+        "  spanning it cannot be measured, so it is excluded rather than reported as a",
+        "  lower bound (§22).",
+        "* medians are in **price**, signed. A negative median MFE would mean the best",
+        "  price ever offered was still worse than the reference.",
+        "* `median t→$5` is over the horizons that **reached** $5, with that count beside",
+        "  it. It is not the time a typical detection takes; a non-reach has no duration.",
+        "* `MFE_FIRST` + `MAE_FIRST` does not equal `complete`: a horizon where neither",
+        "  side ever crossed $3 is classified `NONE` (§23).",
+        "* `ambiguous` counts horizons where both sides were first crossed inside one",
+        "  candle, so their order was never observed (decision 49).",
+    ]
+    lines += render_markdown(report)
+    return lines
 
 
 def _historical_section(candles) -> list[str]:

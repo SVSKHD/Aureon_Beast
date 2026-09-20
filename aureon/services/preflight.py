@@ -1,0 +1,614 @@
+"""Everything that must be true before a session starts (P-2).
+
+A live session is expensive to repeat: it needs a market to be open, a terminal to be
+running and a human to be watching. Most of the ways it fails are knowable in the first
+two seconds -- a terminal logged into the wrong server, a collection prefix still
+pointing at production, a data directory that is not writable, a clock two minutes off.
+This finds those before the market opens rather than during the review afterwards.
+
+## Every check reports one of five things, and they are not interchangeable
+
+PASS, FAIL, WARN, SKIP, INFO -- defined once in ``aureon.services.checks``, which says
+why two statuses would be a lie. The ones that matter here: ``--skip-mt5`` produces
+SKIPs, never passes, and ``trading_enabled`` is INFO because whether it should be on
+depends on which session this is.
+
+## What it does not do
+
+It never places an order, never touches ``settings.trading_enabled``, and never writes a
+detection. It writes exactly two documents: ``heartbeats/preflight``, which is the
+round-trip it is testing, and ``symbol_specs/{symbol}``, which is the same publish the
+observer performs seconds later.
+"""
+
+from __future__ import annotations
+
+import shutil
+import tempfile
+from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from aureon.config.config import AureonConfig
+from aureon.models.base import utc_now
+from aureon.models.enums import Timeframe
+from aureon.services.checks import CheckReport, CheckResult, Status
+from aureon.storage import paths
+
+#: The drift a broker clock may have from this machine's before it matters (P-2).
+#: Two seconds because a candle boundary is decided on this clock: at M5, a clock two
+#: seconds fast reads a bar as closed while the terminal is still writing it.
+DEFAULT_DRIFT_TOLERANCE_SECONDS = 2.0
+
+#: Beyond this, a stale last tick says "the market is quiet", not "the clock is wrong",
+#: and the two cannot be told apart from one sample. See ``check_clock_drift``.
+MARKET_IDLE_SECONDS = 120.0
+
+#: Below this, the archive directory is reported as short of room. A broker day of M5
+#: parquet is well under a megabyte, so this is generous by two orders of magnitude --
+#: it is meant to catch a full disk, not to budget.
+MIN_FREE_MEGABYTES = 50.0
+
+#: The heartbeat document preflight writes. Deliberately NOT one of ``paths.SERVICES``:
+#: writing ``heartbeats/observer`` would make a dead observer look alive, which is the
+#: exact lie the heartbeat exists to prevent.
+PREFLIGHT_SERVICE = "preflight"
+
+
+def _probe_writable(directory: Path) -> None:
+    """Prove a directory is writable by writing to it. Raises OSError if not.
+
+    An ``os.access`` check would answer a different question -- what the permission bits
+    say -- and would pass on a full disk, a read-only mount and a stale NFS handle.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=directory, prefix=".preflight-", delete=True):
+        pass
+
+
+class Preflight:
+    """Runs the checks. Every dependency is injectable, so every check has a unit test.
+
+    ``provider_factory`` and ``client_factory`` are called at most once each, lazily, so
+    a run with ``--skip-mt5`` never constructs a terminal connection and a run on a
+    machine with no Firestore credentials still reports the local checks.
+    """
+
+    def __init__(
+        self,
+        config: AureonConfig,
+        *,
+        provider_factory: Callable[[], Any] | None = None,
+        client_factory: Callable[[], Any] | None = None,
+        now: Callable[[], datetime] = utc_now,
+        symbol: str | None = None,
+        timeframe: Timeframe | None = None,
+        skip_mt5: bool = False,
+        drift_tolerance_seconds: float = DEFAULT_DRIFT_TOLERANCE_SECONDS,
+        archive_dir: Path | None = None,
+        outbox_path: Path | None = None,
+    ) -> None:
+        self.config = config
+        self.now = now
+        self.symbol = symbol or config.symbols[0]
+        self.timeframe = timeframe or config.timeframes[0]
+        self.skip_mt5 = skip_mt5
+        self.drift_tolerance_seconds = drift_tolerance_seconds
+        self.archive_dir = archive_dir
+        self.outbox_path = outbox_path or Path(config.outbox_path)
+        self._provider_factory = provider_factory or self._default_provider
+        self._client_factory = client_factory or self._default_client
+        self._provider: Any | None = None
+        self._client: Any | None = None
+
+    # ── Default wiring ────────────────────────────────────────────────────────
+
+    def _default_provider(self) -> Any:
+        from aureon.data.mt5_provider import MT5DataProvider
+
+        return MT5DataProvider(
+            market_tz=self.config.market_tz,
+            login=self.config.mt5_login,
+            password=self.config.mt5_password,
+            server=self.config.mt5_server,
+            terminal_path=self.config.mt5_terminal_path,
+        )
+
+    def _default_client(self) -> Any:
+        from aureon.storage.firebase_service import get_client
+
+        return get_client(
+            project_id=self.config.firebase_project_id,
+            emulator_host=self.config.firestore_emulator_host,
+        )
+
+    # ── The run ───────────────────────────────────────────────────────────────
+
+    def run(self) -> CheckReport:
+        """Every check, in the order a human would want them: local, stored, broker."""
+        report = CheckReport()
+        for check in (
+            self.check_config,
+            self.check_collection_prefix,
+            self.check_outbox,
+            self.check_archive_dir,
+            self.check_firestore,
+            self.check_trading_enabled,
+            self.check_mt5_init,
+            self.check_mt5_account,
+            self.check_symbol_tradable,
+            self.check_symbol_specs,
+            self.check_clock_drift,
+        ):
+            report.results.append(check())
+        return report
+
+    # ── Local ─────────────────────────────────────────────────────────────────
+
+    def check_config(self) -> CheckResult:
+        """The identity and clock this session will be recorded under.
+
+        Reported rather than judged, with one exception: the market timezone's CURRENT
+        offset, because that is the number an operator compares against the terminal's
+        clock, and "Europe/Athens" alone does not tell them whether to expect +2 or +3.
+        """
+        from zoneinfo import ZoneInfo
+
+        offset = self.now().astimezone(ZoneInfo(self.config.market_tz)).utcoffset()
+        hours = (offset.total_seconds() / 3600) if offset else 0.0
+        detail = (
+            f"account_scope={self.config.account_scope} "
+            f"symbols={','.join(self.config.symbols)} "
+            f"tf={','.join(t.value for t in self.config.timeframes)} "
+            f"ema={self.config.ema_fast}/{self.config.ema_slow} "
+            f"tz={self.config.market_tz} (UTC{hours:+.0f} now) "
+            f"rule={self.config.evaluation_rule_id}"
+        )
+        if self.symbol not in self.config.symbols:
+            return CheckResult(
+                "config",
+                Status.FAIL,
+                f"{detail} — but preflight was asked about {self.symbol}",
+                remedy=(
+                    f"{self.symbol} is not in AUREON_SYMBOLS, so the observer will not "
+                    "watch it. Fix one or the other."
+                ),
+            )
+        return CheckResult("config", Status.PASS, detail)
+
+    def check_collection_prefix(self) -> CheckResult:
+        """Which database this session will write into.
+
+        A WARN rather than a FAIL on the production prefix: writing to production is a
+        legitimate thing to do eventually, and refusing it would make preflight
+        something to be bypassed. But a first validation session writing into the same
+        collections as everything else is almost never what was meant, and the mistake
+        is invisible afterwards -- the documents look identical.
+        """
+        detail = f"prefix={paths.PREFIX} (e.g. {paths.DETECTIONS})"
+        if paths.PREFIX == paths.DEFAULT_COLLECTION_PREFIX:
+            return CheckResult(
+                "collection_prefix",
+                Status.WARN,
+                f"{detail} — the PRODUCTION default",
+                remedy=(
+                    "Set AUREON_COLLECTION_PREFIX to something else for a validation "
+                    "session; the data is worth keeping separate from production."
+                ),
+            )
+        return CheckResult("collection_prefix", Status.PASS, detail)
+
+    def check_outbox(self) -> CheckResult:
+        """The durable queue is writable, and what it is still holding.
+
+        The pending count is the point. An outbox with rows left from a previous run
+        means detections were produced and never reached Firestore, and starting a new
+        session on top of that makes the two runs' failures impossible to separate.
+        """
+        from aureon.outbox.local_outbox import LocalOutbox
+
+        path = self.outbox_path
+        try:
+            _probe_writable(path.parent if path.parent.as_posix() else Path())
+            with LocalOutbox(path) as outbox:
+                pending = outbox.pending_count()
+                total = len(outbox)
+        except Exception as exc:  # sqlite3.Error, OSError -- both mean "unusable"
+            return CheckResult(
+                "outbox",
+                Status.FAIL,
+                f"{path}: {exc}",
+                remedy="Point AUREON_OUTBOX_PATH somewhere writable.",
+            )
+        detail = f"{path} ({total} rows, {pending} pending)"
+        if pending:
+            return CheckResult(
+                "outbox",
+                Status.WARN,
+                detail,
+                remedy=(
+                    f"{pending} detection(s) from a previous run never reached "
+                    "Firestore. Drain them before this session, or their failure and "
+                    "this session's become one indistinguishable story."
+                ),
+            )
+        return CheckResult("outbox", Status.PASS, detail)
+
+    def check_archive_dir(self) -> CheckResult:
+        """Where the live candles go, and whether there is room for them (§82).
+
+        Without the archive there is no way to tell a live/replay difference caused by
+        the engine from one caused by the broker serving different bars, so an
+        unwritable directory costs the whole session's evidence, not a log line.
+        """
+        from aureon.data.live_candle_archive import DEFAULT_ARCHIVE_DIR
+
+        directory = self.archive_dir or DEFAULT_ARCHIVE_DIR
+        try:
+            _probe_writable(directory)
+            free_mb = shutil.disk_usage(directory).free / (1024 * 1024)
+        except OSError as exc:
+            return CheckResult(
+                "archive_dir",
+                Status.FAIL,
+                f"{directory}: {exc}",
+                remedy="Create it, or pass --archive-dir somewhere writable.",
+            )
+        detail = f"{directory} ({free_mb:,.0f} MB free)"
+        if free_mb < MIN_FREE_MEGABYTES:
+            return CheckResult(
+                "archive_dir",
+                Status.WARN,
+                detail,
+                remedy=f"Under {MIN_FREE_MEGABYTES:.0f} MB free.",
+            )
+        return CheckResult("archive_dir", Status.PASS, detail)
+
+    # ── Firestore ─────────────────────────────────────────────────────────────
+
+    def _client_or_none(self) -> Any | None:
+        if self._client is None:
+            self._client = self._client_factory()
+        return self._client
+
+    def check_firestore(self) -> CheckResult:
+        """A real write and a real read-back, against the prefix this session will use.
+
+        Round trip rather than "the client constructed": credentials that resolve, a
+        project that exists and rules that permit a write are three different things,
+        and only the last one is what the observer needs in ten minutes.
+        """
+        from aureon.storage.system_state_repository import HeartbeatRepository
+
+        started = self.now()
+        try:
+            client = self._client_or_none()
+            # min_interval 0 and force: the throttle exists to protect a service loop,
+            # and a throttled no-op here would report a round trip that never happened.
+            repository = HeartbeatRepository(client, min_interval_seconds=0.0)
+            written = repository.beat(
+                PREFLIGHT_SERVICE,
+                detail={"symbol": self.symbol, "prefix": paths.PREFIX},
+                force=True,
+                now=started,
+            )
+            read_back = repository.read(PREFLIGHT_SERVICE)
+        except Exception as exc:
+            self._client = None
+            return CheckResult(
+                "firestore",
+                Status.FAIL,
+                f"{paths.HEARTBEATS}: {type(exc).__name__}: {exc}",
+                remedy=(
+                    "Check GOOGLE_APPLICATION_CREDENTIALS, AUREON_FIREBASE_PROJECT_ID, "
+                    "and that the rules permit a write to this prefix."
+                ),
+            )
+        if not written or read_back is None:
+            return CheckResult(
+                "firestore",
+                Status.FAIL,
+                f"wrote {paths.heartbeat_path(PREFLIGHT_SERVICE)} but read back nothing",
+                remedy="The write reported success and the document is not there.",
+            )
+        if read_back.updated_at != started:
+            return CheckResult(
+                "firestore",
+                Status.FAIL,
+                f"read back {read_back.updated_at.isoformat()}, wrote "
+                f"{started.isoformat()}",
+                remedy="The round trip returned a different document than it wrote.",
+            )
+        elapsed_ms = (self.now() - started).total_seconds() * 1000
+        return CheckResult(
+            "firestore",
+            Status.PASS,
+            f"{paths.heartbeat_path(PREFLIGHT_SERVICE)} round trip "
+            f"({elapsed_ms:.0f} ms)",
+        )
+
+    def check_trading_enabled(self) -> CheckResult:
+        """Printed, never judged (§56).
+
+        Whether trading should be on depends on which session this is -- an observation
+        run wants it false, a demo execution drill wants it true -- so preflight refuses
+        to have an opinion and refuses to let it go unseen.
+        """
+        from aureon.storage.settings_repository import ExecutionSettingsRepository
+
+        if self._client is None:
+            return CheckResult(
+                "trading_enabled",
+                Status.SKIP,
+                "not read: no Firestore client",
+                remedy="Fix the firestore check first.",
+            )
+        try:
+            settings = ExecutionSettingsRepository(self._client).read()
+        except Exception as exc:
+            return CheckResult(
+                "trading_enabled", Status.FAIL, f"{type(exc).__name__}: {exc}"
+            )
+        if settings is None:
+            return CheckResult(
+                "trading_enabled",
+                Status.INFO,
+                f"false (no {paths.execution_settings_path()} document; the default is "
+                "fail-closed)",
+            )
+        stamp = (
+            settings.updated_at.isoformat() if settings.updated_at else "never written"
+        )
+        return CheckResult(
+            "trading_enabled",
+            Status.INFO,
+            f"{str(settings.trading_enabled).lower()} "
+            f"(v{settings.settings_version}, by {settings.updated_by or '—'} at "
+            f"{stamp}, max_lot={settings.max_lot})",
+        )
+
+    # ── The terminal ──────────────────────────────────────────────────────────
+
+    def _skipped_mt5(self, name: str) -> CheckResult:
+        if self.skip_mt5:
+            return CheckResult(name, Status.SKIP, "not run: --skip-mt5")
+        return CheckResult(
+            name,
+            Status.SKIP,
+            "not run: the terminal is not connected",
+            remedy="Fix mt5_init first.",
+        )
+
+    def check_mt5_init(self) -> CheckResult:
+        if self.skip_mt5:
+            return CheckResult(
+                "mt5_init",
+                Status.SKIP,
+                "not run: --skip-mt5",
+                remedy="A session cannot start on a skipped terminal check.",
+            )
+        try:
+            provider = self._provider_factory()
+            provider.connect()
+        except Exception as exc:
+            return CheckResult(
+                "mt5_init",
+                Status.FAIL,
+                f"{type(exc).__name__}: {exc}",
+                remedy=(
+                    "Start the MT5 terminal and log in, then re-run. MetaTrader5 is "
+                    "Windows-only; on any other OS this check cannot pass."
+                ),
+            )
+        self._provider = provider
+        try:
+            terminal = provider.terminal_info()
+        except Exception:
+            terminal = {}
+        build = terminal.get("build", "?")
+        name = terminal.get("name", "?")
+        return CheckResult(
+            "mt5_init", Status.PASS, f"connected to {name} build {build}"
+        )
+
+    def check_mt5_account(self) -> CheckResult:
+        """The terminal is logged into the account the config names.
+
+        The failure this prevents is the expensive one: a terminal left logged into a
+        different server produces a perfectly plausible session whose candles came from
+        somewhere else, and nothing downstream records which server they came from.
+        """
+        if self._provider is None:
+            return self._skipped_mt5("mt5_account")
+        try:
+            account = self._provider.account_info()
+        except Exception as exc:
+            return CheckResult(
+                "mt5_account", Status.FAIL, f"{type(exc).__name__}: {exc}"
+            )
+
+        login, server = account.get("login"), account.get("server")
+        detail = (
+            f"login={login} server={server} currency={account.get('currency', '?')} "
+            f"trade_allowed={str(account.get('trade_allowed', False)).lower()}"
+        )
+        wanted_login, wanted_server = self.config.mt5_login, self.config.mt5_server
+        mismatches = []
+        if wanted_login is not None and int(login or 0) != int(wanted_login):
+            mismatches.append(f"login is {login}, config says {wanted_login}")
+        if wanted_server is not None and str(server) != str(wanted_server):
+            mismatches.append(f"server is {server!r}, config says {wanted_server!r}")
+        if mismatches:
+            return CheckResult(
+                "mt5_account",
+                Status.FAIL,
+                f"{detail} — " + "; ".join(mismatches),
+                remedy=(
+                    "The terminal is logged into a different account than the config "
+                    "names. Every candle this session records would come from there."
+                ),
+            )
+        if wanted_login is None and wanted_server is None:
+            return CheckResult(
+                "mt5_account",
+                Status.WARN,
+                f"{detail} — config names no login/server to compare against",
+                remedy=(
+                    "Set AUREON_MT5_LOGIN and AUREON_MT5_SERVER so this check has "
+                    "something to verify rather than something to report."
+                ),
+            )
+        return CheckResult("mt5_account", Status.PASS, detail)
+
+    def check_symbol_tradable(self) -> CheckResult:
+        """The symbol exists, is visible, and the broker will accept an order on it."""
+        if self._provider is None:
+            return self._skipped_mt5("symbol_tradable")
+        try:
+            info = self._provider.symbol_info(self.symbol)
+        except Exception as exc:
+            return CheckResult(
+                "symbol_tradable",
+                Status.FAIL,
+                f"{self.symbol}: {type(exc).__name__}: {exc}",
+                remedy=f"Add {self.symbol} to the terminal's Market Watch.",
+            )
+        detail = (
+            f"{info.symbol} point={info.point} digits={info.digits} "
+            f"vol={info.volume_min}/{info.volume_step}/{info.volume_max} "
+            f"stops={info.stops_level} fill={','.join(m.value for m in info.filling_modes) or '—'} "
+            f"trade_mode={info.trade_mode}"
+        )
+        if info.trade_mode == "disabled":
+            return CheckResult(
+                "symbol_tradable",
+                Status.FAIL,
+                detail,
+                remedy=f"The broker has {self.symbol} closed to trading.",
+            )
+        if not info.filling_modes:
+            return CheckResult(
+                "symbol_tradable",
+                Status.FAIL,
+                detail,
+                remedy=(
+                    "The symbol reports no supported filling mode, so no order can be "
+                    "built for it (§39)."
+                ),
+            )
+        if info.trade_mode != "full":
+            return CheckResult(
+                "symbol_tradable",
+                Status.WARN,
+                detail,
+                remedy=(
+                    f"trade_mode is {info.trade_mode}: some order directions will be "
+                    "rejected by the broker."
+                ),
+            )
+        return CheckResult("symbol_tradable", Status.PASS, detail)
+
+    def check_symbol_specs(self) -> CheckResult:
+        """Publish the broker's metadata and read it back (decision 79).
+
+        The check is named ``symbol_specs_published`` rather than after the collection:
+        a string constant equal to a bare collection name is exactly what the §83
+        boundary guard forbids, and a check label is not worth an exemption to a rule
+        that exists because a bare literal fails silently.
+
+        This is the path Discord depends on: it may never call the broker, so a lot it
+        validates against stale or missing specs is validated against nothing.
+        """
+        if self._provider is None:
+            return self._skipped_mt5("symbol_specs_published")
+        if self._client is None:
+            return CheckResult(
+                "symbol_specs_published",
+                Status.SKIP,
+                "not run: no Firestore client",
+                remedy="Fix the firestore check first.",
+            )
+        from aureon.storage.symbol_repository import SymbolRepository
+
+        try:
+            info = self._provider.symbol_info(self.symbol)
+            repository = SymbolRepository(self._client)
+            path = repository.publish(info, now=self.now())
+            stored = repository.get(self.symbol)
+        except Exception as exc:
+            return CheckResult(
+                "symbol_specs_published", Status.FAIL, f"{type(exc).__name__}: {exc}"
+            )
+        if stored != info:
+            return CheckResult(
+                "symbol_specs_published",
+                Status.FAIL,
+                f"{path} read back different metadata than was published",
+                remedy="Discord would validate lots against something else entirely.",
+            )
+        return CheckResult("symbol_specs_published", Status.PASS, f"{path} published and verified")
+
+    def check_clock_drift(self) -> CheckResult:
+        """This machine's clock against the broker's, to the extent one sample can.
+
+        It matters because candle boundaries are decided on the LOCAL clock: a clock
+        running fast reads a bar as closed while the terminal is still writing it, and
+        the detection that follows is computed from a candle that later changed.
+
+        The measurement is a last tick's timestamp, and it is asymmetric on purpose:
+
+        * a tick **in the future** is unambiguous -- no tick can have happened after
+          now, so a clock behind the broker's is a FAIL;
+        * a tick **in the past** by more than the tolerance is *inconclusive*, because a
+          quiet market and a clock running fast produce exactly the same number. It is
+          reported as a WARN naming the lag, not as a pass and not as a failure.
+
+        The honest resolution is to re-run it while the symbol is actually ticking.
+        """
+        if self._provider is None:
+            return self._skipped_mt5("clock_drift")
+        try:
+            tick_at = self._provider.last_tick_time(self.symbol)
+        except Exception as exc:
+            return CheckResult(
+                "clock_drift", Status.FAIL, f"{type(exc).__name__}: {exc}"
+            )
+        if tick_at is None:
+            return CheckResult(
+                "clock_drift",
+                Status.SKIP,
+                f"the terminal reports no tick for {self.symbol}",
+                remedy="Nothing was measured. Re-run while the symbol is ticking.",
+            )
+
+        lag = (self.now() - tick_at).total_seconds()
+        stamp = f"last tick {tick_at.isoformat()}, {lag:+.1f}s from local now"
+        if lag < -self.drift_tolerance_seconds:
+            return CheckResult(
+                "clock_drift",
+                Status.FAIL,
+                f"{stamp} — the broker's clock is AHEAD of this machine's",
+                remedy=(
+                    "A tick cannot happen in the future, so this is real drift. Sync "
+                    "this machine's clock (w32tm /resync) before the session."
+                ),
+            )
+        if lag <= self.drift_tolerance_seconds:
+            return CheckResult("clock_drift", Status.PASS, stamp)
+        if lag > MARKET_IDLE_SECONDS:
+            return CheckResult(
+                "clock_drift",
+                Status.SKIP,
+                f"{stamp} — the market looks closed, so drift was not measured",
+                remedy="Re-run within a few minutes of the open.",
+            )
+        return CheckResult(
+            "clock_drift",
+            Status.WARN,
+            f"{stamp} — either a quiet market or a fast local clock",
+            remedy=(
+                "One sample cannot tell those apart. Re-run while the symbol is "
+                "ticking; if the lag persists, sync this machine's clock."
+            ),
+        )

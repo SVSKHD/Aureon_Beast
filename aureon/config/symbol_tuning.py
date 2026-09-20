@@ -15,7 +15,11 @@ noise — and nothing downstream would say so, because a sweep is a sweep once i
 written.
 
 So the shape is here before it is needed: one place that answers "what parameters does
-this symbol use", defaulting to the researched-on-gold values for everything.
+this symbol use" -- and, since P-6, one place that answers "may this symbol be observed
+at all". The observer refuses to start on a symbol with no entry (``require_tuning``),
+which is a behaviour change from the silent default it had before: gold's numbers on an
+unreviewed instrument produce detections that look like sweeps and are noise, and nothing
+downstream can tell, because a sweep is a sweep once it is written.
 
 ## Changing a value is a new agent_version
 
@@ -82,10 +86,50 @@ class SymbolTuning:
         return not self.overridden
 
 
-#: Per-symbol overrides. Empty on purpose: XAUUSD runs the shipped values, and nothing
-#: else has been researched. A second symbol adds an entry here rather than editing an
-#: agent's defaults, which would silently change gold too.
-OVERRIDES: dict[str, dict[str, float]] = {}
+#: The tuning table: every symbol Aureon is willing to observe, and what it uses.
+#:
+#: Membership is the point, not just the values. A symbol **absent from this table has no
+#: reviewed entry**, and the observer refuses to start on one (``require_tuning``) rather
+#: than running it on gold's numbers and producing detections that look like sweeps and
+#: are noise. An entry may be empty -- XAUUSD's values ARE the shipped defaults -- but
+#: somebody has to have written the line.
+OVERRIDES: dict[str, dict[str, float]] = {
+    # The symbol everything is calibrated against. The values live in the DEFAULT_*
+    # constants above; the empty entry says "reviewed, and the defaults are the answer",
+    # which is a different statement from "nobody has looked".
+    "XAUUSD": {"point": 0.01},
+    # ── XAGUSD: a PLACEHOLDER OF A PLACEHOLDER ────────────────────────────────────
+    # Derived by arithmetic from gold's unresearched numbers, so it is one step further
+    # from evidence than they are, and that is worth saying plainly before anyone reads
+    # a silver detection as a measurement.
+    #
+    # The derivation, so it can be argued with rather than guessed at: the distance
+    # thresholds are scaled by the ratio of typical daily ranges (gold ~$30 on ~$2400,
+    # silver ~$0.60 on ~$30, so ~50x) and re-expressed in silver's own tick (0.001).
+    # Gold's 5 points of penetration is $0.05, which is 0.17% of its daily range; the
+    # same fraction of silver's range is $0.001 -- one single point.
+    #
+    # That result is itself the finding: at these scales a "penetration" is one tick,
+    # which is inside the spread on most silver feeds. Expect this symbol to produce
+    # either noise or nothing until someone researches it properly, and read
+    # `is_default` on the params snapshot before believing any of it.
+    #
+    # The RATIOS are deliberately not scaled. min_rejection_fraction, the wick ratios
+    # and max_close_position are dimensionless -- a wick covering 25% of a candle means
+    # the same thing on any instrument -- so scaling them would be inventing a
+    # difference rather than correcting one.
+    "XAGUSD": {
+        "point": 0.001,
+        "min_penetration_points": 1.0,
+        "min_close_beyond_points": 2.0,
+        "min_range_points": 4.0,
+        "flat_points": 10.0,
+    },
+}
+
+
+class UnknownSymbolTuning(KeyError):
+    """Raised for a symbol with no entry in the tuning table."""
 
 
 def _env_overrides(symbol: str) -> dict[str, float]:
@@ -111,16 +155,32 @@ def _env_overrides(symbol: str) -> dict[str, float]:
     return found
 
 
-def tuning_for(symbol: str, *, point: float | None = None) -> SymbolTuning:
-    """The parameters for one symbol: shipped defaults unless overridden.
+def known_symbols() -> tuple[str, ...]:
+    """Every symbol with a reviewed tuning entry."""
+    return tuple(sorted(OVERRIDES))
 
-    A symbol with no entry gets the gold-researched values, which is correct for XAUUSD
-    and is a **known** approximation for anything else -- ``is_default`` says which.
+
+def has_tuning(symbol: str) -> bool:
+    return symbol.upper() in OVERRIDES
+
+
+def tuning_for(symbol: str, *, point: float | None = None) -> SymbolTuning:
+    """The parameters for one symbol: shipped defaults unless the table says otherwise.
+
+    **Tolerant on purpose.** A symbol with no entry gets the gold-researched values,
+    because the reporting and verification tools call this for whatever symbol they are
+    handed and must not explode mid-report. ``is_default`` says which case a reader is
+    looking at. The place that must NOT be tolerant is the observer's start-up, and that
+    calls ``require_tuning``.
+
+    An explicitly passed ``point`` **wins over the table**. The table's value is what we
+    expect the tick to be; ``symbol_info.point`` is what it is, and a caller passing it
+    has read it from the broker.
     """
     overrides: dict[str, float] = dict(OVERRIDES.get(symbol.upper(), {}))
     overrides.update(_env_overrides(symbol))
     if point is not None:
-        overrides.setdefault("point", point)
+        overrides["point"] = point
 
     base = SymbolTuning()
     changed = tuple(
@@ -131,3 +191,24 @@ def tuning_for(symbol: str, *, point: float | None = None) -> SymbolTuning:
         )
     )
     return replace(base, **overrides, overridden=changed)
+
+
+def require_tuning(symbol: str, *, point: float | None = None) -> SymbolTuning:
+    """As ``tuning_for``, but refuses a symbol nobody has reviewed.
+
+    The fail-fast the observer uses at start-up, and a deliberate behaviour change from
+    the silent default it had before. Running a second symbol on gold's numbers produces
+    detections that *look* like sweeps and are noise -- and nothing downstream says so,
+    because a sweep is a sweep once it is written. Refusing at start-up costs a minute;
+    a session of plausible-looking noise costs the session and everything computed from
+    it afterwards.
+    """
+    if not has_tuning(symbol):
+        raise UnknownSymbolTuning(
+            f"{symbol} has no entry in aureon/config/symbol_tuning.py, so its agent "
+            f"thresholds would silently be gold's. Reviewed symbols: "
+            f"{', '.join(known_symbols())}. Add an entry -- an empty one is a valid "
+            "answer, it means the shipped defaults were reviewed and kept -- and bump "
+            "the agent versions if you change a value (§12)."
+        )
+    return tuning_for(symbol, point=point)

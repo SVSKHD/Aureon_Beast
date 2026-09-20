@@ -62,6 +62,15 @@ def get_client(*, project_id: str | None = None, emulator_host: str | None = Non
             import firebase_admin
             from firebase_admin import credentials, firestore
         except ImportError as exc:
+            if emulator_host:
+                # The emulator needs no credentials, so google-cloud-firestore alone is
+                # enough to reach it -- and that is the whole dependency set on a machine
+                # that only ever rehearses. Restricted to the emulator ON PURPOSE:
+                # against a real project the firebase-admin credential path is the one
+                # the rest of the system is built on, and a missing dependency there
+                # should be loud rather than quietly resolved through ADC.
+                _client = _emulator_client(project_id)
+                return _client
             raise RuntimeError(
                 "firebase-admin is not installed. Install the project dependencies, "
                 "or pass an in-memory client to the repositories in tests."
@@ -81,6 +90,30 @@ def get_client(*, project_id: str | None = None, emulator_host: str | None = Non
 
         _client = firestore.client()
         return _client
+
+
+def _emulator_client(project_id: str | None) -> Any:
+    """A plain ``google.cloud.firestore`` client, for the emulator only.
+
+    Exists so the operator tools -- preflight, session verification, the demo drills --
+    can be rehearsed against the emulator on a machine with no service account and no
+    firebase-admin. A rehearsal nobody can run is not a rehearsal.
+    """
+    try:
+        from google.cloud import firestore as gcloud_firestore
+    except ImportError as exc:  # pragma: no cover - both packages absent
+        raise RuntimeError(
+            "neither firebase-admin nor google-cloud-firestore is installed; "
+            "install the project dependencies."
+        ) from exc
+
+    project = project_id or os.environ.get("GOOGLE_CLOUD_PROJECT") or "aureon-emulator"
+    log.warning(
+        "firebase-admin is absent; using google-cloud-firestore against the emulator "
+        "with project %s",
+        project,
+    )
+    return gcloud_firestore.Client(project=project)
 
 
 def set_client(client: Any | None) -> None:

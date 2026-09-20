@@ -220,6 +220,45 @@ class MT5DataProvider(BaseMarketDataProvider):
             spread=int(getattr(info, "spread", 0)) or None,
         )
 
+    def account_info(self) -> dict[str, Any]:
+        """Who the terminal is logged in as, for the preflight identity check (P-2).
+
+        Returns a plain dict rather than the vendor's named tuple so callers outside
+        this module never hold an MT5 object -- the same reason every other method here
+        returns an Aureon model. Deliberately omits the balance: preflight's output gets
+        pasted into session evidence, and an account balance is not evidence of
+        anything the session is testing.
+        """
+        info = self.mt5.account_info()
+        if info is None:
+            raise MarketDataError(f"account_info() failed: {self.mt5.last_error()}")
+        return {
+            "login": int(getattr(info, "login", 0)),
+            "server": str(getattr(info, "server", "")),
+            "currency": str(getattr(info, "currency", "")),
+            "leverage": int(getattr(info, "leverage", 0)),
+            "trade_allowed": bool(getattr(info, "trade_allowed", False)),
+        }
+
+    def terminal_info(self) -> dict[str, Any]:
+        """The terminal's own identity: build, name, connection state.
+
+        The build number is what ``docs/MT5_SESSION_CHECKLIST.md`` asks to be recorded
+        beside a session's results -- a comparison is evidence about one terminal, and
+        without the build it is an anecdote about an unknown one. The installation path
+        is left out on purpose: it names a machine, and it goes nowhere useful.
+        """
+        info = self.mt5.terminal_info()
+        if info is None:
+            raise MarketDataError(f"terminal_info() failed: {self.mt5.last_error()}")
+        return {
+            "build": int(getattr(info, "build", 0)),
+            "name": str(getattr(info, "name", "")),
+            "company": str(getattr(info, "company", "")),
+            "connected": bool(getattr(info, "connected", False)),
+            "trade_allowed": bool(getattr(info, "trade_allowed", False)),
+        }
+
     def last_tick_time(self, symbol: str) -> datetime | None:
         """When the symbol last ticked, for staleness checks (§10)."""
         tick = self.mt5.symbol_info_tick(symbol)
