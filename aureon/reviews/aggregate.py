@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from aureon.evaluation.context_tags import CONTEXT_TAGS
 from aureon.models.detection import Detection
 from aureon.models.enums import (
     ExecutionClassification,
@@ -339,3 +341,121 @@ def horizon_status_counts(data: PeriodData) -> dict[HorizonStatus, int]:
         counts[HorizonStatus.PENDING] += len(evaluation.pending_horizons)
         counts[HorizonStatus.INVALID] += len(evaluation.invalid_horizons)
     return counts
+
+
+# ── Grouping outcomes by context tag (§23) ────────────────────────────────────
+
+
+@dataclass
+class TagComparison:
+    """One tag's outcomes, split into the detections that carry it and those that do not.
+
+    Both sides are reported, always. A "with" figure alone is unreadable -- 60% reached
+    means nothing until you know the "without" number is 30% or 65%.
+    """
+
+    tag: str
+    horizon_id: str
+    threshold_key: str
+    with_tag_reached: int = 0
+    with_tag_complete: int = 0
+    without_tag_reached: int = 0
+    without_tag_complete: int = 0
+
+    @property
+    def with_tag_rate(self) -> float | None:
+        if not self.with_tag_complete:
+            return None
+        return self.with_tag_reached / self.with_tag_complete
+
+    @property
+    def without_tag_rate(self) -> float | None:
+        if not self.without_tag_complete:
+            return None
+        return self.without_tag_reached / self.without_tag_complete
+
+    @property
+    def difference(self) -> float | None:
+        """``with`` minus ``without``, or None when either side has no data.
+
+        None rather than 0.0: "no difference" is a finding, "nothing to compare" is not.
+        """
+        left, right = self.with_tag_rate, self.without_tag_rate
+        if left is None or right is None:
+            return None
+        return left - right
+
+    @property
+    def comparable(self) -> bool:
+        """Whether both sides have enough to be worth reading at all.
+
+        Five is not a statistical threshold -- there is no statistics to be had at these
+        counts. It is a floor below which a percentage is actively misleading, because
+        one detection moves it by twenty points.
+        """
+        return self.with_tag_complete >= 5 and self.without_tag_complete >= 5
+
+
+def compare_by_tag(
+    data: PeriodData,
+    rule: EvaluationRule,
+    *,
+    horizon_id: str | None = None,
+    threshold: str | None = None,
+    tags: Sequence[str] = CONTEXT_TAGS,
+) -> list[TagComparison]:
+    """Split each tag's population and count reached-N on both sides (§23).
+
+    COMPLETE horizons only, like every other reached count in this package -- a PENDING
+    horizon is unknown on both sides of the split, and folding it into either would make
+    the comparison say something neither population supports.
+
+    This is a research view and nothing depends on it. With 29 crosses in a week any
+    difference here is anecdote; the value is in being able to look at all, rather than
+    reading one average over populations that had nothing in common.
+    """
+    key = threshold or rule.threshold_keys[0]
+    target = horizon_id or rule.horizons[0].id
+
+    comparisons = [
+        TagComparison(tag=tag, horizon_id=target, threshold_key=key) for tag in tags
+    ]
+    for evaluation in _sorted_evaluations(data.evaluations):
+        completed = next(
+            (h for h in evaluation.complete_horizons if h.horizon_id == target), None
+        )
+        if completed is None:
+            continue
+        reached = bool(completed.reached.get(key))
+        for comparison in comparisons:
+            # A tag absent from the dict counts as "without". An evaluation written
+            # before tags existed therefore lands on the without side rather than being
+            # silently dropped from both -- which would change the denominator without
+            # saying so.
+            if evaluation.context_tags.get(comparison.tag, False):
+                comparison.with_tag_complete += 1
+                comparison.with_tag_reached += int(reached)
+            else:
+                comparison.without_tag_complete += 1
+                comparison.without_tag_reached += int(reached)
+    return comparisons
+
+
+def render_tag_comparisons(comparisons: Sequence[TagComparison]) -> str:
+    """The §23 comparison as stable text, for a review's notes or a terminal."""
+    if not comparisons:
+        return "no context comparisons available"
+    lines = []
+    for comparison in sorted(comparisons, key=lambda c: c.tag):
+        with_rate = comparison.with_tag_rate
+        without_rate = comparison.without_tag_rate
+        left = "—" if with_rate is None else f"{with_rate * 100:.0f}%"
+        right = "—" if without_rate is None else f"{without_rate * 100:.0f}%"
+        note = "" if comparison.comparable else "  (too few to read)"
+        lines.append(
+            f"{comparison.tag}: with {left} ({comparison.with_tag_reached}/"
+            f"{comparison.with_tag_complete}), without {right} "
+            f"({comparison.without_tag_reached}/{comparison.without_tag_complete})"
+            f"{note}"
+        )
+    return "\n".join(lines)

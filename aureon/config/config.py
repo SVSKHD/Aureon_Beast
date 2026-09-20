@@ -87,6 +87,11 @@ class AureonConfig(AureonModel):
     # agent_params_snapshot, and under §12 the version is in the detection id.
     ema_fast: int = 20
     ema_slow: int = 50
+
+    #: How many candles back a sweep or wick still counts as context for a cross
+    #: (§23). On M5, 3 candles is fifteen minutes -- close enough that a human
+    #: watching the chart would have seen both events together.
+    context_window_candles: int = 3
     state_heartbeat_seconds: float = 5.0
     outbox_path: str = "outbox.db"
     observer_state_path: str = "observer_state.json"
@@ -176,6 +181,7 @@ class AureonConfig(AureonModel):
             timeframes=timeframes,
             ema_fast=_env_int("AUREON_EMA_FAST", 20),
             ema_slow=_env_int("AUREON_EMA_SLOW", 50),
+            context_window_candles=_env_int("AUREON_CONTEXT_WINDOW_CANDLES", 3),
             state_heartbeat_seconds=_env_float("AUREON_STATE_HEARTBEAT_SECONDS", 5.0),
             outbox_path=_env_str("AUREON_OUTBOX_PATH", "outbox.db"),
             observer_state_path=_env_str("AUREON_OBSERVER_STATE_PATH", "observer_state.json"),

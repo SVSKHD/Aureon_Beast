@@ -261,6 +261,14 @@ class DetectionEvaluation(AureonDocument):
         default=None, description="The actual price measured from."
     )
     horizons: tuple[HorizonResult, ...] = ()
+    context_tags: dict[str, bool] = Field(
+        default_factory=dict,
+        description=(
+            "What else the machine had seen at this detection's candle close (§19, "
+            "§23). Derived ONLY from data available at that close -- see "
+            "aureon.evaluation.context_tags. Research grouping, never a gate."
+        ),
+    )
     updated_at: UtcDatetime | None = None
 
     @model_validator(mode="after")

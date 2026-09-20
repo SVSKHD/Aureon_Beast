@@ -70,6 +70,7 @@ Outcomes for one detection under one rule (§22).
 | `reference_price` | `ReferencePrice` | yes | — |  |
 | `reference_value` | `float \| null` | no | `None` | The actual price measured from. |
 | `horizons` | `tuple[HorizonResult]` | no | `()` |  |
+| `context_tags` | `dict[str, bool]` | no | `dict()` | What else the machine had seen at this detection's candle close (§19, §23). Derived ONLY from data available at that close -- see aureon.evaluation.context_tags. Research grouping, never a gate. |
 | `updated_at` | `AwareDatetime \| null` | no | `None` |  |
 
 ### TradeRequest

@@ -32,7 +32,12 @@ from datetime import datetime
 from aureon.config import AureonConfig
 from aureon.evaluation.rules import get_rule
 from aureon.models.base import utc_now
-from aureon.reviews.periods import previous_iso_week, previous_market_date
+from aureon.reviews.aggregate import compare_by_tag, render_tag_comparisons
+from aureon.reviews.periods import (
+    previous_iso_week,
+    previous_market_date,
+    week_period,
+)
 from aureon.reviews.service import ReviewService
 
 log = logging.getLogger("aureon.review")
@@ -93,6 +98,19 @@ def run_weekly(
         print(f"  {outcome.horizon_id:<16} {cells}")
     if review.inferred_links:
         print(f"  {len(review.inferred_links)} inferred link(s) (analysis only, §50)")
+
+    # §23: the same week split by what else the machine had seen. Printed rather than
+    # stored on the review document -- it is a research view, and a week of detections
+    # is far too few for any of these differences to be more than anecdote.
+    period = week_period(review.iso_year, review.iso_week, service.market_tz)
+    data = service.load(period)
+    comparisons = compare_by_tag(data, service.rule)
+    if any(c.with_tag_complete or c.without_tag_complete for c in comparisons):
+        horizon = comparisons[0].horizon_id
+        key = comparisons[0].threshold_key
+        print(f"  context (horizon {horizon}, threshold {key}) — research only:")
+        for line in render_tag_comparisons(comparisons).splitlines():
+            print(f"    {line}")
     return 0
 
 

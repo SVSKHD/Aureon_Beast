@@ -699,3 +699,159 @@ def test_the_daily_default_is_yesterday() -> None:
     assert previous_market_date(TZ, now=datetime(2026, 9, 18, 12, 0, tzinfo=UTC)) == (
         "2026-09-17"
     )
+
+
+# ── Grouping outcomes by context tag (§23) ────────────────────────────────────
+
+
+def tagged_evaluation(
+    detection_id: str, *, reached: bool, tags: dict[str, bool]
+) -> DetectionEvaluation:
+    evaluation = complete_evaluation(
+        detection_id, reached={k: reached for k in ("3", "5", "10", "15", "20")}
+    )
+    return evaluation.model_copy(update={"context_tags": tags})
+
+
+def test_a_tag_splits_the_population_into_with_and_without() -> None:
+    """Known counts in, known comparison out.
+
+    Three tagged detections of which two reached, two untagged of which none did.
+    """
+    from aureon.reviews.aggregate import compare_by_tag
+
+    data = PeriodData(
+        detections=[detection(ident=f"d{i}") for i in range(5)],
+        evaluations={
+            "d0": tagged_evaluation("d0", reached=True, tags={"has_lower_rejection_wick": True}),
+            "d1": tagged_evaluation("d1", reached=True, tags={"has_lower_rejection_wick": True}),
+            "d2": tagged_evaluation("d2", reached=False, tags={"has_lower_rejection_wick": True}),
+            "d3": tagged_evaluation("d3", reached=False, tags={"has_lower_rejection_wick": False}),
+            "d4": tagged_evaluation("d4", reached=False, tags={"has_lower_rejection_wick": False}),
+        },
+    )
+
+    comparisons = compare_by_tag(data, RULE, horizon_id=HORIZON_5_CANDLES, threshold="3")
+    wick = next(c for c in comparisons if c.tag == "has_lower_rejection_wick")
+
+    assert (wick.with_tag_reached, wick.with_tag_complete) == (2, 3)
+    assert (wick.without_tag_reached, wick.without_tag_complete) == (0, 2)
+    assert wick.with_tag_rate == pytest.approx(2 / 3)
+    assert wick.without_tag_rate == pytest.approx(0.0)
+    assert wick.difference == pytest.approx(2 / 3)
+
+
+def test_both_sides_are_always_reported() -> None:
+    """A "with" figure alone is unreadable without the "without" beside it."""
+    from aureon.reviews.aggregate import compare_by_tag
+
+    data = PeriodData(
+        detections=[detection(ident="d0")],
+        evaluations={
+            "d0": tagged_evaluation(
+                "d0", reached=True, tags={"has_lower_rejection_wick": True}
+            )
+        },
+    )
+    comparison = next(
+        c
+        for c in compare_by_tag(data, RULE, horizon_id=HORIZON_5_CANDLES)
+        if c.tag == "has_lower_rejection_wick"
+    )
+    assert comparison.with_tag_complete == 1
+    assert comparison.without_tag_complete == 0
+    assert comparison.without_tag_rate is None
+    assert comparison.difference is None, "no comparison is possible with an empty side"
+
+
+def test_a_pending_horizon_is_on_neither_side() -> None:
+    """COMPLETE only, exactly like every other reached count in this package.
+
+    An unknown outcome is unknown for the tagged and untagged populations alike;
+    counting it on either side would make the comparison assert something neither
+    population supports.
+    """
+    from aureon.reviews.aggregate import compare_by_tag
+
+    pending = pending_evaluation("d1").model_copy(
+        update={"context_tags": {"has_lower_rejection_wick": True}}
+    )
+    data = PeriodData(
+        detections=[detection(ident="d0"), detection(ident="d1", minutes=30)],
+        evaluations={
+            "d0": tagged_evaluation("d0", reached=True, tags={"has_lower_rejection_wick": True}),
+            "d1": pending,
+        },
+    )
+    comparison = next(
+        c
+        for c in compare_by_tag(data, RULE, horizon_id=HORIZON_5_CANDLES)
+        if c.tag == "has_lower_rejection_wick"
+    )
+    assert comparison.with_tag_complete == 1
+    assert comparison.without_tag_complete == 0
+
+
+def test_an_evaluation_with_no_tags_counts_as_without() -> None:
+    """An evaluation written before tags existed must not vanish from the denominator."""
+    from aureon.reviews.aggregate import compare_by_tag
+
+    data = PeriodData(
+        detections=[detection(ident="d0")],
+        evaluations={"d0": complete_evaluation("d0", reached=ALL_REACHED)},
+    )
+    comparison = next(
+        c
+        for c in compare_by_tag(data, RULE, horizon_id=HORIZON_5_CANDLES)
+        if c.tag == "has_lower_rejection_wick"
+    )
+    assert comparison.without_tag_complete == 1
+    assert comparison.with_tag_complete == 0
+
+
+def test_a_thin_comparison_says_so_rather_than_printing_a_percentage() -> None:
+    """One detection moves a 4-sample rate by 25 points; the label is the honesty."""
+    from aureon.reviews.aggregate import compare_by_tag, render_tag_comparisons
+
+    data = PeriodData(
+        detections=[detection(ident=f"d{i}") for i in range(4)],
+        evaluations={
+            f"d{i}": tagged_evaluation(
+                f"d{i}", reached=i < 2, tags={"has_lower_rejection_wick": i % 2 == 0}
+            )
+            for i in range(4)
+        },
+    )
+    comparisons = compare_by_tag(data, RULE, horizon_id=HORIZON_5_CANDLES)
+    wick = next(c for c in comparisons if c.tag == "has_lower_rejection_wick")
+    assert wick.comparable is False
+    assert "too few to read" in render_tag_comparisons(comparisons)
+
+
+def test_every_tag_appears_in_the_comparison() -> None:
+    from aureon.evaluation.context_tags import CONTEXT_TAGS
+    from aureon.reviews.aggregate import compare_by_tag
+
+    data = PeriodData(
+        detections=[detection(ident="d0")],
+        evaluations={"d0": complete_evaluation("d0", reached=ALL_REACHED)},
+    )
+    comparisons = compare_by_tag(data, RULE, horizon_id=HORIZON_5_CANDLES)
+    assert {c.tag for c in comparisons} == set(CONTEXT_TAGS)
+
+
+def test_the_comparison_is_deterministic() -> None:
+    from aureon.reviews.aggregate import compare_by_tag, render_tag_comparisons
+
+    data = PeriodData(
+        detections=[detection(ident=f"d{i}") for i in range(3)],
+        evaluations={
+            f"d{i}": tagged_evaluation(
+                f"d{i}", reached=True, tags={"has_upper_rejection_wick": True}
+            )
+            for i in range(3)
+        },
+    )
+    first = render_tag_comparisons(compare_by_tag(data, RULE, horizon_id=HORIZON_5_CANDLES))
+    second = render_tag_comparisons(compare_by_tag(data, RULE, horizon_id=HORIZON_5_CANDLES))
+    assert first == second
