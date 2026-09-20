@@ -493,3 +493,59 @@ def test_discord_holds_no_broker_or_data_provider() -> None:
     ).lower()
     assert "broker" not in annotations
     assert "provider" not in annotations
+
+
+# ── The assessment is arithmetic over stored outcomes, and nothing else ───────
+
+
+def test_the_assessment_service_cannot_reach_execution_or_a_provider() -> None:
+    """A readout that could touch either would stop being a description (9D).
+
+    ``aureon.execution`` is how an order is placed; a data provider is how a live price is
+    read. The assessment describes what already happened to detections of one shape, so it
+    needs neither -- and a module that imported one would be a plausible place for
+    "…and then act on it" to appear later.
+
+    Checked by import rather than by intent: intent is not enforceable, and the whole reason
+    this file exists is that the rules which matter are the ones a future change cannot
+    quietly break.
+    """
+    path = AUREON / "services" / "assessment_service.py"
+    assert path.exists(), "9D's assessment service is missing"
+
+    modules = _imported_modules(path)
+    forbidden = [
+        module
+        for module in modules
+        if module == "aureon.execution"
+        or module.startswith("aureon.execution.")
+        or module == "aureon.data"
+        or module.startswith("aureon.data.")
+        or module == "MetaTrader5"
+    ]
+    assert not forbidden, (
+        f"assessment_service imports {forbidden}; it may read stored outcomes and candles "
+        "it is handed, nothing else"
+    )
+
+
+def test_the_assessment_service_never_reads_a_trader_note() -> None:
+    """Notes are for people (9D).
+
+    The moment a note moved a number, the number would stop measuring the market and start
+    measuring the trader's mood when they typed it -- and nothing downstream could tell the
+    two apart, because both arrive as a float.
+
+    ``aureon/reviews`` is deliberately absent from the scan: printing notes beside each
+    trade is exactly what the weekly review is for. Everything that computes a number is in
+    scope.
+    """
+    offenders: list[str] = []
+    for path in _python_files("services", "evaluation", "engine", "agents"):
+        text = path.read_text(encoding="utf-8")
+        modules = _imported_modules(path)
+        if "aureon.storage.note_repository" in modules or "TradeNote" in text:
+            offenders.append(str(path.relative_to(REPO_ROOT)))
+    assert not offenders, (
+        "these would let a trader's own note move a measured number:\n" + "\n".join(offenders)
+    )
