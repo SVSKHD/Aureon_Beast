@@ -24,6 +24,19 @@ Re-reading is free because every write here is idempotent.
 Anything without Aureon's magic number, or with it but no matching request, is recorded as
 ``source=external_mt5`` with ``trade_request_id=None``. Aureon reports on it and leaves it
 alone: it did not open it and has no authorisation to touch it.
+
+This is deliberately **not** filtered to the observed symbols. A position the trader opened
+by hand is part of the account's exposure whether or not Aureon watches that instrument, and
+a monitor that hid it would make `/status` read as flat while money was at risk. What such a
+trade does not get is analysis it cannot support: no detections, no evaluations, and -- until
+9A -- excursions divided by whatever tick the process was configured with.
+
+## Excursions use each position's own tick (9A)
+
+The tick comes from the broker's spec for that symbol, cached, rather than one ``point`` for
+the process. Gold's 0.01 against silver's 0.001 is a tenfold error in a figure nobody can
+sanity-check by eye, and the same applies to any instrument opened by hand. A symbol whose
+spec cannot be read is left unmeasured rather than measured wrongly.
 """
 
 from __future__ import annotations
@@ -106,11 +119,33 @@ class PositionMonitor:
         self.poll_seconds = poll_seconds
         self.deal_overlap_seconds = deal_overlap_seconds
 
-        self.excursions = ExcursionTracker(point=point)
+        #: symbol -> tick, from the broker's own spec. Cached: it does not change within a
+        #: session, and one lookup per new symbol is cheaper than one per poll.
+        self._points: dict[str, float] = {}
+        self.excursions = ExcursionTracker(point=point, point_for=self.point_for)
         self.pending = PendingOrderMonitor(requests, broker, magic=magic)
         self._last_sync: datetime | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+
+    def point_for(self, symbol: str) -> float | None:
+        """The broker's tick for one symbol (9A).
+
+        The broker rather than the config, because the account can hold a position on an
+        instrument Aureon does not observe -- a hand-opened trade is still exposure (§52) --
+        and the terminal knows every symbol's tick while a tuning table only knows the ones
+        somebody reviewed.
+        """
+        cached = self._points.get(symbol)
+        if cached:
+            return cached
+        info = self.broker.symbol_info(symbol)
+        point = getattr(info, "point", None)
+        if not point or point <= 0:
+            log.error("broker reported no usable tick for %s", symbol)
+            return None
+        self._points[symbol] = point
+        return point
 
     # ── Startup (§77) ─────────────────────────────────────────────────────────
 
@@ -475,9 +510,17 @@ class PositionMonitor:
         """Rebuild a position's excursions from M1 candles and store them (§45)."""
         from aureon.positions.excursion_tracker import reconstruct_from_candles
 
-        rebuilt = reconstruct_from_candles(
-            trade, candles, point=self.point, until=until
-        )
+        # This symbol's tick, not the process's (9A). A reconstruction is already the
+        # weaker measurement; dividing it by the wrong tick would make it a wrong one.
+        point = self.point_for(trade.symbol)
+        if point is None:
+            log.error(
+                "no tick for %s; not reconstructing excursions for %s",
+                trade.symbol,
+                trade.trade_id,
+            )
+            return
+        rebuilt = reconstruct_from_candles(trade, candles, point=point, until=until)
         self.trades.update_excursion(trade.trade_id, rebuilt)
         # Re-track so live ticks continue from the reconstructed extremes, keeping the
         # weaker `reconstructed` label.
