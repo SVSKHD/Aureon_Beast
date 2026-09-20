@@ -148,6 +148,10 @@ class AnalysisEngine:
                 f"{[a.agent_name for a in self.agents]}"
             )
 
+        #: Volume-profile and volatility context, one tracker per (symbol, timeframe)
+        #: (9B). Built on first sight of a symbol, because the engine is handed candles
+        #: rather than a symbol list and a tracker needs that symbol's tuning.
+        self._context_trackers: dict[tuple[str, Timeframe], object] = {}
         self._windows: dict[tuple[str, Timeframe], deque[Candle]] = {}
         # Candle counters, reset on a new broker day / session.
         self._day: dict[tuple[str, Timeframe], str] = {}
@@ -182,6 +186,12 @@ class AnalysisEngine:
         ctx = self._context(candle, key)
         frame = self._frame(key)
 
+        # Before the agents run, so the context a detection records includes the candle
+        # that produced it -- which has closed, and is therefore part of its own moment
+        # rather than hindsight (9B).
+        tracker = self._tracker(key)
+        tracker.observe(candle)
+
         detections: list[Detection] = []
         for agent in self.agents:
             # Exactly this agent's stated requirement, so a hungrier sibling cannot
@@ -189,7 +199,45 @@ class AnalysisEngine:
             needed = agent.min_window()
             view = frame if len(frame) <= needed else frame.iloc[-needed:]
             detections.extend(agent.on_closed_candle(view, ctx))
-        return [self._number(detection, key) for detection in detections]
+        return [
+            self._with_context(self._number(detection, key), tracker)
+            for detection in detections
+        ]
+
+    def _tracker(self, key: tuple[str, Timeframe]):
+        """This symbol's context tracker, built on first sight (9B)."""
+        existing = self._context_trackers.get(key)
+        if existing is not None:
+            return existing
+        from aureon.config.symbol_tuning import tuning_for
+        from aureon.engine.market_context import MarketContextTracker
+
+        symbol, timeframe = key
+        tracker = MarketContextTracker(
+            symbol=symbol, timeframe=timeframe, tuning=tuning_for(symbol)
+        )
+        self._context_trackers[key] = tracker
+        return tracker
+
+    def context_tracker(self, symbol: str, timeframe: Timeframe):
+        """The tracker for one symbol, for ``system_state`` and ``/status`` (9B)."""
+        return self._context_trackers.get((symbol, timeframe))
+
+    def _with_context(self, detection: Detection, tracker) -> Detection:
+        """Attach the profile reference and volatility of this candle's close (9B).
+
+        Done in the engine rather than in each agent for the same reason the cross
+        sequence is: an agent is a pure function of ``(window, ctx)``, and reaching for
+        a day's worth of candles inside one would break the replay/live parity the whole
+        engine rests on. Attaching here also guarantees every agent's detections from one
+        candle carry the SAME context, computed once.
+        """
+        return detection.model_copy(
+            update={
+                "volume_profile_ref": tracker.reference(detection.price),
+                "volatility": tracker.volatility(),
+            }
+        )
 
     def _number(self, detection: Detection, key: tuple[str, Timeframe]) -> Detection:
         """Give a cross detection its ordinal rather than the candle index (§13).

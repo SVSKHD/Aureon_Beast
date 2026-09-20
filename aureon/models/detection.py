@@ -20,6 +20,7 @@ from pydantic import ConfigDict, Field
 
 from aureon.models.base import AureonDocument, AureonModel, MarketTime
 from aureon.models.enums import Direction, SessionName, Timeframe
+from aureon.models.profile import VolatilityContext, VolumeProfileRef
 
 
 class IndicatorSnapshot(AureonModel):
@@ -120,6 +121,24 @@ class Detection(AureonDocument):
 
     sequence_today: int = Field(ge=1)
     sequence_session: int = Field(ge=1)
+
+    # ── Context from the same moment (9B, §19) ────────────────────────────────
+    # Both are computed at THIS candle's close from candles that had already closed, and
+    # neither is ever recomputed. They are context for research, never a reason the
+    # detection exists: every agent decides on price alone, and a review may then group
+    # outcomes by what the market looked like around them.
+    #
+    # CLAUDE.md forbids a field that encodes future information. These do not: a profile
+    # over closed candles and an ATR over closed candles are facts of the moment. The
+    # no-hindsight test feeds a louder candle AFTER a detection and asserts the stored
+    # document is byte-identical.
+    volume_profile_ref: VolumeProfileRef | None = Field(
+        default=None,
+        description="Asia's value area and nodes as they stood at this close (9B).",
+    )
+    volatility: VolatilityContext | None = Field(
+        default=None, description="ATR and session range vs median at this close (9B)."
+    )
 
     @property
     def is_context_only(self) -> bool:

@@ -61,6 +61,8 @@ An immutable observation. Never an instruction to trade.
 | `levels` | `dict[str, float]` | no | `dict()` | Numeric levels involved (swept level, broken level, ...). |
 | `sequence_today` | `int` | yes | — |  |
 | `sequence_session` | `int` | yes | — |  |
+| `volume_profile_ref` | `VolumeProfileRef \| null` | no | `None` | Asia's value area and nodes as they stood at this close (9B). |
+| `volatility` | `VolatilityContext \| null` | no | `None` | ATR and session range vs median at this close (9B). |
 
 ### DetectionEvaluation
 
