@@ -200,14 +200,30 @@ def symbol_spec_path(symbol: str) -> str:
     return f"{SYMBOL_SPECS}/{_require(symbol, 'symbol')}"
 
 
-def daily_review_path(market_date: str) -> str:
-    """Keyed by broker date so regenerating a day overwrites it (Phase 7)."""
-    return f"{DAILY_REVIEWS}/{_require(market_date, 'market_date')}"
+def daily_review_doc_id(market_date: str, symbol: str | None = None) -> str:
+    """``{market_date}`` or ``{market_date}_{symbol}`` (9A).
+
+    The symbol is a suffix rather than a prefix so the ids still sort chronologically as
+    strings, which is what makes "the latest review" an index-free maximum (decision 26).
+    A review without a symbol keeps the pre-9A id, so nothing already stored moves.
+    """
+    date = _require(market_date, "market_date")
+    return f"{date}_{_require(symbol, 'symbol').upper()}" if symbol else date
 
 
-def weekly_review_doc_id(iso_year: int, iso_week: int) -> str:
-    return f"{iso_year:04d}-W{iso_week:02d}"
+def daily_review_path(market_date: str, symbol: str | None = None) -> str:
+    """Keyed by broker date (and symbol) so regenerating a day overwrites it (Phase 7)."""
+    return f"{DAILY_REVIEWS}/{daily_review_doc_id(market_date, symbol)}"
 
 
-def weekly_review_path(iso_year: int, iso_week: int) -> str:
-    return f"{WEEKLY_REVIEWS}/{weekly_review_doc_id(iso_year, iso_week)}"
+def weekly_review_doc_id(
+    iso_year: int, iso_week: int, symbol: str | None = None
+) -> str:
+    week = f"{iso_year:04d}-W{iso_week:02d}"
+    return f"{week}_{_require(symbol, 'symbol').upper()}" if symbol else week
+
+
+def weekly_review_path(
+    iso_year: int, iso_week: int, symbol: str | None = None
+) -> str:
+    return f"{WEEKLY_REVIEWS}/{weekly_review_doc_id(iso_year, iso_week, symbol)}"

@@ -82,10 +82,22 @@ class StatusCommands:
         )
         # §61-§63: on a closed market show the latest completed review. The weekly one
         # is preferred over the daily -- it is the wider picture, and on a weekend the most
-        # recent daily covers Friday alone.
-        latest = await context.run(context.reviews.latest_weekly)
-        if latest is None:
-            latest = await context.run(context.reviews.latest_daily)
+        # recent daily covers Friday alone. Reviews are per symbol (9A), so a scoped screen
+        # reads that symbol's and an unscoped one reads each observed symbol's: there is no
+        # longer a single review that covers the deployment, and inventing one by taking
+        # whichever sorted last would be a figure about nothing.
+        latest = None
+        reviews: dict[str, object] = {}
+        if symbol is None:
+            for name in context.config.symbols:
+                found = await context.run(context.reviews.latest_for, name)
+                if found is not None:
+                    reviews[name] = found
+            if len(context.config.symbols) == 1:
+                latest = reviews.get(context.config.symbols[0])
+                reviews = {}
+        else:
+            latest = await context.run(context.reviews.latest_for, symbol)
         return build_status(
             system_state=state,
             heartbeats=heartbeats,
@@ -93,6 +105,7 @@ class StatusCommands:
             open_trades=len(for_symbol(open_trades, symbol)),
             pending_requests=len(for_symbol(pending, symbol)),
             latest_review=latest,
+            latest_reviews=reviews,
             symbol=symbol,
         )
 

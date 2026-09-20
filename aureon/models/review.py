@@ -102,6 +102,16 @@ class ReviewBase(AureonDocument):
 
     evaluation_rule_id: str = Field(description="Which frozen rule produced the counts (§84).")
 
+    #: Which symbol this review is about (9A). ``None`` only on a review generated before
+    #: reviews were split per symbol; every new one names its symbol.
+    #:
+    #: Split rather than aggregated because the two halves of a combined review would not
+    #: mean the same thing: each symbol has its OWN frozen rule (decision 141), so one
+    #: ``evaluation_rule_id`` on a document counting both would be a false statement about
+    #: half the numbers, and the horizon tables would add up reached-counts measured against
+    #: thresholds in different instruments' money.
+    symbol: str | None = None
+
     detections_total: int = Field(default=0, ge=0)
     detections_by_agent: dict[str, int] = Field(default_factory=dict)
     detections_by_session: dict[SessionName, int] = Field(default_factory=dict)

@@ -855,3 +855,97 @@ def test_the_comparison_is_deterministic() -> None:
     first = render_tag_comparisons(compare_by_tag(data, RULE, horizon_id=HORIZON_5_CANDLES))
     second = render_tag_comparisons(compare_by_tag(data, RULE, horizon_id=HORIZON_5_CANDLES))
     assert first == second
+
+
+# ── 9A: one review per symbol ─────────────────────────────────────────────────
+
+SILVER = "XAGUSD"
+
+
+def two_symbol_period() -> PeriodData:
+    """Three detections and two trades, split 2/1 and 1/1 between the symbols."""
+    detections = [
+        detection(ident="g1", symbol=SYMBOL),
+        detection(ident="g2", symbol=SYMBOL, minutes=10),
+        detection(ident="s1", symbol=SILVER, minutes=20),
+    ]
+    return PeriodData(
+        detections=detections,
+        evaluations={},
+        trades=[
+            trade(ident="tg", symbol=SYMBOL, minutes=5),
+            trade(ident="ts", symbol=SILVER, minutes=25),
+        ],
+        sessions=[],
+    )
+
+
+def daily_for(data: PeriodData, symbol: str | None):
+    period = day_period("2026-09-16", TZ)
+    return build_daily_review(
+        data,
+        RULE,
+        market_date=period.market_date,
+        period_start=period.start,
+        period_end=period.end,
+        market_tz=TZ,
+        infer_window_minutes=30,
+        symbol=symbol,
+    )
+
+
+def test_a_review_names_the_symbol_it_measured() -> None:
+    """Each symbol has its own frozen rule, so an unnamed review's rule_id would be a false
+    statement about half its numbers (decision 141)."""
+    review = daily_for(two_symbol_period(), SILVER)
+    assert review.symbol == SILVER
+    assert review.evaluation_rule_id == RULE.rule_id
+
+
+def test_a_review_without_a_symbol_is_still_valid_for_a_single_symbol_deployment() -> None:
+    """``None`` is what every review generated before 9A says, and it must keep parsing."""
+    assert daily_for(two_symbol_period(), None).symbol is None
+
+
+def test_per_symbol_review_ids_do_not_collide() -> None:
+    from aureon.storage import paths
+
+    gold = paths.daily_review_path("2026-09-16", SYMBOL)
+    silver = paths.daily_review_path("2026-09-16", SILVER)
+    assert gold != silver
+    # The suffix, not a prefix: the ids must still sort chronologically (decision 26).
+    assert paths.daily_review_doc_id("2026-09-16", SILVER).startswith("2026-09-16")
+    assert (
+        paths.weekly_review_doc_id(2026, 38, SILVER)
+        > paths.weekly_review_doc_id(2026, 37, SILVER)
+    )
+
+
+def test_a_symbol_scoped_service_counts_only_that_symbol(firestore) -> None:
+    """The filter is what makes two documents of identical shape comparable (9A)."""
+    from aureon.reviews.service import ReviewService
+
+    service = ReviewService(
+        firestore,
+        RULE,
+        market_tz=TZ,
+        infer_window_minutes=30,
+        symbol=SILVER,
+    )
+    filtered = service._for_symbol(two_symbol_period().detections)  # noqa: SLF001
+    assert [d.detection_id for d in filtered] == ["s1"]
+
+    everything = ReviewService(
+        firestore, RULE, market_tz=TZ, infer_window_minutes=30
+    )
+    assert len(everything._for_symbol(two_symbol_period().detections)) == 3  # noqa: SLF001
+
+
+def test_the_two_symbols_reviews_are_the_same_shape() -> None:
+    """Identical fields, different numbers. A reader compares two documents rather than
+    reading one that quietly mixes two instruments."""
+    data = two_symbol_period()
+    gold = daily_for(data, SYMBOL)
+    silver = daily_for(data, SILVER)
+    assert set(gold.model_dump()) == set(silver.model_dump())
+    assert (gold.symbol, silver.symbol) == (SYMBOL, SILVER)

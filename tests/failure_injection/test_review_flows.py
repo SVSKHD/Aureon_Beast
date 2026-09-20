@@ -594,3 +594,138 @@ def test_the_derived_fields_survive_the_round_trip(firestore_client) -> None:
     symbol_state = read_back.symbols[0]
     assert symbol_state.ema_distance == pytest.approx(2.25)
     assert symbol_state.rsi_zone == "overbought"
+
+
+# ── 9A: one review per symbol, of identical shape ──────────────────────────────
+
+SILVER = "XAGUSD"
+
+
+@pytest.fixture
+def silver_service(firestore_client) -> ReviewService:
+    """Silver's own service: its own rule, its own documents (decision 141)."""
+    from aureon.evaluation.rules import get_rule
+
+    return ReviewService(
+        firestore_client,
+        get_rule("XAG_OUTCOME_V1"),
+        market_tz=TZ,
+        infer_window_minutes=30,
+        symbol=SILVER,
+    )
+
+
+@pytest.fixture
+def gold_service(firestore_client) -> ReviewService:
+    return ReviewService(
+        firestore_client, RULE, market_tz=TZ, infer_window_minutes=30, symbol=SYMBOL
+    )
+
+
+def test_each_symbol_gets_its_own_stored_review(
+    gold_service, silver_service, seed, firestore_client
+) -> None:
+    """Two documents, two rule ids, no shared counts.
+
+    One combined review would state a single ``evaluation_rule_id`` over numbers produced by
+    two frozen rules, and add horizon counts measured against thresholds in different
+    instruments' money.
+    """
+    seed(
+        detection_list=[
+            detection(ident="g1"),
+            detection(ident="g2", minutes=10),
+            detection(ident="s1", symbol=SILVER, minutes=20),
+        ],
+        trade_list=[trade(ident="tg", minutes=5, pnl=10.0)],
+    )
+
+    gold = gold_service.generate_daily(MARKET_DATE)
+    silver = silver_service.generate_daily(MARKET_DATE)
+
+    assert (gold.symbol, silver.symbol) == (SYMBOL, SILVER)
+    assert gold.detections_total == 2
+    assert silver.detections_total == 1
+    assert gold.trades_total == 1
+    assert silver.trades_total == 0
+    assert gold.evaluation_rule_id == RULE.rule_id
+    assert silver.evaluation_rule_id == "XAG_OUTCOME_V1"
+
+    # Both are stored, and neither overwrote the other.
+    reader = ReviewReader(firestore_client)
+    assert reader.get_daily(MARKET_DATE, SYMBOL).detections_total == 2
+    assert reader.get_daily(MARKET_DATE, SILVER).detections_total == 1
+
+
+def test_the_latest_review_for_a_symbol_is_that_symbols(
+    gold_service, silver_service, seed, firestore_client
+) -> None:
+    """Narrowed by the stored field, not by an id convention."""
+    seed(
+        detection_list=[detection(ident="g1"), detection(ident="s1", symbol=SILVER, minutes=5)]
+    )
+    gold_service.generate_weekly(*ISO)
+    silver_service.generate_weekly(*ISO)
+
+    reader = ReviewReader(firestore_client)
+    assert reader.latest_weekly(SYMBOL).symbol == SYMBOL
+    assert reader.latest_weekly(SILVER).symbol == SILVER
+    assert reader.latest_for(SILVER).symbol == SILVER
+    # An unreviewed symbol has no review, rather than somebody else's.
+    assert reader.latest_weekly("EURUSD") is None
+    assert reader.latest_for("EURUSD") is None
+
+
+def test_regenerating_one_symbols_review_overwrites_only_its_own(
+    gold_service, silver_service, seed, firestore_client
+) -> None:
+    seed(detection_list=[detection(ident="g1"), detection(ident="s1", symbol=SILVER)])
+    gold_service.generate_daily(MARKET_DATE)
+    silver_service.generate_daily(MARKET_DATE)
+
+    seed(detection_list=[detection(ident="g2", minutes=30)])
+    regenerated = gold_service.generate_daily(MARKET_DATE)
+
+    reader = ReviewReader(firestore_client)
+    assert regenerated.detections_total == 2
+    assert reader.get_daily(MARKET_DATE, SYMBOL).detections_total == 2
+    assert reader.get_daily(MARKET_DATE, SILVER).detections_total == 1
+
+
+def test_a_scoped_status_shows_that_symbols_review_on_a_closed_market(
+    context, gold_service, silver_service, seed, firestore_client
+) -> None:
+    """9A's done-when for the weekly mode, per symbol."""
+    import asyncio
+
+    from aureon.discord.commands.status import StatusCommands
+    from aureon.models.system import SymbolState, SystemState
+    from aureon.storage.system_state_repository import SystemStateRepository
+
+    seed(
+        detection_list=[
+            detection(ident="g1"),
+            detection(ident="s1", symbol=SILVER, minutes=5),
+            detection(ident="s2", symbol=SILVER, minutes=10),
+        ]
+    )
+    gold_service.generate_weekly(*ISO)
+    silver_service.generate_weekly(*ISO)
+
+    SystemStateRepository(firestore_client).write(
+        SystemState(
+            symbols=(
+                SymbolState(
+                    symbol=SILVER, timeframe=Timeframe.M5, market_state=MarketState.CLOSED
+                ),
+            ),
+            updated_at=utc_now(),
+        ),
+        force=True,
+    )
+
+    screen = asyncio.run(StatusCommands(context)._build(SILVER))  # noqa: SLF001
+    assert screen.market_closed is True
+    assert screen.review_summary is not None
+    assert "2 detections" in screen.review_summary  # silver's count, not gold's one
+    assert "XAG_OUTCOME_V1" in screen.review_summary

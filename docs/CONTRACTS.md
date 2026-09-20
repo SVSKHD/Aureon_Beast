@@ -282,6 +282,7 @@ One broker trading day (§61).
 | `market_tz` | `str` | yes | — |  |
 | `generated_at` | `AwareDatetime \| null` | no | `None` |  |
 | `evaluation_rule_id` | `str` | yes | — | Which frozen rule produced the counts (§84). |
+| `symbol` | `str \| null` | no | `None` |  |
 | `detections_total` | `int` | no | `0` |  |
 | `detections_by_agent` | `dict[str, int]` | no | `dict()` |  |
 | `detections_by_session` | `dict[SessionName, int]` | no | `dict()` |  |
@@ -310,6 +311,7 @@ One trading week, generated after Friday's close (§63).
 | `market_tz` | `str` | yes | — |  |
 | `generated_at` | `AwareDatetime \| null` | no | `None` |  |
 | `evaluation_rule_id` | `str` | yes | — | Which frozen rule produced the counts (§84). |
+| `symbol` | `str \| null` | no | `None` |  |
 | `detections_total` | `int` | no | `0` |  |
 | `detections_by_agent` | `dict[str, int]` | no | `dict()` |  |
 | `detections_by_session` | `dict[SessionName, int]` | no | `dict()` |  |

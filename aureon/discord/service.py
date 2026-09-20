@@ -861,6 +861,7 @@ def build_status(
     open_trades: int = 0,
     pending_requests: int = 0,
     latest_review: Any | None = None,
+    latest_reviews: dict[str, Any] | None = None,
     stale_after: float | None = None,
     symbol: str | None = None,
     now: datetime | None = None,
@@ -931,9 +932,19 @@ def build_status(
     # screen shows the completed review instead, which is what a reader actually wants
     # after the close.
     if market_closed:
-        screen.review_summary = (
-            summarise_review(latest_review) if latest_review is not None else NO_REVIEW_YET
-        )
+        if latest_reviews:
+            # One line per symbol, each labelled (9A). Reviews are per symbol, so a single
+            # unlabelled summary would be a statement about whichever one was picked.
+            screen.review_summary = "\n".join(
+                f"**{name}** — {summarise_review(review)}"
+                for name, review in sorted(latest_reviews.items())
+            )
+        else:
+            screen.review_summary = (
+                summarise_review(latest_review)
+                if latest_review is not None
+                else NO_REVIEW_YET
+            )
     else:
         screen.live_panels = [
             build_live_panel(symbol_state)

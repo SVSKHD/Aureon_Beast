@@ -232,6 +232,7 @@ def build_daily_review(
     period_end: datetime,
     market_tz: str,
     infer_window_minutes: int,
+    symbol: str | None = None,
     generated_at: datetime | None = None,
 ) -> DailyReview:
     """One broker trading day (§61)."""
@@ -247,6 +248,7 @@ def build_daily_review(
         market_tz=market_tz,
         generated_at=generated_at,
         evaluation_rule_id=rule.rule_id,
+        symbol=symbol,
         detections_total=totals.detections_total,
         detections_by_agent=totals.detections_by_agent,
         detections_by_session=totals.detections_by_session,
@@ -276,6 +278,7 @@ def build_weekly_review(
     market_tz: str,
     infer_window_minutes: int,
     daily_review_ids: tuple[str, ...] = (),
+    symbol: str | None = None,
     generated_at: datetime | None = None,
 ) -> WeeklyReview:
     """One trading week, generated after Friday's close (§63)."""
@@ -286,6 +289,7 @@ def build_weekly_review(
         period_start=period_start,
         period_end=period_end,
         market_tz=market_tz,
+        symbol=symbol,
         generated_at=generated_at,
         evaluation_rule_id=rule.rule_id,
         detections_total=totals.detections_total,

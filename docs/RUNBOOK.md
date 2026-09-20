@@ -190,6 +190,25 @@ different tick and daily range — so an unreviewed symbol would produce detecti
 like sweeps and are noise, with nothing downstream able to tell. Add an entry. An **empty**
 entry is a valid answer: it means the defaults were reviewed and kept.
 
+## Reviews are per symbol
+
+    python main_review.py daily
+    python main_review.py weekly --with-dailies
+    python main_review.py daily --symbol XAGUSD
+
+Without `--symbol` every configured symbol is generated, each with **its own** frozen rule,
+into its own document (`daily_reviews/{date}_{symbol}`). One combined review would state a
+single `evaluation_rule_id` over numbers produced by two rules, and add horizon counts
+measured against thresholds in two instruments' money.
+
+A symbol failing does not stop the others: a missing silver review is not a reason to have no
+gold review. The exit code is non-zero if any symbol failed.
+
+**After upgrading to per-symbol reviews**, regenerate the periods you care about. Reviews
+generated before the split carry no symbol, so `/status symbol:` will not show them — and
+regenerating is safe by design: a review is a pure function of the data it aggregates, and
+re-running one overwrites the same document.
+
 ## The Discord commands
 
 | command | what it does |
