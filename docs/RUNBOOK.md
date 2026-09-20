@@ -222,6 +222,7 @@ re-running one overwrites the same document.
 | `/remind price symbol: level: side: [note]` | arms a one-shot price alert. Aureon tells **you** once when a quote it already reads crosses the level; it expires in 24 hours, 20 armed per person. A level already behind the market is refused with the current price, because it would fire on the next quote |
 | `/remind list` | your alerts, armed ones first with their remaining time |
 | `/remind cancel id:` | disarms one of your own alerts |
+| `/monitor symbol: [detection:]` | what the **measured record** says about a detection: the observer's published trend read with its evidence, the cohort of prior detections that matched it and what had to be dropped to reach thirty, how often each threshold was reached with n and a 95% interval, and target/adverse quantiles of measured excursions. Below thirty prior detections it says "insufficient history (n=…)" and shows **no percentage at all**. Nothing here is a forecast and nothing prefills an order |
 | `/trading status` | is trading enabled, and who last changed it |
 | `/trading enable` | requires a confirmation, and lists what to check first |
 | `/trading disable` | immediate, audited, effective on the next request |
@@ -263,6 +264,34 @@ If the channel goes quiet, check in this order: is `AUREON_ALERT_CHANNEL_ID` set
 line on startup says); is the observer writing detections at all (`/status`); is the agent
 in `enabled_kinds`; and is there a FAILED row in `{prefix}_notifications` naming a
 permissions error.
+
+## Reading a `/monitor` screen
+
+Every number on it was measured. Nothing on it is a prediction, and the four things worth
+knowing before you act on one:
+
+- **The n and the interval are the number.** "Reached +$5 in 60%" from thirty-five prior
+  detections and from three hundred are the same four characters. The count and the 95%
+  interval are printed next to every rate for that reason; if the interval is wide, the
+  rate is not telling you much.
+- **The cohort may not be the question you asked.** It matches on symbol, agent, direction
+  and session always, and on volatility regime, value-area position and wick tag when there
+  is enough history. When there is not, it drops them one at a time — wick, then value area,
+  then regime — and the screen says `widened by dropping: …`. A cohort that dropped the
+  regime is answering "what followed this signal" rather than "what followed this signal in
+  a session this size".
+- **"Insufficient history" is the honest answer, not a failure.** Below thirty COMPLETE
+  evaluations it publishes no rate rather than a small one, because a rate from eleven
+  detections reads exactly like a rate from three hundred.
+- **The target and adverse figures are quantiles, not levels.** `p50 400pt (2404.00)` means
+  half of the matched prior detections got at least that far before the horizon ended. It is
+  a description of the past, not a target, and nothing in Aureon will ever put it on an
+  order: `/execute` still asks for the lot and still requires CONFIRM, and no SL or TP is
+  prefilled anywhere.
+
+If the bias reads `sideways` with the single evidence line "no trend read published", the
+observer is not writing state — check `/status`. Discord cannot compute the trend read
+itself; it holds no data provider at all.
 
 ## What the tools refuse to do
 

@@ -273,6 +273,14 @@ class FakeInteraction:
 
 
 def embed_text(embed: Any) -> str:
+    """Everything a human would read on the embed, footer included.
+
+    The footer matters and was missing: "research only · not a recommendation" (9C) and
+    "measured from n=... · not advice" (9D) live there and nowhere else, so every assertion
+    about them was reading a string that could not contain them.
+    """
     parts = [str(embed.title or ""), str(embed.description or "")]
     parts += [f"{f.name} {f.value}" for f in embed.fields]
+    footer = getattr(embed, "footer", None)
+    parts.append(str(getattr(footer, "text", "") or ""))
     return "\n".join(parts)

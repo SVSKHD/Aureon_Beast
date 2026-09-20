@@ -104,7 +104,7 @@ def build_snapshot(
         snapshot["ema_relation"] = None
 
     last_cross_at = state_fields.get("last_cross_at")
-    snapshot["minutes_since_cross"] = _minutes_since(last_cross_at, moment)
+    snapshot["minutes_since_cross"] = minutes_since(last_cross_at, moment)
 
     if profiles:
         snapshot["volume_profile"] = {
@@ -115,7 +115,13 @@ def build_snapshot(
     return snapshot
 
 
-def _minutes_since(moment: object, now: datetime) -> float | None:
+def minutes_since(moment: object, now: datetime) -> float | None:
+    """Minutes from ``moment`` to ``now``, or ``None`` if there is no usable moment.
+
+    Public because 9D's trend read needs the same figure for the same field, and two
+    implementations of "how long since the last cross" would eventually disagree in a
+    reminder and a readout describing the same instant.
+    """
     if moment is None:
         return None
     if isinstance(moment, str):

@@ -40,7 +40,7 @@ from aureon.agents.session_trend_agent import SessionTrendAgent, summary_from_de
 from aureon.agents.wick_agent import WickAgent
 from aureon.config import AureonConfig
 from aureon.config.sessions import session_for
-from aureon.config.symbol_tuning import require_tuning
+from aureon.config.symbol_tuning import require_tuning, tuning_for
 from aureon.data.base_provider import BaseMarketDataProvider
 from aureon.data.live_candle_archive import LiveCandleArchive
 from aureon.engine.analysis_engine import AnalysisEngine
@@ -55,7 +55,7 @@ from aureon.models.market import Candle
 from aureon.models.system import SymbolState, SystemState
 from aureon.outbox.local_outbox import LocalOutbox
 from aureon.outbox.outbox_worker import OutboxWorker
-from aureon.services.alert_watcher import AlertWatcher, build_snapshot
+from aureon.services.alert_watcher import AlertWatcher, build_snapshot, minutes_since
 from aureon.services.heartbeat_service import HeartbeatService
 from aureon.services.market_snapshot import MarketSnapshot
 from aureon.services.market_state_service import MarketStateService
@@ -366,6 +366,7 @@ class Observer:
                         .as_state(),
                         **self._snapshot(symbol, timeframe).as_state(),
                         **self._market_context(symbol, timeframe),
+                        trend_read=self._trend_read(symbol, timeframe),
                     )
                 )
         try:
@@ -374,6 +375,78 @@ class Observer:
             )
         except Exception:  # noqa: BLE001 - state reporting must not stop observation
             log.exception("system_state write failed")
+
+    def _trend_read(self, symbol: str, timeframe) -> object:
+        """What the last N closed candles did, computed HERE and published (9D).
+
+        The observer does it because the observer has the candles. Discord holds no data
+        provider at all -- a boundary test enforces that by inspecting ``BotContext``'s own
+        annotations -- so `/monitor` reads this field rather than deriving it, and the two
+        processes cannot come to different conclusions about the same window (decision 194).
+
+        The EMA endpoints are computed from the SAME candles and the SAME configured periods
+        the agents use. A second EMA over a different window would eventually disagree with
+        the one the detections were stamped with, and the disagreement would appear in a
+        readout about those very detections.
+        """
+        from aureon.services.assessment_service import DEFAULT_TREND_CANDLES, read_trend
+
+        tracker = self.engines.for_symbol(symbol).context_tracker(symbol, timeframe)
+        if tracker is None:
+            # No candle has closed yet. An absent read is honest; an empty one would render
+            # as a market that was measured and found to be going nowhere.
+            return None
+
+        candles = tracker.recent(DEFAULT_TREND_CANDLES)
+        if not candles:
+            return None
+
+        fields = self._snapshot(symbol, timeframe).as_state()
+        context = self._market_context(symbol, timeframe)
+        profiles = context.get("volume_profile") or {}
+        tuning = tuning_for(symbol)
+
+        try:
+            return read_trend(
+                candles,
+                ema_fast=fields.get("ema_fast"),
+                ema_slow=fields.get("ema_slow"),
+                ema_fast_earlier=self._ema_fast_at_start(candles),
+                session_trend=fields.get("session_trend"),
+                asia_profile=profiles.get("asia"),
+                volatility=context.get("volatility"),
+                minutes_since_opposite_cross=minutes_since(
+                    fields.get("last_cross_at"), self.provider.now_utc()
+                ),
+                point=tuning.point,
+                flat_points=tuning.flat_points,
+            )
+        except Exception:  # noqa: BLE001 - a trend read must never stop observation
+            log.exception("trend read failed for %s", symbol)
+            return None
+
+    def _ema_fast_at_start(self, candles) -> float | None:
+        """The fast EMA at the START of the window, for the slope.
+
+        Computed over the window with the configured fast period rather than stored,
+        because nothing keeps an EMA series: the snapshot holds the latest value only. The
+        first `fast_period` candles are warm-up, so a window shorter than that yields no
+        slope rather than one measured from a half-warmed average.
+        """
+        from aureon.engine.indicators import ema
+
+        period = self.config.ema_fast
+        if len(candles) <= period:
+            return None
+        try:
+            import pandas as pd
+
+            series = ema(pd.Series([c.close for c in candles], dtype="float64"), period)
+        except Exception:  # noqa: BLE001 - diagnostic, never critical
+            log.debug("could not compute the window's EMA", exc_info=True)
+            return None
+        value = series.iloc[period]
+        return None if pd.isna(value) else float(value)
 
     def _market_context(self, symbol: str, timeframe) -> dict[str, object]:
         """This symbol's profile summaries and volatility, for the state document (9B).

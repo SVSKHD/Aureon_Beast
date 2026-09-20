@@ -180,3 +180,37 @@ def reminder_embed(screen: Any) -> Any:
         embed.add_field(name=name, value=value or "—", inline=True)
     embed.set_footer(text=screen.footer)
     return embed
+
+
+def monitor_embed(screen: Any) -> Any:
+    """A `/monitor` readout (9D).
+
+    Neutral in colour like 9C's, and for the same reason: a green embed over a bullish bias
+    would read as approval, and the eye reaches a colour before it reaches a confidence
+    interval. The one-line summary is the description rather than a field, because it is the
+    part that gets quoted and it should be the part that carries the n.
+    """
+    description = [screen.next_move]
+    if screen.disagreement:
+        description.append(f"⚠ {screen.disagreement}")
+    if screen.insufficient:
+        description.append(f"**{screen.insufficient}**")
+
+    embed = _embed(
+        f"{screen.title} — assessment",
+        colour=COLOUR_INFO,
+        description="\n\n".join(description),
+    )
+    embed.add_field(name="Bias", value=screen.bias, inline=True)
+    embed.add_field(
+        name="Cohort",
+        value=screen.cohort + (f"\n{screen.dropped}" if screen.dropped else ""),
+        inline=False,
+    )
+    # The evidence sits under the bias rather than in place of it: the summary is a vote
+    # over these facts, and a reader who disagrees with the vote can see what it counted.
+    embed.add_field(name="Evidence", value="\n".join(screen.evidence) or "—", inline=False)
+    for name, value in screen.fields:
+        embed.add_field(name=name, value=value or "—", inline=False)
+    embed.set_footer(text=screen.footer)
+    return embed

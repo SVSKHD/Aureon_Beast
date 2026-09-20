@@ -62,6 +62,7 @@ from aureon.models.base import to_utc, utc_now
 from aureon.models.detection import Detection
 from aureon.models.enums import (
     Direction,
+    HorizonKind,
     PathClassification,
     TrendBias,
 )
@@ -557,7 +558,7 @@ def build_assessment(
     testable without a database.
     """
     cohort, wanted = select_cohort(subject, subject_evaluation, population)
-    horizon_id = estimate_horizon or rule.horizons[-1].id
+    horizon_id = estimate_horizon or default_estimate_horizon(rule)
     reference = subject.price
 
     mfe, mae = excursions(cohort, horizon_id)
@@ -617,6 +618,22 @@ def build_assessment(
     )
 
 
+def default_estimate_horizon(rule: EvaluationRule) -> str:
+    """Which horizon the TP/SL quantiles are measured over, when nobody says.
+
+    The last COUNTED horizon (candles or minutes), not simply the last one. The rule's last
+    horizon is ``opposite_cross``, which is event-driven: it stays PENDING until the EMAs
+    cross back, which on a trending day is hours away and on a quiet one may be never. A
+    default that landed there produced a readout with a cohort of thirty-five and **no
+    estimates at all**, every row reading 0/0 -- a screen that looks like a measurement of a
+    market rather than a measurement of the wrong column.
+    """
+    counted = [
+        h for h in rule.horizons if h.kind in {HorizonKind.CANDLES, HorizonKind.MINUTES}
+    ]
+    return (counted or list(rule.horizons))[-1].id
+
+
 def population_from(
     detections: Sequence[Detection],
     evaluations: dict[str, DetectionEvaluation],
@@ -654,6 +671,7 @@ __all__ = [
     "CohortMember",
     "SwingCounts",
     "build_assessment",
+    "default_estimate_horizon",
     "confirmations",
     "estimates",
     "excursions",

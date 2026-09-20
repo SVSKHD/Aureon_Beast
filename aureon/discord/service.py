@@ -32,6 +32,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from aureon.models.alerts import ALERT_SIDES, MAX_ARMED_ALERTS_PER_USER, PriceAlert
+from aureon.models.assessment import MIN_COHORT
 from aureon.models.base import to_utc, utc_now
 from aureon.models.control import ControlRequest
 from aureon.models.detection import Detection
@@ -976,6 +977,194 @@ def should_notify(detection: Detection, settings: Any) -> bool:
     must take effect on the next detection rather than on the next deploy.
     """
     return bool(settings.announces(detection.agent_name))
+
+
+# ── 9D: the measured assessment ───────────────────────────────────────────────
+
+
+#: What every estimate is labelled with. Not decoration: a target and a stop rendered as
+#: prices look exactly like a recommendation, and the only thing separating the two is a
+#: sentence saying how they were arrived at.
+MEASURED_ONLY = "measured from n={n} prior detections · not advice"
+
+
+@dataclass
+class MonitorScreen:
+    """A `/monitor` readout, rendered for one human (9D)."""
+
+    title: str
+    symbol: str
+    detection_id: str
+    assessment_id: str
+    bias: str
+    evidence: list[str] = field(default_factory=list)
+    cohort: str = ""
+    dropped: str | None = None
+    fields: list[tuple[str, str]] = field(default_factory=list)
+    next_move: str = ""
+    disagreement: str | None = None
+    insufficient: str | None = None
+    footer: str = ""
+
+
+def _pct(value: float | None) -> str:
+    return UNKNOWN if value is None else f"{value * 100:.0f}%"
+
+
+def _interval(low: float | None, high: float | None) -> str:
+    if low is None or high is None:
+        return ""
+    return f" [CI {_pct(low)}–{_pct(high)}]"
+
+
+def _cohort_line(assessment: Any) -> str:
+    """Which prior detections were counted, in words a human can check."""
+    wanted = assessment.cohort_filter
+    parts = [
+        f"{wanted.symbol} {wanted.agent_name} {wanted.direction.value}",
+        f"{wanted.session.value if wanted.session else UNKNOWN} session",
+    ]
+    if wanted.trend_aligned is not None:
+        parts.append("trend-aligned" if wanted.trend_aligned else "against the trend")
+    if wanted.volatility_regime:
+        parts.append(f"{wanted.volatility_regime} volatility")
+    if wanted.price_vs_va:
+        parts.append(f"{wanted.price_vs_va} the value area")
+    if wanted.wick_tag:
+        parts.append(wanted.wick_tag.replace("has_", "").replace("_", " "))
+    return f"n={assessment.n} · " + ", ".join(parts)
+
+
+def build_monitor(assessment: Any, detection: Detection) -> MonitorScreen:
+    """The §62 readout: a trend read, a cohort, and what followed it before (9D).
+
+    Every percentage on this screen is a measured frequency from stored outcomes and every
+    price a quantile of measured excursions. Nothing here is a forecast, and the footer says
+    so on every render rather than once in a pinned message nobody scrolls back to.
+
+    The n and the interval are rendered beside each rate, not underneath: "60%" from five
+    detections and "60%" from three hundred are the same four characters, and a reader
+    deciding in ten seconds will read the ones that are adjacent.
+    """
+    direction = detection.direction.value if detection.direction else "context"
+    screen = MonitorScreen(
+        title=f"{detection.symbol} · {detection.agent_name} · {direction}",
+        symbol=detection.symbol,
+        detection_id=detection.detection_id,
+        assessment_id=assessment.assessment_id,
+        bias=assessment.trend_read.bias.value,
+        evidence=list(assessment.trend_read.evidence),
+        cohort=_cohort_line(assessment),
+        footer=MEASURED_ONLY.format(n=assessment.n) + f" · {assessment.assessment_id}",
+    )
+
+    if assessment.cohort_filter.dropped:
+        # Reported, never silent. A cohort that quietly stopped matching on volatility is
+        # answering a different question while wearing the same words.
+        given_up = ", ".join(
+            name.replace("_", " ") for name in assessment.cohort_filter.dropped
+        )
+        screen.dropped = f"widened by dropping: {given_up}"
+
+    if assessment.disagrees_with_detection:
+        screen.disagreement = (
+            f"The trend read is {assessment.trend_read.bias.value} and this detection is "
+            f"{direction}. They disagree — that is reported, not resolved."
+        )
+
+    if assessment.insufficient:
+        # Stop here. A percentage from eleven detections is worse than no percentage,
+        # because it is read as one from three hundred.
+        screen.insufficient = (
+            f"insufficient history (n={assessment.n}, need "
+            f"{MIN_COHORT}) — no rates, no estimates"
+        )
+        screen.next_move = f"Bias {screen.bias} · cohort n={assessment.n} · not enough history"
+        screen.footer = f"no measurement · {assessment.assessment_id}"
+        return screen
+
+    for horizon in assessment.horizons:
+        rows = []
+        for row in horizon.thresholds:
+            rows.append(
+                f"{row.threshold:g}: {_pct(row.rate)} ({row.reached}/{row.evaluated})"
+                f"{_interval(row.ci_low, row.ci_high)}"
+            )
+        adverse = (
+            f" · adverse first {_pct(horizon.mae_first / horizon.evaluated)}"
+            if horizon.evaluated
+            else ""
+        )
+        ambiguous = (
+            f" · {horizon.path_ambiguous} unobservable order"
+            if horizon.path_ambiguous
+            else ""
+        )
+        screen.fields.append(
+            (f"Reached within {horizon.horizon_id}", "\n".join(rows) + adverse + ambiguous)
+        )
+
+    if assessment.tp_estimates:
+        screen.fields.append(
+            (
+                "Target, measured",
+                " · ".join(
+                    f"p{e.quantile * 100:.0f} {e.points:g}pt"
+                    + (f" ({_fmt(e.price)})" if e.price is not None else "")
+                    for e in assessment.tp_estimates
+                ),
+            )
+        )
+    if assessment.sl_estimates:
+        screen.fields.append(
+            (
+                "Adverse, measured",
+                " · ".join(
+                    f"p{e.quantile * 100:.0f} {e.points:g}pt"
+                    + (f" ({_fmt(e.price)})" if e.price is not None else "")
+                    for e in assessment.sl_estimates
+                ),
+            )
+        )
+
+    paired = assessment.paired
+    if paired is not None and paired.rate is not None:
+        screen.fields.append(
+            (
+                f"+{paired.favourable:g} before −{paired.adverse:g}",
+                f"{_pct(paired.rate)} ({paired.favourable_first}/{paired.evaluated})"
+                f"{_interval(paired.ci_low, paired.ci_high)}",
+            )
+        )
+
+    screen.next_move = _next_move_line(assessment)
+    return screen
+
+
+def _next_move_line(assessment: Any) -> str:
+    """The one-line summary (§62's template), built from the same numbers as the table.
+
+    Derived rather than written separately: a summary line computed from its own reading of
+    the cohort is how a headline comes to disagree with the table under it, and the headline
+    is the part people quote.
+    """
+    horizon = assessment.horizons[0] if assessment.horizons else None
+    row = horizon.thresholds[0] if horizon and horizon.thresholds else None
+    reached = (
+        f"reached +{row.threshold:g} within {horizon.horizon_id} in {_pct(row.rate)}"
+        f"{_interval(row.ci_low, row.ci_high)}"
+        if row is not None
+        else "no reached-rate"
+    )
+    adverse = (
+        f" · typical adverse first −{assessment.sl_estimates[0].points:g}pt"
+        if assessment.sl_estimates
+        else ""
+    )
+    return (
+        f"Bias {assessment.trend_read.bias.value} · cohort n={assessment.n} · "
+        f"{reached}{adverse}"
+    )
 
 
 @dataclass

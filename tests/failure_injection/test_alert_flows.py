@@ -709,3 +709,6 @@ def test_the_phase_done_when_end_to_end(
     assert "ATR14" in values["Volatility"]
     assert "POC" in values["Volume"]
     assert f"level {level:g}" in values["Price"]
+    # The one line separating a readout from a recommendation, asserted where a human would
+    # read it. Nothing checked an embed's footer until the helper could see one (decision 204).
+    assert "research only · not a recommendation" in post["embed"].footer.text

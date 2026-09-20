@@ -21,8 +21,11 @@ from typing import Any, TypeVar
 from aureon.config import AureonConfig
 from aureon.models.settings import ExecutionSettings
 from aureon.storage.alert_repository import PriceAlertRepository
+from aureon.storage.assessment_repository import AssessmentRepository
 from aureon.storage.control_request_repository import ControlRequestRepository
 from aureon.storage.detection_repository import DetectionRepository
+from aureon.storage.evaluation_reader import EvaluationReader
+from aureon.storage.note_repository import TradeNoteRepository
 from aureon.storage.notification_repository import NotificationRepository
 from aureon.storage.review_reader import ReviewReader
 from aureon.storage.settings_repository import (
@@ -68,6 +71,14 @@ class BotContext:
     #: decides whether a message is posted should not be reachable from the one that
     #: decides whether money can move.
     notification_settings: NotificationSettingsRepository | None = None
+    #: 9D. Deliberately the READER: `/monitor` counts stored outcomes and must not be able
+    #: to rewrite one, or every number built on them stops being falsifiable. The boundary
+    #: test caught the writing repository here on its first outing. Assessments and notes
+    #: ARE Discord artefacts -- `/monitor` and `/note` are the only things that create one --
+    #: so those are full repositories, beside `alerts`.
+    evaluations: EvaluationReader | None = None
+    assessments: AssessmentRepository | None = None
+    notes: TradeNoteRepository | None = None
 
     @property
     def authorized_user_ids(self) -> tuple[str, ...]:
@@ -103,4 +114,7 @@ def build_context(config: AureonConfig, client: Any) -> BotContext:
         alerts=PriceAlertRepository(client),
         notifications=NotificationRepository(client),
         notification_settings=NotificationSettingsRepository(client),
+        evaluations=EvaluationReader(client),
+        assessments=AssessmentRepository(client),
+        notes=TradeNoteRepository(client),
     )

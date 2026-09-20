@@ -191,6 +191,18 @@ class MarketContextTracker:
             "day": self.profile("day"),
         }
 
+    def recent(self, count: int) -> list[Candle]:
+        """The last ``count`` closed candles, oldest first (9D).
+
+        From the ROLLING window rather than the day's, because the trend read is about what
+        the market has been doing and a read taken twenty minutes after the day boundary
+        should not be looking at four candles. The day-scoped windows exist for the volume
+        profile, where the boundary is the point (decision 172).
+        """
+        if count <= 0:
+            return []
+        return list(self._rolling)[-count:]
+
     def reference(self, price: float) -> VolumeProfileRef | None:
         """What a detection at ``price`` records, or ``None`` before Asia has traded.
 
