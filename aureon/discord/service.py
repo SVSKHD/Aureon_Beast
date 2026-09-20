@@ -419,6 +419,22 @@ class StatusScreen:
     #: OPEN: on a closed market the numbers are a snapshot of whenever it shut, and
     #: showing them beside a live layout invites reading them as current.
     live_panels: list[LivePanel] = field(default_factory=list)
+    #: When system_state was last written, and how long ago at render time (§59).
+    #: Both, because they answer different questions: the age is what tells a reader
+    #: whether to trust the numbers, and the timestamp is what they quote when
+    #: something looks wrong. A freshness word alone hides how far past the threshold
+    #: a STALE screen has drifted -- 46 seconds and six hours read identically.
+    updated_at: datetime | None = None
+    age_seconds: float | None = None
+
+    @property
+    def updated_line(self) -> str:
+        """``last updated HH:MM:SSZ (12s ago) — LIVE``, or a plain never."""
+        if self.updated_at is None:
+            return f"last updated never — {self.overall.value.upper()}"
+        age = "" if self.age_seconds is None else f" ({self.age_seconds:.0f}s ago)"
+        stamp = self.updated_at.strftime("%H:%M:%SZ")
+        return f"last updated {stamp}{age} — {self.overall.value.upper()}"
 
 
 NO_REVIEW_YET = "no completed review yet"
@@ -565,7 +581,12 @@ def build_status(
         if state is MarketState.CLOSED:
             market_closed = True
 
+    state_updated = getattr(system_state, "updated_at", None)
     screen = StatusScreen(
+        updated_at=to_utc(state_updated) if state_updated else None,
+        age_seconds=(
+            (moment - to_utc(state_updated)).total_seconds() if state_updated else None
+        ),
         overall=overall,
         services=services,
         symbols=symbols,

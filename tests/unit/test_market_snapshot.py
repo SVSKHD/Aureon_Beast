@@ -33,6 +33,7 @@ from aureon.models.enums import (
     Timeframe,
 )
 from aureon.models.identity import detection_id
+from aureon.models.market import QuoteSnapshot
 from aureon.models.settings import ExecutionSettings
 from aureon.models.system import Heartbeat, SymbolState, SystemState
 from aureon.services.market_snapshot import MarketSnapshot
@@ -233,6 +234,7 @@ def full_symbol_state(**overrides) -> SymbolState:
         symbol="XAUUSD",
         timeframe=Timeframe.M5,
         market_state=MarketState.OPEN,
+        last_quote=QuoteSnapshot(symbol="XAUUSD", bid=2400.0, ask=2400.3, point=0.01),
         ema_fast=2401.5,
         ema_slow=2399.25,
         rsi=71.4,
@@ -380,3 +382,96 @@ def test_the_model_derives_distance_and_zone_so_they_cannot_be_inconsistent() ->
     bare = SymbolState(symbol="XAUUSD", timeframe=Timeframe.M5)
     assert bare.ema_distance is None
     assert bare.rsi_zone is None
+
+
+# ── The §59 last line (D-7) ───────────────────────────────────────────────────
+
+
+def test_the_status_screen_reports_when_it_was_last_updated() -> None:
+    """§59 asks for "last updated" beside LIVE/STALE/OFFLINE, not the word alone.
+
+    Both the timestamp and the age, because they answer different questions: the age is
+    what tells a reader whether to trust the numbers, and the timestamp is what they
+    quote when something looks wrong. A freshness word on its own hides how far past the
+    threshold a STALE screen has drifted — 46 seconds and six hours read identically.
+    """
+    now = datetime(2026, 9, 16, 10, 0, tzinfo=UTC)
+    screen = build_status(
+        system_state=SystemState(
+            updated_at=now - timedelta(seconds=12), symbols=(full_symbol_state(),)
+        ),
+        heartbeats={},
+        settings=ExecutionSettings(),
+        now=now,
+    )
+
+    assert screen.updated_at == now - timedelta(seconds=12)
+    assert screen.age_seconds == pytest.approx(12.0)
+    assert screen.updated_line == "last updated 09:59:48Z (12s ago) — LIVE"
+
+
+def test_a_stale_screen_says_how_stale() -> None:
+    now = datetime(2026, 9, 16, 10, 0, tzinfo=UTC)
+    screen = build_status(
+        system_state=SystemState(updated_at=now - timedelta(seconds=46)),
+        heartbeats={},
+        settings=ExecutionSettings(),
+        now=now,
+    )
+    assert "46s ago" in screen.updated_line
+    assert "STALE" in screen.updated_line
+
+
+def test_a_missing_system_state_says_never_rather_than_guessing() -> None:
+    """"never" is a fact. A rendered zero or a blank would both read as "just now"."""
+    screen = build_status(
+        system_state=None,
+        heartbeats={},
+        settings=ExecutionSettings(),
+        now=datetime(2026, 9, 16, 10, 0, tzinfo=UTC),
+    )
+    assert screen.updated_at is None
+    assert screen.age_seconds is None
+    assert screen.updated_line.startswith("last updated never")
+
+
+def test_every_section_59_label_reaches_the_screen() -> None:
+    """D-7's proof: the whole §59 layout, not most of it.
+
+    Checked against the assembled screen rather than a Discord embed so it runs without
+    a gateway — the embed is a thin rendering of exactly these values.
+    """
+    now = datetime(2026, 9, 16, 10, 0, tzinfo=UTC)
+    screen = build_status(
+        system_state=SystemState(updated_at=now, symbols=(full_symbol_state(),)),
+        heartbeats={},
+        settings=ExecutionSettings(trading_enabled=True),
+        open_trades=2,
+        pending_requests=1,
+        now=now,
+    )
+    panel = "\n".join(screen.live_panels[0].lines)
+
+    # Market and price
+    assert "2400.00" in panel and "2400.30" in panel  # bid/ask
+    assert screen.live_panels[0].market_state == "open"
+    # Session, trend, extremes
+    assert "london" in panel and "up" in panel
+    assert "2405.00" in panel and "2395.00" in panel
+    # Indicators
+    assert "2401.50" in panel and "2399.25" in panel  # EMA 20/50
+    assert "71.4" in panel and "overbought" in panel  # RSI + zone
+    # Crosses
+    assert "crosses today 3" in panel and "session 2" in panel
+    assert "last cross buy at 10:05:00Z" in panel
+    # The other agents
+    assert "last sweep up swing_high" in panel  # liquidity
+    assert "last breakout down swing_low" in panel
+    assert "last wick lower_rejection" in panel
+    # Account-level
+    assert screen.trading_enabled is True
+    assert screen.open_trades == 2
+    assert screen.pending_requests == 1
+    assert len(screen.services) == 4
+    # Provenance
+    assert "last updated" in screen.updated_line

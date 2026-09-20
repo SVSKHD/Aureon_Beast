@@ -8,6 +8,7 @@ and "+12" in the test reads as "+12 points" in the assertion.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -580,3 +581,117 @@ def test_a_sell_detection_measures_the_downside_in_price() -> None:
     )
     assert horizon.reached["3"] is True
     assert horizon.reached["5"] is not True
+
+
+# ── Which agents get evaluated (D-4, §22) ─────────────────────────────────────
+
+
+def test_every_directional_agent_is_evaluated_and_context_only_agents_are_not() -> None:
+    """Outcomes follow DIRECTION, not agent name.
+
+    The tracker has no agent allowlist, deliberately: "does this work?" is a question
+    about any detection with a favourable side, and an allowlist would silently answer it
+    for `ema_cross` alone while `liquidity` and `breakout` accumulated unevaluated. That
+    is a gap nothing in the reviews would reveal -- a sweep with no evaluation simply does
+    not appear in a reached-N table, so the table looks complete.
+
+    The converse matters just as much: `wick`, `rsi` and `session_trend` emit
+    `direction=None`, so there is no favourable side to measure. Evaluating them would
+    require inventing a direction, and a reached-N figure built on an invented direction
+    describes the invention.
+
+    Driven through a real fixture replay with the whole roster, because the property is
+    about what the roster produces, not about what one hand-built detection does.
+    """
+    from collections import Counter
+
+    from aureon.agents.breakout_agent import BreakoutAgent
+    from aureon.agents.ema_cross_agent import EmaCrossAgent
+    from aureon.agents.liquidity_agent import LiquidityAgent
+    from aureon.agents.rsi_agent import RsiAgent
+    from aureon.agents.session_trend_agent import SessionTrendAgent
+    from aureon.agents.wick_agent import WickAgent
+    from aureon.data.historical_provider import HistoricalDataProvider
+    from aureon.engine.levels import LevelTracker
+    from aureon.evaluation.backfill import run_backfill
+    from aureon.evaluation.rules import XAU_OUTCOME_V2
+
+    # The REAL instrument tick, not this module's POINT. The synthetic candles above sit
+    # around price 100 with POINT = 1.0; XAUUSD's tick is 0.01, and feeding 1.0 makes the
+    # level agents' thresholds a hundred times too wide, so liquidity emits nothing and
+    # the test passes vacuously on an empty population.
+    fixture_point = 0.01
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "aureon"
+        / "data"
+        / "fixtures"
+        / "XAUUSD_M5.csv"
+    )
+    candles = HistoricalDataProvider(fixture, market_tz=TZ).candles[:900]
+
+    levels = LevelTracker()  # shared by liquidity and breakout (§15, §17)
+    result = run_backfill(
+        candles,
+        [
+            EmaCrossAgent(fast_period=20, slow_period=50),
+            RsiAgent(),
+            SessionTrendAgent(point=fixture_point),
+            WickAgent(point=fixture_point),
+            LiquidityAgent(point=fixture_point, level_tracker=levels),
+            BreakoutAgent(point=fixture_point, level_tracker=levels),
+        ],
+        XAU_OUTCOME_V2,
+        account_scope="primary",
+        market_tz=TZ,
+        point=fixture_point,
+    )
+
+    agent_of = {d.detection_id: d.agent_name for d in result.detections}
+    produced = Counter(agent_of.values())
+    evaluated = Counter(
+        agent_of[e.detection_id] for e in result.evaluations if e.detection_id in agent_of
+    )
+
+    # The fixture must actually exercise every agent, or this proves nothing.
+    for agent in ("ema_cross", "liquidity", "breakout", "wick"):
+        assert produced[agent] > 0, f"the fixture produced no {agent} detections"
+
+    # Directional agents: every detection evaluated, none missed.
+    for agent in ("ema_cross", "liquidity", "breakout"):
+        assert evaluated[agent] == produced[agent], (
+            f"{agent}: {produced[agent]} detections but {evaluated[agent]} evaluations"
+        )
+
+    # Context-only agents: none evaluated at all.
+    for agent in ("wick", "rsi", "session_trend"):
+        assert evaluated[agent] == 0, (
+            f"{agent} emits direction=None and must not be evaluated; "
+            f"got {evaluated[agent]} evaluations"
+        )
+
+
+def test_the_filter_is_direction_not_an_agent_allowlist() -> None:
+    """A directional detection from an unheard-of agent is still evaluated.
+
+    Pinned separately because the fixture test above would keep passing if someone added
+    an allowlist that happened to name the three agents the fixture uses. This one fails
+    the moment the rule stops being "has a direction".
+    """
+    tracker = OutcomeTracker(EMA_OUTCOME_V1, market_tz=TZ, point=POINT)
+    invented = make_detection(Direction.BUY, index=0).model_copy(
+        update={"agent_name": "an_agent_nobody_has_written_yet"}
+    )
+
+    assert tracker.track(invented) is not None, (
+        "an evaluation was refused on the basis of the agent's name"
+    )
+
+
+def test_a_context_only_detection_is_refused_whatever_its_agent() -> None:
+    tracker = OutcomeTracker(EMA_OUTCOME_V1, market_tz=TZ, point=POINT)
+    context_only = make_detection(Direction.BUY, index=0).model_copy(
+        update={"direction": None, "agent_name": "ema_cross"}
+    )
+
+    assert tracker.track(context_only) is None

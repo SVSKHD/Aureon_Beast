@@ -40,6 +40,7 @@ from aureon.agents.session_trend_agent import SessionTrendAgent, summary_from_de
 from aureon.agents.wick_agent import WickAgent
 from aureon.config import AureonConfig
 from aureon.config.sessions import session_for
+from aureon.config.symbol_tuning import tuning_for
 from aureon.data.base_provider import BaseMarketDataProvider
 from aureon.data.live_candle_archive import LiveCandleArchive
 from aureon.engine.analysis_engine import AnalysisEngine
@@ -524,13 +525,43 @@ def default_agents(config: AureonConfig, *, point: float = 0.01) -> list[BaseAge
     """
     timeframe = config.timeframes[0]
     levels = LevelTracker()
+    # Per-symbol, because the level and wick thresholds are NOT dimensionless:
+    # min_penetration_points = 5 is $0.05 on gold and something else entirely on a
+    # symbol with a different tick and a different daily range (D-15). XAUUSD gets the
+    # shipped values; anything else gets them too, knowingly, until researched.
+    tuning = tuning_for(config.symbols[0], point=point)
+    if not tuning.is_default:
+        log.info(
+            "%s runs tuned agent parameters: %s",
+            config.symbols[0],
+            ", ".join(tuning.overridden),
+        )
     return [
         EmaCrossAgent(fast_period=config.ema_fast, slow_period=config.ema_slow),
         RsiAgent(),
-        SessionTrendAgent(timeframe=timeframe, point=point),
-        WickAgent(point=point),
-        LiquidityAgent(timeframe=timeframe, point=point, level_tracker=levels),
-        BreakoutAgent(timeframe=timeframe, point=point, level_tracker=levels),
+        SessionTrendAgent(
+            timeframe=timeframe, point=tuning.point, flat_points=tuning.flat_points
+        ),
+        WickAgent(
+            point=tuning.point,
+            min_wick_range_ratio=tuning.min_wick_range_ratio,
+            min_wick_body_ratio=tuning.min_wick_body_ratio,
+            max_close_position=tuning.max_close_position,
+            min_range_points=tuning.min_range_points,
+        ),
+        LiquidityAgent(
+            timeframe=timeframe,
+            point=tuning.point,
+            level_tracker=levels,
+            min_penetration_points=tuning.min_penetration_points,
+            min_rejection_fraction=tuning.min_rejection_fraction,
+        ),
+        BreakoutAgent(
+            timeframe=timeframe,
+            point=tuning.point,
+            level_tracker=levels,
+            min_close_beyond_points=tuning.min_close_beyond_points,
+        ),
     ]
 
 
