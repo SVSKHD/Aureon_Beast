@@ -94,6 +94,7 @@ from aureon.models.identity import (
     detection_id_components,
     evaluation_doc_id,
     execution_attempt_id,
+    new_alert_id,
 )
 from aureon.models.market import Candle, QuoteSnapshot, SymbolInfo
 from aureon.models.profile import (
@@ -240,6 +241,7 @@ __all__ = [
     "detection_id_components",
     "evaluation_doc_id",
     "execution_attempt_id",
+    "new_alert_id",
     "Candle",
     "QuoteSnapshot",
     "SymbolInfo",

@@ -905,6 +905,142 @@ def test_an_unscoped_status_screen_says_nothing_about_a_symbol() -> None:
     assert "·" not in status_embed(screen).title
 
 
+# ── 9C: /remind price ─────────────────────────────────────────────────────────
+
+
+def alert_plan(**overrides):
+    from aureon.discord.service import plan_price_alert
+
+    base = dict(
+        symbol=SYMBOL,
+        level=2450.0,
+        side="above",
+        requested_by=OWNER,
+        quote=quote(),
+        observed_symbols=OBSERVED,
+        armed_count=0,
+    )
+    return plan_price_alert(**(base | overrides))
+
+
+def test_an_alert_above_the_market_is_armed_with_its_distance() -> None:
+    plan = alert_plan(level=2450.0)
+    assert plan.ok is True
+    assert plan.alert is not None
+    assert plan.alert.symbol == SYMBOL
+    assert plan.alert.side == "above"
+    assert plan.alert.requested_by == OWNER
+    # The distance is from the price the firing will measure -- the ask, for `above`.
+    assert "49.7" in (plan.note or "")
+    assert "4970 points" in (plan.note or "")
+
+
+def test_an_alert_that_has_already_happened_is_refused_with_the_current_price() -> None:
+    """9C. `above` a level already below the market would fire on the next quote.
+
+    That is not a reminder, it is an echo — and silently arming it would deliver a useless
+    notification seconds later and teach the trader to distrust the channel. The refusal
+    carries the current price, which is how somebody notices they typed the wrong side.
+    """
+    plan = alert_plan(level=2300.0, side="above")
+    assert plan.ok is False
+    assert "already at 2400.3" in (plan.message or "")
+    assert "Did you mean `below`?" in (plan.message or "")
+
+    other = alert_plan(level=2500.0, side="below")
+    assert other.ok is False
+    assert "Did you mean `above`?" in (other.message or "")
+
+
+def test_a_level_inside_the_spread_is_refused_from_either_side() -> None:
+    """`above` is checked against the ask and `below` against the bid — the same prices the
+    firing uses — so a level between them is already reached whichever way you name it.
+
+    With bid 2400.00 and ask 2400.30, a level of 2400.20 is below the ask (so `above` has
+    happened) and above the bid (so `below` has happened). Refusing both is the honest
+    answer: an alert inside the current spread fires on the next quote either way.
+    """
+    assert alert_plan(level=2400.20, side="above").ok is False
+    assert alert_plan(level=2400.20, side="below").ok is False
+    # Just outside it, each side is armable and the other is not.
+    assert alert_plan(level=2400.40, side="above").ok is True
+    assert alert_plan(level=2400.40, side="below").ok is False
+    assert alert_plan(level=2399.90, side="below").ok is True
+    assert alert_plan(level=2399.90, side="above").ok is False
+
+
+def test_an_unobserved_symbol_is_refused_because_nothing_would_check_it() -> None:
+    plan = alert_plan(symbol="EURUSD")
+    assert plan.ok is False
+    assert "not observed" in (plan.message or "")
+    assert "never be checked" in (plan.message or "")
+
+
+def test_an_unknown_side_and_a_nonsense_level_are_refused() -> None:
+    assert alert_plan(side="sideways").ok is False
+    assert alert_plan(level=0.0).ok is False
+    assert alert_plan(level=-1.0).ok is False
+
+
+def test_the_cap_is_checked_before_a_quote_is_even_needed() -> None:
+    """Twenty levels is more than anyone watches; the hundredth makes the channel useless."""
+    from aureon.models.alerts import MAX_ARMED_ALERTS_PER_USER
+
+    plan = alert_plan(armed_count=MAX_ARMED_ALERTS_PER_USER)
+    assert plan.ok is False
+    assert "/remind cancel" in (plan.message or "")
+
+
+def test_no_published_quote_means_no_alert_rather_than_an_unchecked_one() -> None:
+    """Without a quote Aureon cannot tell which side of the market the level is on."""
+    plan = alert_plan(quote=None)
+    assert plan.ok is False
+    assert "No published quote" in (plan.message or "")
+
+
+def test_a_note_is_carried_and_an_empty_one_is_not_stored() -> None:
+    assert alert_plan(note="range high").alert.note == "range high"
+    assert alert_plan(note="").alert.note is None
+
+
+def test_the_listing_puts_armed_alerts_first_with_their_remaining_time() -> None:
+    from datetime import timedelta
+
+    from aureon.discord.service import render_alert_list
+    from aureon.models.alerts import PriceAlert
+    from aureon.models.enums import PriceAlertStatus
+
+    armed = PriceAlert(
+        alert_id="al-armed",
+        symbol=SYMBOL,
+        level=2450.0,
+        side="above",
+        requested_by=OWNER,
+        expires_at=NOW + timedelta(hours=6),
+        note="range high",
+    )
+    fired = PriceAlert(
+        alert_id="al-fired",
+        symbol=SYMBOL,
+        level=2350.0,
+        side="below",
+        requested_by=OWNER,
+        status=PriceAlertStatus.FIRED,
+        fired_price=2349.80,
+    )
+    text = render_alert_list([fired, armed], now=NOW)
+    lines = text.splitlines()
+    assert "al-armed" in lines[0] and "6.0h left" in lines[0]
+    assert "range high" in lines[0]
+    assert "al-fired" in lines[1] and "fired at 2349.8" in lines[1]
+
+
+def test_an_empty_listing_says_how_to_make_one() -> None:
+    from aureon.discord.service import render_alert_list
+
+    assert "/remind price" in render_alert_list([])
+
+
 # ── §57: the trading switch ───────────────────────────────────────────────────
 
 

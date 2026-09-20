@@ -219,6 +219,9 @@ re-running one overwrites the same document.
 | `/close symbol:` | closes the one open position on that symbol. Two open positions on it, or none, and it says what it found and stops — Aureon does not choose which of your trades to end |
 | `/cancel-order ticket [symbol]` | cancels a resting pending order. Naming the symbol refuses unless the ticket really is that symbol, at Aureon's records **and** at the broker |
 | `/close-trade position_id [volume] [symbol]` | closes an open position, with the same cross-check when a symbol is named |
+| `/remind price symbol: level: side: [note]` | arms a one-shot price alert. Aureon tells **you** once when a quote it already reads crosses the level; it expires in 24 hours, 20 armed per person. A level already behind the market is refused with the current price, because it would fire on the next quote |
+| `/remind list` | your alerts, armed ones first with their remaining time |
+| `/remind cancel id:` | disarms one of your own alerts |
 | `/trading status` | is trading enabled, and who last changed it |
 | `/trading enable` | requires a confirmation, and lists what to check first |
 | `/trading disable` | immediate, audited, effective on the next request |

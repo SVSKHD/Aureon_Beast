@@ -186,3 +186,140 @@ def test_a_claim_taken_by_one_process_is_visible_to_another(firestore_client) ->
     )
     other = NotificationRepository(firestore_client)
     assert other.claim(NotificationKind.ALERT, "al-1", symbol=SYMBOL, channel_id="c1") is None
+
+
+# ── /remind, driven through the real command ──────────────────────────────────
+
+
+@pytest.fixture
+def context(firestore_client):
+    from aureon.config import AureonConfig
+    from aureon.discord.context import build_context
+
+    config = AureonConfig(
+        symbols=("XAUUSD", "XAGUSD"),
+        evaluation_rules={"XAUUSD": "XAU_OUTCOME_V2", "XAGUSD": "XAG_OUTCOME_V1"},
+        authorized_user_ids=(USER,),
+    )
+    return build_context(config, firestore_client)
+
+
+@pytest.fixture
+def quote_published(firestore_client):
+    """Publish a quote into the symbol's own state document, as the observer does."""
+    from aureon.models.enums import MarketState, Timeframe
+    from aureon.models.market import QuoteSnapshot
+    from aureon.models.system import SymbolState, SystemState
+    from aureon.storage.system_state_repository import SystemStateRepository
+
+    def publish(symbol: str = SYMBOL, *, bid: float = 3690.00, ask: float = 3690.30) -> None:
+        SystemStateRepository(firestore_client).write(
+            SystemState(
+                symbols=(
+                    SymbolState(
+                        symbol=symbol,
+                        timeframe=Timeframe.M5,
+                        market_state=MarketState.OPEN,
+                        last_quote=QuoteSnapshot(
+                            symbol=symbol, bid=bid, ask=ask, point=0.01,
+                            captured_at=utc_now(),
+                        ),
+                    ),
+                )
+            ),
+            force=True,
+        )
+
+    return publish
+
+
+def run_remind(context, interaction, **kwargs):
+    import asyncio
+
+    from aureon.discord.commands.remind import RemindCommands
+
+    return asyncio.run(RemindCommands(context).price(interaction, **kwargs))
+
+
+def test_remind_price_arms_one_alert_and_says_what_it_will_do(
+    context, quote_published, firestore_client
+) -> None:
+    """9C's done-when, the arming half."""
+    from tests.failure_injection.test_execute_shortcut import FakeInteraction, embed_text
+
+    quote_published()
+    interaction = FakeInteraction()
+    run_remind(
+        context, interaction, symbol=SYMBOL, level=3700.0, side="above", note="range high"
+    )
+
+    armed = PriceAlertRepository(firestore_client).armed(user_id=USER)
+    assert len(armed) == 1
+    assert armed[0].level == pytest.approx(3700.0)
+    assert armed[0].note == "range high"
+    assert armed[0].expires_at is not None
+
+    text = embed_text(interaction.embeds[0])
+    assert "Armed" in text and "3700" in text
+    # The message states the three things it will NOT do.
+    assert "once" in text
+    assert "CONFIRM" in text
+
+
+def test_remind_price_refuses_a_level_already_behind_the_market(
+    context, quote_published, firestore_client
+) -> None:
+    from tests.failure_injection.test_execute_shortcut import FakeInteraction, embed_text
+
+    quote_published()
+    interaction = FakeInteraction()
+    run_remind(context, interaction, symbol=SYMBOL, level=3600.0, side="above")
+
+    assert PriceAlertRepository(firestore_client).armed(user_id=USER) == []
+    assert "Did you mean `below`?" in embed_text(interaction.embeds[0])
+
+
+def test_remind_price_refuses_a_symbol_with_no_published_quote(
+    context, firestore_client
+) -> None:
+    """A stopped observer is not a market to set a level in."""
+    from tests.failure_injection.test_execute_shortcut import FakeInteraction, embed_text
+
+    interaction = FakeInteraction()
+    run_remind(context, interaction, symbol=SYMBOL, level=3700.0, side="above")
+    assert PriceAlertRepository(firestore_client).armed() == []
+    assert "No published quote" in embed_text(interaction.embeds[0])
+
+
+def test_remind_list_and_cancel_are_the_users_own(
+    context, quote_published, firestore_client
+) -> None:
+    import asyncio
+
+    from aureon.discord.commands.remind import RemindCommands
+    from tests.failure_injection.test_execute_shortcut import FakeInteraction, embed_text
+
+    quote_published()
+    run_remind(context, FakeInteraction(), symbol=SYMBOL, level=3700.0, side="above")
+    mine = PriceAlertRepository(firestore_client).armed(user_id=USER)
+    assert len(mine) == 1
+
+    listing = FakeInteraction()
+    asyncio.run(RemindCommands(context).list_alerts(listing))
+    assert mine[0].alert_id in embed_text(listing.embeds[0])
+
+    # Somebody else cannot cancel it, and the alert stays armed.
+    intruder = FakeInteraction("user-9")
+    asyncio.run(RemindCommands(context).cancel(intruder, mine[0].alert_id))
+    assert (
+        PriceAlertRepository(firestore_client).get(mine[0].alert_id).status
+        is PriceAlertStatus.ARMED
+    )
+
+    owner = FakeInteraction()
+    asyncio.run(RemindCommands(context).cancel(owner, mine[0].alert_id))
+    assert (
+        PriceAlertRepository(firestore_client).get(mine[0].alert_id).status
+        is PriceAlertStatus.CANCELLED
+    )
+    assert "Cancelled" in embed_text(owner.embeds[0])

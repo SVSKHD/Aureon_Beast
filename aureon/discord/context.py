@@ -20,8 +20,10 @@ from typing import Any, TypeVar
 
 from aureon.config import AureonConfig
 from aureon.models.settings import ExecutionSettings
+from aureon.storage.alert_repository import PriceAlertRepository
 from aureon.storage.control_request_repository import ControlRequestRepository
 from aureon.storage.detection_repository import DetectionRepository
+from aureon.storage.notification_repository import NotificationRepository
 from aureon.storage.review_reader import ReviewReader
 from aureon.storage.settings_repository import ExecutionSettingsRepository
 from aureon.storage.symbol_repository import SymbolRepository
@@ -53,6 +55,12 @@ class BotContext:
     symbols: SymbolRepository
     system_state: SystemStateRepository
     heartbeats: HeartbeatRepository
+    # 9C: the alerts a human armed, and what has already been said. Both are writable by
+    # Discord -- an alert IS a Discord artefact, and a notification record is the proof a
+    # message was sent -- which is why they sit beside `requests` rather than behind a
+    # reader like `reviews` does.
+    alerts: PriceAlertRepository | None = None
+    notifications: NotificationRepository | None = None
 
     @property
     def authorized_user_ids(self) -> tuple[str, ...]:
@@ -85,4 +93,6 @@ def build_context(config: AureonConfig, client: Any) -> BotContext:
         symbols=SymbolRepository(client),
         system_state=SystemStateRepository(client),
         heartbeats=HeartbeatRepository(client),
+        alerts=PriceAlertRepository(client),
+        notifications=NotificationRepository(client),
     )

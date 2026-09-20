@@ -161,6 +161,17 @@ def execution_attempt_id() -> str:
     return uuid.uuid4().hex
 
 
+def new_alert_id() -> str:
+    """A fresh ``/remind`` alert id (9C).
+
+    Random like ``execution_attempt_id``, because an alert is a request rather than an
+    observation: two alerts on the same level are two different things a human asked for, and
+    a deterministic id would collapse them into one. Short enough to type into
+    ``/remind cancel id:``, which is the only place a human ever writes one.
+    """
+    return f"al-{uuid.uuid4().hex[:10]}"
+
+
 def evaluation_doc_id(detection_id_value: str, rule_id: str) -> str:
     """Doc id for ``detection_evaluations`` (Phase 3).
 

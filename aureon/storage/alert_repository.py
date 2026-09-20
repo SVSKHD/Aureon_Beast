@@ -20,7 +20,6 @@ alert cannot be fired and a fired one cannot be re-armed.
 from __future__ import annotations
 
 import logging
-import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
@@ -35,9 +34,14 @@ from aureon.models.enums import (
     PriceAlertStatus,
     assert_price_alert_transition,
 )
+from aureon.models.identity import new_alert_id
 from aureon.storage import paths
 
 log = logging.getLogger(__name__)
+
+#: Re-exported so a caller that already holds this repository need not reach for the models
+#: package for an id. The definition lives in ``aureon.models.identity`` with the others.
+__all__ = ["AlertClaimRejected", "AlertRejected", "PriceAlertRepository", "new_alert_id"]
 
 
 class AlertRejected(Exception):
@@ -46,11 +50,6 @@ class AlertRejected(Exception):
 
 class AlertClaimRejected(Exception):
     """Someone else already answered or withdrew this alert."""
-
-
-def new_alert_id() -> str:
-    """Short, typeable, and unambiguous in ``/remind cancel id:``."""
-    return f"al-{uuid.uuid4().hex[:10]}"
 
 
 class PriceAlertRepository:

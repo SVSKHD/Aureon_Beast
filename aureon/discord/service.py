@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
+from aureon.models.alerts import ALERT_SIDES, MAX_ARMED_ALERTS_PER_USER, PriceAlert
 from aureon.models.base import to_utc, utc_now
 from aureon.models.control import ControlRequest
 from aureon.models.detection import Detection
@@ -41,8 +42,10 @@ from aureon.models.enums import (
     LinkType,
     MarketState,
     OrderType,
+    PriceAlertStatus,
     TradeRequestStatus,
 )
+from aureon.models.identity import new_alert_id
 from aureon.models.market import QuoteSnapshot, SymbolInfo
 from aureon.models.settings import ExecutionSettings
 from aureon.models.system import DEFAULT_OFFLINE_AFTER_SECONDS, freshness_of
@@ -590,6 +593,129 @@ def check_confirm_press(
             needs_refresh=True,
         )
     return ConfirmGate(True)
+
+
+# ── /remind: price alerts (9C) ────────────────────────────────────────────────
+
+
+@dataclass
+class AlertPlan:
+    """Whether a ``/remind price`` may be armed, and with what."""
+
+    ok: bool
+    message: str | None = None
+    alert: PriceAlert | None = None
+    #: Said on the confirmation, e.g. how far the level is from here.
+    note: str | None = None
+
+
+def plan_price_alert(
+    *,
+    symbol: str,
+    level: float,
+    side: str,
+    requested_by: str,
+    quote: QuoteSnapshot | None,
+    observed_symbols: Sequence[str],
+    armed_count: int,
+    note: str | None = None,
+    max_per_user: int = MAX_ARMED_ALERTS_PER_USER,
+    now: datetime | None = None,
+) -> AlertPlan:
+    """Every rule ``/remind price`` applies, in the order that makes each one meaningful.
+
+    The one worth explaining is the **side check**. An alert to be told when gold goes
+    *above* a level that is already below the current price has already happened: it would
+    fire on the very next quote, which is not a reminder, it is an echo. Refusing it with the
+    current price in the message is how a human notices they typed `above` for `below` --
+    silently arming it would deliver a useless notification seconds later and teach them to
+    distrust the channel.
+    """
+    symbol = symbol.upper()
+    unobserved = unobserved_symbol_notice(symbol, observed_symbols)
+    if unobserved:
+        return AlertPlan(
+            False,
+            f"{unobserved} A level on a symbol nobody is watching would never be checked.",
+        )
+    if side not in ALERT_SIDES:
+        return AlertPlan(False, f"`{side}` is not a side — use {' or '.join(ALERT_SIDES)}")
+    if level <= 0:
+        return AlertPlan(False, f"{level} is not a price")
+    if armed_count >= max_per_user:
+        return AlertPlan(
+            False,
+            f"You already have {armed_count} armed alerts (the limit is {max_per_user}). "
+            "`/remind list` shows them; `/remind cancel` frees one.",
+        )
+    if quote is None:
+        return AlertPlan(
+            False,
+            f"No published quote for {symbol}, so Aureon cannot tell which side of the "
+            "market this level is on. The observer may be stopped — check `/status`.",
+        )
+
+    # The price this side would be measured against, so the check and the firing agree.
+    reference = quote.ask if side == "above" else quote.bid
+    if side == "above" and level <= reference:
+        return AlertPlan(
+            False,
+            f"{symbol} is already at {reference:g}, which is at or above {level:g} — this "
+            "would fire on the next quote. Did you mean `below`?",
+        )
+    if side == "below" and level >= reference:
+        return AlertPlan(
+            False,
+            f"{symbol} is already at {reference:g}, which is at or below {level:g} — this "
+            "would fire on the next quote. Did you mean `above`?",
+        )
+
+    alert = PriceAlert(
+        alert_id=new_alert_id(),
+        symbol=symbol,
+        level=level,
+        side=side,
+        requested_by=str(requested_by),
+        note=(note or None),
+    )
+    distance = abs(level - reference)
+    points = distance / quote.point if quote.point else None
+    _ = now
+    return AlertPlan(
+        True,
+        alert=alert,
+        note=(
+            f"{distance:g} away from {reference:g}"
+            + (f" ({points:.0f} points)" if points is not None else "")
+        ),
+    )
+
+
+def render_alert_list(alerts: Sequence[PriceAlert], *, now: datetime | None = None) -> str:
+    """``/remind list`` for one user: armed first, then whatever has been answered.
+
+    Armed alerts carry their remaining time, because the useful question about an armed
+    alert is when it stops watching. A fired one carries the price that answered it, which
+    is the only part of a fired alert anybody re-reads.
+    """
+    if not alerts:
+        return "No alerts. `/remind price` arms one."
+    moment = to_utc(now or utc_now())
+    lines = []
+    for alert in sorted(
+        alerts, key=lambda a: (a.status is not PriceAlertStatus.ARMED, a.symbol, a.level)
+    ):
+        head = f"`{alert.alert_id}` {alert.symbol} {alert.side} {alert.level:g}"
+        if alert.status is PriceAlertStatus.ARMED and alert.expires_at is not None:
+            remaining = (to_utc(alert.expires_at) - moment).total_seconds() / 3600
+            tail = f"armed, {remaining:.1f}h left" if remaining > 0 else "armed, expiring"
+        elif alert.status is PriceAlertStatus.FIRED:
+            tail = f"fired at {alert.fired_price:g}" if alert.fired_price else "fired"
+        else:
+            tail = alert.status.value
+        note = f" — {alert.note}" if alert.note else ""
+        lines.append(f"{head} · {tail}{note}")
+    return "\n".join(lines)
 
 
 # ── Control requests (§46, §47) ───────────────────────────────────────────────

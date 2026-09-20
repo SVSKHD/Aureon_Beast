@@ -26,6 +26,7 @@ SILVER = "XAGUSD"
 #: Every command a trader is told exists (docs/RUNBOOK.md).
 EXPECTED = {
     "status",
+    "remind",
     "execute",
     "execute-trade",
     "close",
@@ -127,3 +128,24 @@ def test_each_symbol_aware_command_offers_the_configured_symbols(
     option = options(tree, command)["symbol"]
     assert [choice.value for choice in option.choices] == [GOLD, SILVER]
     assert option.required is required
+
+
+# ── 9C: /remind is a group, and its symbol comes from the same list ───────────
+
+
+def test_remind_is_a_group_with_price_list_and_cancel(tree) -> None:
+    """One command with three verbs, so `/remind` reads as one feature in the menu."""
+    group = tree.get_command("remind")
+    assert group is not None
+    assert {command.name for command in group.commands} == {"price", "list", "cancel"}
+
+
+def test_remind_price_offers_the_configured_symbols_and_both_sides(tree) -> None:
+    group = tree.get_command("remind")
+    price = next(c for c in group.commands if c.name == "price")
+    options = {p.name: p for p in price.parameters}
+    assert [choice.value for choice in options["symbol"].choices] == [GOLD, SILVER]
+    assert [choice.value for choice in options["side"].choices] == ["above", "below"]
+    # The level is required and the note is not: a reminder with no level is not a reminder.
+    assert options["level"].required is True
+    assert options["note"].required is False
