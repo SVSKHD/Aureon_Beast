@@ -8,17 +8,10 @@ This finds those before the market opens rather than during the review afterward
 
 ## Every check reports one of five things, and they are not interchangeable
 
-* **PASS** -- verified, now, against the real thing.
-* **FAIL** -- verified to be wrong. The only status that makes the exit code non-zero.
-* **WARN** -- true but probably not what was wanted (the production prefix, an outbox
-  with undelivered rows from last time). The session can proceed; a human should know.
-* **SKIP** -- *not checked*. Never a pass. A dependency failed, or the market is closed,
-  or ``--skip-mt5`` was passed. A skipped check that renders like a passing one is how a
-  preflight ends up certifying something it never looked at.
-* **INFO** -- a value the operator needs in front of them, with no pass/fail meaning.
-  ``trading_enabled`` is the one that matters: it is not preflight's business to decide
-  whether it should be on, and it IS preflight's business to make sure nobody starts a
-  session without knowing.
+PASS, FAIL, WARN, SKIP, INFO -- defined once in ``aureon.services.checks``, which says
+why two statuses would be a lie. The ones that matter here: ``--skip-mt5`` produces
+SKIPs, never passes, and ``trading_enabled`` is INFO because whether it should be on
+depends on which session this is.
 
 ## What it does not do
 
@@ -33,15 +26,14 @@ from __future__ import annotations
 import shutil
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from datetime import datetime
-from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from aureon.config.config import AureonConfig
 from aureon.models.base import utc_now
 from aureon.models.enums import Timeframe
+from aureon.services.checks import CheckReport, CheckResult, Status
 from aureon.storage import paths
 
 #: The drift a broker clock may have from this machine's before it matters (P-2).
@@ -62,99 +54,6 @@ MIN_FREE_MEGABYTES = 50.0
 #: writing ``heartbeats/observer`` would make a dead observer look alive, which is the
 #: exact lie the heartbeat exists to prevent.
 PREFLIGHT_SERVICE = "preflight"
-
-
-class Status(StrEnum):
-    PASS = "PASS"
-    FAIL = "FAIL"
-    WARN = "WARN"
-    SKIP = "SKIP"
-    INFO = "INFO"
-
-
-MARKS: dict[Status, str] = {
-    Status.PASS: "PASS",
-    Status.FAIL: "FAIL",
-    Status.WARN: "WARN",
-    Status.SKIP: "SKIP",
-    Status.INFO: "INFO",
-}
-
-
-@dataclass(frozen=True)
-class CheckResult:
-    """One check's verdict, with what to do about it when it is not a pass."""
-
-    name: str
-    status: Status
-    detail: str
-    remedy: str | None = None
-
-    @property
-    def blocking(self) -> bool:
-        return self.status is Status.FAIL
-
-
-@dataclass
-class PreflightReport:
-    results: list[CheckResult] = field(default_factory=list)
-
-    @property
-    def failures(self) -> list[CheckResult]:
-        return [r for r in self.results if r.blocking]
-
-    @property
-    def warnings(self) -> list[CheckResult]:
-        return [r for r in self.results if r.status is Status.WARN]
-
-    @property
-    def skipped(self) -> list[CheckResult]:
-        return [r for r in self.results if r.status is Status.SKIP]
-
-    @property
-    def ok(self) -> bool:
-        """No FAIL. Deliberately silent about SKIP -- see ``render``'s summary line."""
-        return not self.failures
-
-    @property
-    def exit_code(self) -> int:
-        return 1 if self.failures else 0
-
-    def get(self, name: str) -> CheckResult | None:
-        return next((r for r in self.results if r.name == name), None)
-
-    def render(self) -> str:
-        width = max((len(r.name) for r in self.results), default=10)
-        lines = [
-            f"{'status':<7}{'check':<{width + 2}}detail",
-            "-" * (7 + width + 2 + 40),
-        ]
-        for result in self.results:
-            lines.append(
-                f"{MARKS[result.status]:<7}{result.name:<{width + 2}}{result.detail}"
-            )
-
-        remedies = [r for r in self.results if r.remedy]
-        if remedies:
-            lines += ["", "What to do:"]
-            for result in remedies:
-                lines.append(f"  {result.name}: {result.remedy}")
-
-        lines += ["", self.summary()]
-        return "\n".join(lines)
-
-    def summary(self) -> str:
-        counts = {
-            status: sum(1 for r in self.results if r.status is status)
-            for status in Status
-        }
-        parts = [f"{counts[s]} {s.value.lower()}" for s in Status if counts[s]]
-        verdict = "READY" if self.ok else "NOT READY"
-        # A skip is reported in the verdict line, not only in the table: "5 passed" with
-        # six checks skipped underneath reads as a green run to anyone scanning.
-        if self.skipped:
-            verdict += f" ({len(self.skipped)} checks not run)"
-        return f"{verdict} — " + ", ".join(parts)
 
 
 def _probe_writable(directory: Path) -> None:
@@ -226,9 +125,9 @@ class Preflight:
 
     # ── The run ───────────────────────────────────────────────────────────────
 
-    def run(self) -> PreflightReport:
+    def run(self) -> CheckReport:
         """Every check, in the order a human would want them: local, stored, broker."""
-        report = PreflightReport()
+        report = CheckReport()
         for check in (
             self.check_config,
             self.check_collection_prefix,

@@ -20,6 +20,13 @@ observer_state.json
 *.sqlite-shm
 outbox.db*
 
+# Live candle archives (§82). Written by the observer, read by
+# scripts/compare_live_vs_replay.py. A broker day of M5 parquet is small, which is
+# exactly why this needs to be here: it is small enough to be committed by accident,
+# and a repository carrying one session's candles invites comparing a later run
+# against them instead of against a fresh archive.
+data/live_candles/
+
 .pytest_cache/
 .ruff_cache/
 .coverage

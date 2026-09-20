@@ -9,6 +9,21 @@ It needs Windows and a running MT5 terminal, so it cannot be automated here. The
 it depends on **is** automated and tested: the observer archives the candles it processed,
 and `scripts/compare_live_vs_replay.py` replays exactly those and diffs the result.
 
+## The short version
+
+    python scripts/session_run.py            # preflight, then run the observer
+    # ... the session ...
+    python scripts/session_verify.py 2026-09-16
+
+Those two bracket the session and write `docs/evidence/session_{market_date}.md`, which is
+what gets committed as the evidence for the Phase 2 gate. The rest of this document is
+what the two scripts cannot do for you: decide whether the numbers they print are the ones
+you meant, and read a failure.
+
+`session_run.py` **refuses to start on a preflight FAIL**. `--force` overrides it and says
+so in the evidence file — an override with a record is better than a gate people avoid by
+not running it.
+
 ## What this is actually testing
 
 Three things that only a live session can break, all of which the fixture cannot reach:
@@ -25,10 +40,13 @@ Three things that only a live session can break, all of which the fixture cannot
 
 ## Before the session
 
-Most of this list is now machine-checked. Run it first, and read the table rather than
-skimming for green:
+Most of this list is now machine-checked:
 
     python scripts/preflight.py
+
+`session_run.py` runs the same checks at start-up, so this is worth running **standalone
+the day before** — a symbol missing from Market Watch or a prefix pointing at production
+is much easier to fix with a day in hand than at 01:55.
 
 Exit 0 with no `FAIL` row is the gate. **A `SKIP` is not a pass** — the summary line says
 how many checks did not run, and a terminal check that did not run means the terminal was
@@ -72,6 +90,10 @@ evidence needs to be re-readable a month later.
 
 ## Running it
 
+- [ ] Start it with `python scripts/session_run.py`, not with `main_observer.py` directly.
+      The wrapper runs the preflight, writes the evidence file **before** the observer
+      starts, and stamps the stop time even if the observer crashes — which is the case
+      where the record matters most.
 - [ ] Start the observer **before the Asia open** (02:00 market time). Starting mid-session
       means the first candles come from the backfill rather than live, which is a different
       code path and not the one under test.
@@ -90,17 +112,27 @@ evidence needs to be re-readable a month later.
 - [ ] Stop the observer cleanly (SIGTERM / Ctrl-C, not a kill). Shutdown flushes the
       candle archive; a hard kill loses the day's tail, which the next flush would merge
       back but only if the observer runs again.
-- [ ] Confirm the archive exists and covers the day:
+- [ ] Run the verification:
 
-      ls -la data/live_candles/
-      # expect XAUUSD_M5_<market-date>.parquet
+      python scripts/session_verify.py <market-date>
 
-- [ ] Run the comparison:
+      Six checks, and it fills in the second half of the evidence file:
 
-      python scripts/compare_live_vs_replay.py <market-date>
+      | check | the silence it breaks |
+      |---|---|
+      | `archive` | the file the whole of §82 rests on is simply absent |
+      | `archive_gaps` | an hour missing mid-session still produces a full-looking outcome table, with that hour's horizons quietly INVALID |
+      | `live_vs_replay` | `compare_live_vs_replay.py`; the only check that can tell an engine difference from a broker one |
+      | `detections_stored` | the observer can emit detections that never leave the outbox |
+      | `outbox_drained` | and if they did not, every count in the document is a lower bound |
+      | `observer_ran_to_the_close` | a process that died at lunchtime leaves an archive that looks normal and stops |
 
-- [ ] **Exit code 0 and `IDENTICAL`** is the pass. Anything else is a finding, not a
-      formality.
+- [ ] **Exit code 0** with no `FAIL` row is the pass. A `SKIP` is not a pass: it means that
+      check did not run, and the summary line says how many did not.
+- [ ] Commit `docs/evidence/session_<market-date>.md`.
+- [ ] **Re-run the verification the next day.** Evaluation horizons that were `PENDING` at
+      the close resolve overnight, so the outcome table gets more complete. Re-running is
+      safe and never touches the half written before the open.
 
 ## Reading a failure
 
@@ -120,16 +152,20 @@ terminal by hand before concluding anything about the engine.
 
 ## Recording the result
 
-Paste the comparison's full output into `docs/PHASES.md` under **Phase 2 real-session
-evidence**, with:
-
-- the market date, symbol and timeframe;
-- the terminal build and broker server;
-- the commit the observer ran at (`git rev-parse HEAD`);
-- the exit code.
+`scripts/session_run.py` and `scripts/session_verify.py` write it: one generated,
+committed file at `docs/evidence/session_{market_date}.md`, carrying the market date,
+symbol and timeframe, the terminal build and broker server, the collection prefix, the
+commit **and whether the tree was dirty**, the preflight table, the comparison's full
+output and the day's outcomes.
 
 The commit matters most. A comparison is evidence about one build, and without the hash it
-is an anecdote about an unknown one.
+is an anecdote about an unknown one — which is why the tool records it rather than asking
+for it, and why it records a dirty tree as loudly as it records the hash. A session run
+from uncommitted changes is evidence about code that exists nowhere else.
+
+Nothing in that file is written by hand. A hand-edited evidence file is indistinguishable
+from a measured one, which devalues every other file beside it. `docs/evidence/README.md`
+says the same thing where someone browsing the directory will see it.
 
 ## What this still does not prove
 

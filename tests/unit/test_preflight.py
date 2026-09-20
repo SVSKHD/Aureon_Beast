@@ -20,12 +20,11 @@ import pytest
 from aureon.config.config import AureonConfig
 from aureon.data.historical_provider import DEFAULT_SYMBOL_INFO
 from aureon.models.settings import ExecutionSettings
+from aureon.services.checks import CheckReport, Status
 from aureon.services.preflight import (
     MARKET_IDLE_SECONDS,
     PREFLIGHT_SERVICE,
     Preflight,
-    PreflightReport,
-    Status,
 )
 from aureon.storage import paths
 from tests.conftest import InMemoryFirestore
@@ -491,4 +490,4 @@ def test_the_rendered_table_carries_every_check_and_its_remedy(tmp_path) -> None
 
 
 def test_an_empty_report_renders_without_raising() -> None:
-    assert "READY" in PreflightReport().summary()
+    assert "READY" in CheckReport().summary()
