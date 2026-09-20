@@ -114,6 +114,8 @@ class FakeLiveProvider(BaseMarketDataProvider):
         # Start before the first candle, so nothing is visible until time advances.
         self._clock = self._all[0].open_time.utc if self._all else datetime.now().astimezone()
         self.calls = 0
+        #: Quote reads, so a test can see that the observer did NOT read one (9C).
+        self.quote_calls = 0
         self.fail_next = 0
 
     # ── Clock control ─────────────────────────────────────────────────────────
@@ -153,10 +155,15 @@ class FakeLiveProvider(BaseMarketDataProvider):
     def get_quote(self, symbol: str) -> QuoteSnapshot:
         """This symbol's own last price, at this symbol's own tick.
 
+        Counted in ``quote_calls`` (9C): "the observer did NOT read a quote for a symbol
+        nobody has an alert on" is otherwise an invisible property, and a test that cannot
+        see it would pass whatever the code did.
+
         A quote built from another symbol's candles is the same class of error as a
         candle served under the wrong symbol, and harder to notice: the number looks
         like a price.
         """
+        self.quote_calls += 1
         mine = [c for c in self._all if c.symbol == symbol] or self._all
         visible = [c for c in mine if c.close_time <= self._clock]
         price = visible[-1].close if visible else mine[0].open

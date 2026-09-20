@@ -323,3 +323,214 @@ def test_remind_list_and_cancel_are_the_users_own(
         is PriceAlertStatus.CANCELLED
     )
     assert "Cancelled" in embed_text(owner.embeds[0])
+
+
+# ── The observer answers alerts from the quotes it reads ──────────────────────
+
+#: A level the fixture's first candles are below and its later ones are above, so a replay
+#: crosses it exactly once. Derived from the candles rather than written down, in the test.
+
+
+@pytest.fixture
+def observer_factory(tmp_path, firestore_client, candles):
+    """A real Observer over the fixture week, wired to the emulator (9C)."""
+    from aureon.config import AureonConfig
+    from aureon.outbox.local_outbox import LocalOutbox
+    from aureon.outbox.outbox_worker import OutboxWorker
+    from aureon.services.observer_state import ObserverState
+    from aureon.storage.detection_repository import DetectionRepository
+    from main_observer import Observer
+    from tests.conftest import FakeLiveProvider, cross_agent
+
+    def build(*, suffix: str = "a"):
+        config = AureonConfig.from_env(
+            env={
+                "AUREON_ACCOUNT_SCOPE": "primary",
+                "AUREON_MARKET_TZ": "Europe/Athens",
+                "AUREON_SYMBOLS": SYMBOL,
+                "AUREON_TIMEFRAMES": "M5",
+                # Shared across restarts on purpose: the cursor and the queue survive, as
+                # they do in production.
+                "AUREON_OUTBOX_PATH": str(tmp_path / "outbox.db"),
+                "AUREON_OBSERVER_STATE_PATH": str(tmp_path / "observer_state.json"),
+            }
+        )
+        outbox = LocalOutbox(config.outbox_path)
+        observer = Observer(
+            config,
+            FakeLiveProvider(candles),
+            outbox=outbox,
+            worker=OutboxWorker(outbox, DetectionRepository(firestore_client).upsert_payload),
+            state=ObserverState(config.observer_state_path),
+            agents=[cross_agent()],
+            alert_repository=PriceAlertRepository(firestore_client),
+        )
+        return observer, outbox
+
+    return build
+
+
+def test_a_level_crossed_by_the_observers_quote_fires_once(
+    observer_factory, alerts: PriceAlertRepository, candles
+) -> None:
+    """9C's done-when: a fake quote crosses the level and one reminder is owed.
+
+    The level is taken from the fixture itself -- above the price at the cut, below a later
+    one -- so the crossing is a fact about the data rather than a number somebody chose.
+    """
+    observer, outbox = observer_factory()
+    provider = observer.provider
+
+    cut = 200
+    provider.set_clock(candles[cut].close_time)
+    start_price = provider.get_quote(SYMBOL).ask
+    later = max(c.close for c in candles[cut : cut + 300])
+    level = round((start_price + later) / 2, 2)
+    assert start_price < level < later, "the fixture does not cross this level"
+
+    stored = alerts.arm(
+        PriceAlert(
+            alert_id=new_alert_id(),
+            symbol=SYMBOL,
+            level=level,
+            side="above",
+            requested_by=USER,
+        )
+    )
+
+    # Advance candle by candle, exactly as the live loop does.
+    for candle in candles[cut : cut + 300]:
+        provider.advance_to_close_of(candle)
+        observer.market_engine.poll_once()
+        if alerts.get(stored.alert_id).status is PriceAlertStatus.FIRED:
+            break
+
+    fired = alerts.get(stored.alert_id)
+    assert fired.status is PriceAlertStatus.FIRED
+    assert fired.fired_price >= level
+    assert fired.fired_at is not None
+    # The snapshot the phase asks for, frozen by the process that has the indicators.
+    assert fired.fired_snapshot["bid"] is not None
+    assert "ema_relation" in fired.fired_snapshot
+    assert "volatility" in fired.fired_snapshot
+    outbox.close()
+
+
+def test_it_fires_once_across_an_observer_restart(
+    observer_factory, alerts: PriceAlertRepository, candles
+) -> None:
+    """The phase's own test. The claim is transactional, so a restart cannot re-answer it.
+
+    Kept honest by checking the snapshot too: a second firing would overwrite it with a
+    later market, which is the damage the test is really about.
+    """
+    first, outbox_a = observer_factory()
+    provider = first.provider
+    cut = 200
+    provider.set_clock(candles[cut].close_time)
+    level = round(provider.get_quote(SYMBOL).ask + 0.5, 2)
+
+    stored = alerts.arm(
+        PriceAlert(
+            alert_id=new_alert_id(),
+            symbol=SYMBOL,
+            level=level,
+            side="above",
+            requested_by=USER,
+        )
+    )
+
+    for candle in candles[cut : cut + 200]:
+        provider.advance_to_close_of(candle)
+        first.market_engine.poll_once()
+        if alerts.get(stored.alert_id).status is PriceAlertStatus.FIRED:
+            break
+    fired_once = alerts.get(stored.alert_id)
+    assert fired_once.status is PriceAlertStatus.FIRED
+    outbox_a.close()
+
+    # A new process over the same state, replaying the same quotes.
+    second, outbox_b = observer_factory(suffix="b")
+    second.provider.set_clock(provider.now_utc())
+    for candle in candles[cut + 200 : cut + 260]:
+        second.provider.advance_to_close_of(candle)
+        second.market_engine.poll_once()
+
+    final = alerts.get(stored.alert_id)
+    assert final.fired_at == fired_once.fired_at
+    assert final.fired_price == fired_once.fired_price
+    assert final.fired_snapshot == fired_once.fired_snapshot
+    outbox_b.close()
+
+
+def test_an_expired_alert_is_never_answered_by_a_later_quote(
+    observer_factory, alerts: PriceAlertRepository, candles
+) -> None:
+    """Expiry runs on candle close, and an expired alert is terminal (9C)."""
+    observer, outbox = observer_factory()
+    provider = observer.provider
+    cut = 200
+    provider.set_clock(candles[cut].close_time)
+    level = round(provider.get_quote(SYMBOL).ask + 0.5, 2)
+
+    stored = alerts.arm(
+        PriceAlert(
+            alert_id=new_alert_id(),
+            symbol=SYMBOL,
+            level=level,
+            side="above",
+            requested_by=USER,
+            # Already past its window when the observer next closes a candle.
+            expires_at=utc_now() - timedelta(minutes=1),
+        )
+    )
+
+    provider.advance_to_close_of(candles[cut + 1])
+    observer.market_engine.poll_once()
+    assert alerts.get(stored.alert_id).status is PriceAlertStatus.EXPIRED
+
+    for candle in candles[cut + 2 : cut + 120]:
+        provider.advance_to_close_of(candle)
+        observer.market_engine.poll_once()
+
+    final = alerts.get(stored.alert_id)
+    assert final.status is PriceAlertStatus.EXPIRED
+    assert final.fired_at is None
+    assert final.fired_snapshot == {}
+    outbox.close()
+
+
+def test_a_symbol_with_no_armed_alert_costs_no_extra_quote_read(
+    observer_factory, alerts: PriceAlertRepository, candles
+) -> None:
+    """The check is cheap in the common case, and the test can SEE that.
+
+    The provider counts quote reads, because "we did not do the expensive thing" is
+    otherwise invisible and a test that cannot see it passes whatever the code does. This
+    observer has no state repository, so the only reason to read a quote at all is an armed
+    alert: none means **zero** reads, and one means one.
+    """
+    observer, outbox = observer_factory()
+    provider = observer.provider
+    provider.set_clock(candles[200].close_time)
+
+    provider.quote_calls = 0
+    provider.advance_to_close_of(candles[201])
+    observer.market_engine.poll_once()
+    without_alerts = provider.quote_calls
+    assert without_alerts == 0, "no armed alert, so no quote was read for one"
+
+    alerts.arm(
+        PriceAlert(
+            alert_id=new_alert_id(),
+            symbol=SYMBOL,
+            level=99_999.0,  # never reached, so nothing fires and only the read is counted
+            side="above",
+            requested_by=USER,
+        )
+    )
+    provider.quote_calls = 0
+    provider.advance_to_close_of(candles[202])
+    observer.market_engine.poll_once()
+    assert provider.quote_calls == without_alerts + 1
+    outbox.close()

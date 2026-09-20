@@ -55,6 +55,7 @@ from aureon.models.market import Candle
 from aureon.models.system import SymbolState, SystemState
 from aureon.outbox.local_outbox import LocalOutbox
 from aureon.outbox.outbox_worker import OutboxWorker
+from aureon.services.alert_watcher import AlertWatcher, build_snapshot
 from aureon.services.heartbeat_service import HeartbeatService
 from aureon.services.market_snapshot import MarketSnapshot
 from aureon.services.market_state_service import MarketStateService
@@ -93,6 +94,7 @@ class Observer:
         heartbeat: HeartbeatService | None = None,
         candle_archive: LiveCandleArchive | None = None,
         agents: list[BaseAgent] | dict[str, list[BaseAgent]] | None = None,
+        alert_repository: object | None = None,
     ) -> None:
         self.config = config
         self.provider = provider
@@ -111,6 +113,12 @@ class Observer:
         # conversion to points needs that symbol's tick (decision 141).
         self.outcome_trackers: dict[str, OutcomeTracker] = dict(outcome_trackers or {})
         self.heartbeat = heartbeat
+        # 9C: the observer answers price alerts because it is the process with quotes --
+        # Discord may not call the broker, and a second MT5 connection polling levels
+        # would double the terminal's load for no new information.
+        self.alerts = (
+            AlertWatcher(alert_repository) if alert_repository is not None else None
+        )
 
         # One engine, one roster and one LevelTracker per symbol. See SymbolEngines for
         # why a single shared engine cannot do this: it would keep the right history and
@@ -130,6 +138,7 @@ class Observer:
             timeframes=config.timeframes,
             on_detections=self._on_detections,
             on_candle_close=self._on_candle_close,
+            on_poll=self._check_alerts,
         )
         self._last_candles: dict[tuple[str, Timeframe], Candle] = {}
         # One snapshot per symbol/timeframe, fed by every detection and candle so
@@ -261,7 +270,59 @@ class Observer:
         # Saved per candle, not per poll: a crash between two candles must not
         # re-process the earlier one.
         self.state.set_and_save(candle.symbol, candle.timeframe, candle.open_time.utc)
+        if self.alerts is not None:
+            # On the candle clock, so expiry runs on the same clock as everything else the
+            # observer records and needs no second scheduler (9C).
+            self.alerts.expire()
         self._write_system_state(force=True)
+
+    def _check_alerts(self) -> None:
+        """Answer every armed alert the current quotes have crossed (9C).
+
+        On the poll clock rather than the candle clock: "the first quote across the level"
+        is what a human asked about, and answering on candle close would tell them five
+        minutes later about a move that may already have reversed.
+
+        The snapshot is built here because this is the process that has the indicators --
+        the same fields ``/status`` renders, so a reminder and the panel cannot describe one
+        moment differently. Discord posts from the frozen copy (9C).
+        """
+        if self.alerts is None:
+            return
+        timeframe = self.config.timeframes[0]
+        for symbol in self.config.symbols:
+            armed = self.alerts.alerts.armed(symbol=symbol)
+            if not armed:
+                # The common case, and the cheap one: no quote is read for a symbol nobody
+                # is watching a level on.
+                continue
+            quote = self._latest_quote(symbol)
+            if quote is None:
+                continue
+            fired = self.alerts.check(
+                symbol,
+                quote,
+                snapshot=build_snapshot(
+                    quote=quote,
+                    state_fields=self._snapshot(symbol, timeframe).as_state(),
+                    **self._context_for_snapshot(symbol, timeframe),
+                ),
+            )
+            for alert in fired:
+                log.info(
+                    "alert %s answered at %s (level %s)",
+                    alert.alert_id,
+                    alert.price,
+                    alert.level,
+                )
+
+    def _context_for_snapshot(self, symbol: str, timeframe: Timeframe) -> dict[str, object]:
+        """9B's profile summaries and volatility, for a fired alert's snapshot."""
+        context = self._market_context(symbol, timeframe)
+        return {
+            "profiles": context.get("volume_profile") or None,
+            "volatility": context.get("volatility"),
+        }
 
     def _latest_quote(self, symbol: str):
         """The provider's current quote, or None if it cannot be read.
@@ -656,6 +717,7 @@ def default_agents(
 def build_observer(config: AureonConfig) -> Observer:
     """Assemble a live observer from configuration."""
     from aureon.data.mt5_provider import MT5DataProvider
+    from aureon.storage.alert_repository import PriceAlertRepository
     from aureon.storage.detection_repository import DetectionRepository
     from aureon.storage.evaluation_repository import EvaluationRepository
     from aureon.storage.firebase_service import get_client
@@ -710,6 +772,9 @@ def build_observer(config: AureonConfig) -> Observer:
         },
         candle_archive=LiveCandleArchive(),
         heartbeat=HeartbeatService(heartbeat_repo, paths.SERVICE_OBSERVER),
+        # 9C: the observer answers the price alerts Discord armed, from the quotes it is
+        # already reading.
+        alert_repository=PriceAlertRepository(client),
     )
 
 
