@@ -90,7 +90,7 @@ def main(
         return report.exit_code
 
     root = args.evidence_dir or evidence_root
-    path = evidence_path(args.market_date, root=root)
+    path = evidence_path(args.market_date, symbol, root=root)
     closing = render_closing(report, verifier.blocks, verified_at=now())
     if path.exists():
         path.write_text(

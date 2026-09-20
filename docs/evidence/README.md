@@ -1,6 +1,8 @@
 # Session evidence
 
-One file per session: `session_{market_date}.md`, on the **broker** date.
+One file per session **per symbol**: `session_{market_date}_{symbol}.md`, on the **broker**
+date. Every check inside is about one instrument — its detections, its archive, its
+live-vs-replay comparison, its outcome rule — so two symbols are two records (9A).
 
 Every file here is **generated** by two tools and committed:
 

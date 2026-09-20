@@ -189,6 +189,27 @@ CATALOGUE: tuple[PhaseEvidence, ...] = (
     ),
     PhaseEvidence("8", None, ()),
     PhaseEvidence(
+        "9A",
+        None,
+        (
+            Artefact(
+                label="XAGUSD baseline",
+                path="docs/PHASE2_BASELINE.md",
+                must_contain="## Detection outcomes — `XAG_OUTCOME_V1`",
+                produced_by="python scripts/gen_baseline.py",
+            ),
+            Artefact(
+                label="verified XAGUSD session",
+                path="evidence/session_*_XAGUSD.md",
+                must_contain="SESSION VERIFIED",
+                produced_by=(
+                    "scripts/session_run.py --symbol XAGUSD, then "
+                    "scripts/session_verify.py --symbol XAGUSD"
+                ),
+            ),
+        ),
+    ),
+    PhaseEvidence(
         "—",
         "Corrections slice",
         (

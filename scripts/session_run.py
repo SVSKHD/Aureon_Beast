@@ -148,7 +148,7 @@ def main(
     elif args.dry_run:
         note = "**Dry run:** the observer was not started."
 
-    path = evidence_path(market_date, root=root)
+    path = evidence_path(market_date, symbol, root=root)
     SessionDocument(meta=meta, blocks=blocks, note=note).write(path)
     print(f"\nwrote {path}")
 

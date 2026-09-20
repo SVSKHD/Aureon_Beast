@@ -265,3 +265,88 @@ def test_a_second_rule_gets_its_own_document(result) -> None:
     repository.upsert(evaluation)
     repository.upsert(evaluation.model_copy(update={"rule_id": "OTHER_RULE_V1"}))
     assert len(store.docs) == 2
+
+
+# ── 9A: evaluation over either symbol, each under its own rule ────────────────
+
+SYMBOL_CASES = [
+    ("XAUUSD", "XAU_OUTCOME_V2", 0.01),
+    ("XAGUSD", "XAG_OUTCOME_V1", 0.001),
+]
+
+
+def backfill_for(symbol: str, rule_id: str, point: float, candles: list[Candle]):
+    from aureon.config import AureonConfig
+    from aureon.evaluation.rules import get_rule
+    from main_observer import default_agents
+
+    config = AureonConfig(
+        symbols=("XAUUSD", "XAGUSD"),
+        evaluation_rules={"XAUUSD": "XAU_OUTCOME_V2", "XAGUSD": "XAG_OUTCOME_V1"},
+    )
+    return run_backfill(
+        candles,
+        default_agents(config, symbol=symbol),
+        get_rule(rule_id),
+        account_scope=ACCOUNT_SCOPE,
+        market_tz=MARKET_TZ,
+        point=point,
+    )
+
+
+@pytest.mark.parametrize(("symbol", "rule_id", "point"), SYMBOL_CASES)
+def test_each_symbol_is_evaluated_under_its_own_rule(
+    request: pytest.FixtureRequest, symbol: str, rule_id: str, point: float
+) -> None:
+    """9A. The evaluator is dimensional, and the rule id is the record of which ruler.
+
+    Not a formality: a price threshold is divided by the symbol's tick at evaluation time
+    (decision 138), so the same $-distance is a different number of points on each
+    instrument, and the stored ``rule_id`` is what a later reader uses to know which
+    thresholds produced the counts.
+    """
+    candles = request.getfixturevalue(
+        "candles" if symbol == "XAUUSD" else "silver_candles"
+    )[:900]
+    result = backfill_for(symbol, rule_id, point, candles)
+
+    assert result.detections, f"{symbol} produced no detections"
+    assert result.evaluations, f"{symbol} produced no evaluations"
+    assert {e.rule_id for e in result.evaluations} == {rule_id}
+    assert {d.symbol for d in result.detections} == {symbol}
+    # Every directional detection is evaluated; context-only ones have no favourable side.
+    directional = [d for d in result.detections if d.direction is not None]
+    assert len(result.evaluations) == len(directional)
+
+
+@pytest.mark.parametrize(("symbol", "rule_id", "point"), SYMBOL_CASES)
+def test_each_symbols_first_threshold_is_reachable(
+    request: pytest.FixtureRequest, symbol: str, rule_id: str, point: float
+) -> None:
+    """A rule whose smallest threshold nothing ever reaches is measuring the wrong scale.
+
+    Asserted as "some COMPLETE horizon reached rung 1" rather than as a rate: the point is
+    that the ladder is dimensionally sane on this instrument, which is exactly what a
+    shared rule across two symbols would break (decision 141). The BASELINE document carries
+    the rates, including silver's top rungs that nothing reaches.
+    """
+    from aureon.evaluation.rules import get_rule
+    from aureon.models.enums import HorizonStatus as Status
+    from aureon.models.evaluation import threshold_key
+
+    candles = request.getfixturevalue(
+        "candles" if symbol == "XAUUSD" else "silver_candles"
+    )[:900]
+    result = backfill_for(symbol, rule_id, point, candles)
+    rung_one = threshold_key(get_rule(rule_id).thresholds[0])
+
+    reached = sum(
+        1
+        for evaluation in result.evaluations
+        for horizon in evaluation.horizons
+        if horizon.status is Status.COMPLETE and horizon.reached.get(rung_one)
+    )
+    assert reached > 0, (
+        f"nothing reached {rung_one} under {rule_id} on {symbol}: the thresholds are "
+        "the wrong scale for this instrument"
+    )

@@ -23,6 +23,9 @@ from scripts import session_run, session_verify
 
 NOW = datetime(2026, 9, 16, 23, 30, tzinfo=UTC)
 MARKET_DATE = "2026-09-17"  # NOW is already the 17th in Athens
+#: The scripts default to the first configured symbol, and the evidence file is named
+#: after it (9A): two symbols verified on one date are two records, not one overwritten.
+SYMBOL = "XAUUSD"
 
 
 class FakePreflight:
@@ -72,7 +75,7 @@ def run_session(tmp_path: Path, *argv: str, report=None, observer=None):
         evidence_root=tmp_path,
         now=lambda: NOW,
     )
-    return code, calls, evidence_path(MARKET_DATE, root=tmp_path)
+    return code, calls, evidence_path(MARKET_DATE, SYMBOL, root=tmp_path)
 
 
 # ── The gate ─────────────────────────────────────────────────────────────────
@@ -109,7 +112,7 @@ def test_a_dry_run_writes_the_record_without_starting_anything(tmp_path, capsys)
 
 def test_the_record_is_written_before_the_observer_and_stamped_after(tmp_path) -> None:
     seen: dict[str, str] = {}
-    path = evidence_path(MARKET_DATE, root=tmp_path)
+    path = evidence_path(MARKET_DATE, SYMBOL, root=tmp_path)
 
     def observer() -> int:
         # The document must already exist by the time the observer is running: a session
@@ -134,7 +137,7 @@ def test_a_crashing_observer_still_leaves_a_stopped_stamp(tmp_path) -> None:
     with pytest.raises(RuntimeError, match="terminal went away"):
         run_session(tmp_path, observer=observer)
 
-    text = evidence_path(MARKET_DATE, root=tmp_path).read_text(encoding="utf-8")
+    text = evidence_path(MARKET_DATE, SYMBOL, root=tmp_path).read_text(encoding="utf-8")
     assert "| observer stopped | 2026-09-16T23:30:00+00:00 |" in text
 
 
@@ -156,8 +159,8 @@ def test_the_market_date_defaults_to_the_broker_clock(tmp_path) -> None:
         now=lambda: NOW,
     )
     assert code == 0
-    assert evidence_path("2026-09-17", root=tmp_path).exists()
-    assert not evidence_path("2026-09-16", root=tmp_path).exists()
+    assert evidence_path("2026-09-17", SYMBOL, root=tmp_path).exists()
+    assert not evidence_path("2026-09-16", SYMBOL, root=tmp_path).exists()
 
 
 # ── Verification ─────────────────────────────────────────────────────────────
@@ -186,7 +189,7 @@ def verified(tmp_path, *argv: str, report: CheckReport):
 
 def test_verification_fills_the_second_half_and_keeps_the_first(tmp_path) -> None:
     run_session(tmp_path, "--dry-run")
-    before = evidence_path(MARKET_DATE, root=tmp_path).read_text(encoding="utf-8")
+    before = evidence_path(MARKET_DATE, SYMBOL, root=tmp_path).read_text(encoding="utf-8")
     head, _tail = split_at_marker(before)
 
     code = verified(
@@ -194,7 +197,7 @@ def test_verification_fills_the_second_half_and_keeps_the_first(tmp_path) -> Non
         report=CheckReport(results=[CheckResult("archive", Status.PASS, "288 candles")]),
     )
     assert code == 0
-    after = evidence_path(MARKET_DATE, root=tmp_path).read_text(encoding="utf-8")
+    after = evidence_path(MARKET_DATE, SYMBOL, root=tmp_path).read_text(encoding="utf-8")
     assert after.startswith(head)
     assert "SESSION VERIFIED" in after
     assert "### Live vs replay" in after
@@ -209,7 +212,7 @@ def test_a_failed_check_exits_non_zero(tmp_path) -> None:
         ),
     )
     assert code == 1
-    text = evidence_path(MARKET_DATE, root=tmp_path).read_text(encoding="utf-8")
+    text = evidence_path(MARKET_DATE, SYMBOL, root=tmp_path).read_text(encoding="utf-8")
     assert "SESSION NOT VERIFIED" in text
 
 
@@ -218,9 +221,9 @@ def test_verifying_twice_is_safe(tmp_path) -> None:
     run_session(tmp_path, "--dry-run")
     report = CheckReport(results=[CheckResult("archive", Status.PASS, "288 candles")])
     verified(tmp_path, report=report)
-    first = evidence_path(MARKET_DATE, root=tmp_path).read_text(encoding="utf-8")
+    first = evidence_path(MARKET_DATE, SYMBOL, root=tmp_path).read_text(encoding="utf-8")
     verified(tmp_path, report=report)
-    second = evidence_path(MARKET_DATE, root=tmp_path).read_text(encoding="utf-8")
+    second = evidence_path(MARKET_DATE, SYMBOL, root=tmp_path).read_text(encoding="utf-8")
     assert first == second, "a second verification of the same facts must be idempotent"
 
 
@@ -230,7 +233,7 @@ def test_an_unbracketed_session_gets_a_document_that_admits_it(tmp_path, capsys)
         report=CheckReport(results=[CheckResult("archive", Status.PASS, "288 candles")]),
     )
     assert code == 0
-    text = evidence_path(MARKET_DATE, root=tmp_path).read_text(encoding="utf-8")
+    text = evidence_path(MARKET_DATE, SYMBOL, root=tmp_path).read_text(encoding="utf-8")
     assert "No pre-session record" in text
     assert "SESSION VERIFIED" in text
     assert "had no pre-session record" in capsys.readouterr().err
@@ -238,7 +241,7 @@ def test_an_unbracketed_session_gets_a_document_that_admits_it(tmp_path, capsys)
 
 def test_no_write_leaves_the_file_alone(tmp_path) -> None:
     run_session(tmp_path, "--dry-run")
-    path = evidence_path(MARKET_DATE, root=tmp_path)
+    path = evidence_path(MARKET_DATE, SYMBOL, root=tmp_path)
     before = path.read_text(encoding="utf-8")
     code = verified(
         tmp_path,
@@ -249,3 +252,30 @@ def test_no_write_leaves_the_file_alone(tmp_path) -> None:
     )
     assert code == 1
     assert path.read_text(encoding="utf-8") == before
+
+
+# ── 9A: one record per symbol ─────────────────────────────────────────────────
+
+
+def test_each_symbol_gets_its_own_evidence_file(tmp_path) -> None:
+    """9A. Two symbols verified on one date are two records.
+
+    Every check inside is about one symbol -- its detections, its archive, its
+    live-vs-replay comparison, its rule -- so a shared file would mean the second
+    verification silently replacing the first's verdict, under a header naming one of them.
+    """
+    gold = evidence_path(MARKET_DATE, "XAUUSD", root=tmp_path)
+    silver = evidence_path(MARKET_DATE, "XAGUSD", root=tmp_path)
+    assert gold != silver
+    assert gold.name == f"session_{MARKET_DATE}_XAUUSD.md"
+    # Lower case in, upper case out: the file name matches the symbol as Aureon stores it.
+    assert evidence_path(MARKET_DATE, "xagusd", root=tmp_path) == silver
+    # And the pre-9A name is still addressable, for a file written before the split.
+    assert evidence_path(MARKET_DATE, root=tmp_path).name == f"session_{MARKET_DATE}.md"
+
+
+def test_a_session_run_writes_the_file_named_after_its_symbol(tmp_path) -> None:
+    code, _calls, path = run_session(tmp_path, "--dry-run")
+    assert code == 0
+    assert path.exists()
+    assert path.name.endswith("_XAUUSD.md")

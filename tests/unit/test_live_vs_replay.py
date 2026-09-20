@@ -307,3 +307,70 @@ def test_replaying_the_archive_reproduces_the_live_detections(tmp_path: Path, ca
         timeframe="M5", candles=len(subset),
     )
     assert result.identical, result.render()
+
+
+# ── 9A: the same parity claim, on either symbol ───────────────────────────────
+
+
+@pytest.mark.parametrize("symbol", ["XAUUSD", "XAGUSD"])
+def test_archive_replay_parity_holds_for_either_symbol(
+    tmp_path: Path, request: pytest.FixtureRequest, symbol: str
+) -> None:
+    """§82 on both instruments (9A).
+
+    The archive is keyed by symbol and broker date, and the detection id is salted with the
+    symbol, so this is also what proves one symbol's archive cannot be replayed into the
+    other's comparison and report itself identical.
+    """
+    candles = request.getfixturevalue(
+        "candles" if symbol == "XAUUSD" else "silver_candles"
+    )[:900]
+    assert {c.symbol for c in candles} == {symbol}
+
+    archive = LiveCandleArchive(root=tmp_path)
+    for candle in candles:
+        archive.add(candle)
+    archive.flush_all()
+
+    live = detections_from(candles)
+    assert live, f"{symbol} produced no detections, so parity would be vacuous"
+
+    replayed = []
+    for day in sorted({c.open_time.market_date for c in candles}):
+        try:
+            replayed.extend(
+                read_archive(symbol, Timeframe.M5, day, market_tz=MARKET_TZ, root=tmp_path)
+            )
+        except FileNotFoundError:
+            continue
+
+    result = compare_module.compare(
+        live,
+        detections_from(replayed),
+        market_date="2026-09-16",
+        symbol=symbol,
+        timeframe="M5",
+        candles=len(candles),
+    )
+    assert result.identical, result.render()
+    assert result.matched == len(live)
+
+
+def test_one_symbols_archive_is_not_the_others(
+    tmp_path: Path, candles: list[Candle], silver_candles: list[Candle]
+) -> None:
+    """Both archived side by side, and each reads back only its own (9A)."""
+    archive = LiveCandleArchive(root=tmp_path)
+    for candle in [*candles[:300], *silver_candles[:300]]:
+        archive.add(candle)
+    archive.flush_all()
+
+    day = candles[0].open_time.market_date
+    gold = read_archive("XAUUSD", Timeframe.M5, day, market_tz=MARKET_TZ, root=tmp_path)
+    silver = read_archive("XAGUSD", Timeframe.M5, day, market_tz=MARKET_TZ, root=tmp_path)
+    assert gold and silver
+    assert {c.symbol for c in gold} == {"XAUUSD"}
+    assert {c.symbol for c in silver} == {"XAGUSD"}
+    # Different instruments, so different prices: an archive serving one file for both
+    # would make these equal.
+    assert gold[0].close != silver[0].close

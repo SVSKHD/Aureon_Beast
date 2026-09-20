@@ -66,7 +66,7 @@ defaults to false, and a fresh deploy therefore cannot trade until a human turns
     python scripts/session_run.py        # preflight again, then the observer
     # ... the session ...
     python scripts/session_verify.py 2026-09-16
-    git add docs/evidence/session_2026-09-16.md && git commit
+    git add docs/evidence/session_2026-09-16_XAUUSD.md && git commit
 
 `session_run.py` **refuses to start on a preflight FAIL**. `--force` overrides it and
 records in the evidence file that it did. Do not get into the habit.
@@ -246,7 +246,7 @@ Knowing this in advance is cheaper than fighting it at 02:00.
 |---|---|---|
 | `docs/CONTRACTS.md` | every stored model, generated from the code | `make contracts` |
 | `docs/PHASE2_BASELINE.md` | a replay of the committed **synthetic** fixture | `make baseline` |
-| `docs/evidence/session_*.md` | one real session, bracketed by two tools | `session_run.py` / `session_verify.py` |
+| `docs/evidence/session_*_{symbol}.md` | one real session of one symbol, bracketed by two tools | `session_run.py` / `session_verify.py` |
 | `docs/PHASES.md` Evidence column | derived from the files that exist | `make phases` |
 | `daily_reviews` / `weekly_reviews` | aggregation over stored detections and trades | `python main_review.py daily` / `weekly` |
 

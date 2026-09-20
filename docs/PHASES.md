@@ -17,6 +17,7 @@ passes.** Partial passes do not count.
 | 6 | Discord — human interface over a safe backend | FOK trade and stop order placed from Discord; `/trading disable` blocks with a clear FAILED embed; every action audited | 🟡 code + emulator suite green; **live-Discord leg outstanding** | ⬜ missing: live Discord session (`the Phase 6 leg of docs/DEMO_EXECUTION_CHECKLIST.md`) |
 | 7 | Reviews — machine observation vs human execution | `/status` on a CLOSED market renders the weekly review; baseline numbers reconcile | ✅ done | ✅ [review reconciliation](PHASE2_BASELINE.md) |
 | 8 | Aureon Vue — read-only dashboard | Dashboard matches `/status` at the same second; STALE banner on observer stop; non-allowlisted account sees nothing; rules tests pass | ⬜ not started | — |
+| 9A | Two symbols in one deployment — XAUUSD + XAGUSD observed, stored, measured and reported identically; `/execute` | Both symbols run in one observer; `/execute xagusd buy 0.1` shows one embed and executes only after CONFIRM; `/status symbol:XAGUSD` renders live and weekly modes | 🟡 code + emulator suite green; **real-session leg outstanding** | ✅ [XAGUSD baseline](PHASE2_BASELINE.md)<br>⬜ missing: verified XAGUSD session (`scripts/session_run.py --symbol XAGUSD, then scripts/session_verify.py --symbol XAGUSD`) |
 | — | **Corrections slice** (§12 identity, EMA 20/50, outcome V2, context tags, live snapshot, safety gaps, collection prefix, live-vs-replay tooling) | pytest green with and without the emulator; baseline carries a 20/50 section; `/status` shows the full snapshot; boundary tests cover identity components, bare collection literals and raw Firestore access | ✅ code done; **real-session leg outstanding** | ⬜ missing: verified real session (`scripts/session_run.py, then scripts/session_verify.py`) |
 | — | **Defect register D-1…D-15** | each item green | ✅ closed — D-1…D-3, D-5…D-14 landed in the corrections slice (PR #1); D-4 needed only its missing proof (the tracker already filtered on direction, not agent name); D-7 needed its last label (`last updated`); D-15 recorded as placeholders with a per-symbol hook | ✅ [decisions 118–120](PHASE1_DECISIONS.md) |
 
@@ -254,7 +255,7 @@ rather than by a paragraph asking for a paste:
     python scripts/session_run.py            # preflight, then the observer
     python scripts/session_verify.py <date>  # six checks, into the evidence file
 
-They write `docs/evidence/session_{market_date}.md`, carrying the market date, the terminal
+They write `docs/evidence/session_{market_date}_{symbol}.md`, carrying the market date, the terminal
 build, the broker server, the collection prefix, the commit **and whether the tree was
 dirty**, the comparison's full output and the day's outcomes. The commit hash matters most —
 a comparison is evidence about one build, and without it the output is an anecdote about an

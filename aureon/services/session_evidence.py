@@ -51,14 +51,26 @@ NOT_YET_VERIFIED = "_Not verified yet._"
 UNKNOWN = "—"
 
 
-def evidence_path(market_date: str, *, root: Path | None = None) -> Path:
-    """``docs/evidence/session_{market_date}.md``, on the BROKER date.
+def evidence_path(
+    market_date: str, symbol: str | None = None, *, root: Path | None = None
+) -> Path:
+    """``docs/evidence/session_{market_date}_{symbol}.md``, on the BROKER date.
 
     Broker date, not UTC: a New York session's last three hours are already the next day
     in Athens, so a UTC-named file would split one session across two and neither would
     be the session anybody ran.
+
+    Per symbol (9A), because one session of one deployment now produces one record **per
+    instrument**: the checks inside are per symbol (its detections, its archive, its
+    live-vs-replay comparison, its rule), so two symbols sharing a file would mean the second
+    verification silently replacing the first's verdict, under a header naming one of them.
+
+    ``symbol`` is optional only so the helper can still address a pre-9A file by name.
     """
-    return (root or DEFAULT_EVIDENCE_DIR) / f"session_{market_date}.md"
+    stem = f"session_{market_date}"
+    if symbol:
+        stem = f"{stem}_{symbol.upper()}"
+    return (root or DEFAULT_EVIDENCE_DIR) / f"{stem}.md"
 
 
 def git_commit(*, cwd: Path | None = None) -> str | None:

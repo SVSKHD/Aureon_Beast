@@ -300,7 +300,7 @@ class SessionVerifier:
                 if d.symbol == self.symbol and d.timeframe is self.timeframe
             ]
             self._evaluations = reader.evaluations_for(
-                self._detections, self.config.evaluation_rule_id
+                self._detections, self._rule_id()
             )
         except Exception as exc:
             self._client = None
@@ -314,7 +314,7 @@ class SessionVerifier:
         by_agent = Counter(d.agent_name for d in self._detections)
         detail = (
             f"{len(self._detections)} detections, {len(self._evaluations)} evaluated "
-            f"under {self.config.evaluation_rule_id} "
+            f"under {self._rule_id()} "
             f"({', '.join(f'{a}={n}' for a, n in sorted(by_agent.items())) or 'none'})"
         )
         if not self._detections:
@@ -438,7 +438,7 @@ class SessionVerifier:
         from aureon.evaluation.rules import get_rule
 
         try:
-            rule = get_rule(self.config.evaluation_rule_id)
+            rule = get_rule(self._rule_id())
         except KeyError:
             return []
         report = aggregate(
@@ -461,6 +461,15 @@ class SessionVerifier:
                 markdown=True,
             )
         ]
+
+    def _rule_id(self) -> str:
+        """THIS symbol's rule (9A).
+
+        Looking up gold's rule for a silver session would find no evaluations at all and
+        report "0 evaluated under XAU_OUTCOME_V2" -- a verdict about the wrong rule, which
+        reads as a broken evaluator rather than as a verifier asking the wrong question.
+        """
+        return self.config.rule_id_for(self.symbol)
 
     def _point(self) -> float:
         """The symbol's tick, from the tuning table rather than a hard-coded 0.01."""

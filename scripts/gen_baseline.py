@@ -8,6 +8,15 @@ change here means something changed in the agent, the indicators, or the fixture
 
 Deterministic, like ``gen_contracts.py``: no timestamp in the output, so a re-run
 produces no diff unless the detections actually changed.
+
+## Both symbols (9A)
+
+XAUUSD is the whole document above the XAGUSD section; XAGUSD gets its own section of the
+same shape, replayed from its own fixture with its own tuning entry and evaluated under its
+own frozen rule. The two are **not** comparable threshold for threshold -- `XAG_OUTCOME_V1`'s
+$0.10 is roughly the fraction of silver's price that $8 is of gold's (decision 142) -- so
+what a reader may compare is the shape: how many detections each roster selects, and how
+often each rule's own thresholds were reached.
 """
 
 from __future__ import annotations
@@ -38,10 +47,16 @@ from aureon.evaluation.backfill import (  # noqa: E402
     run_backfill,
 )
 from aureon.evaluation.outcome_report import aggregate, render_markdown  # noqa: E402
-from aureon.evaluation.rules import EMA_OUTCOME_V1, XAU_OUTCOME_V2  # noqa: E402
+from aureon.evaluation.rules import (  # noqa: E402
+    EMA_OUTCOME_V1,
+    XAG_OUTCOME_V1,
+    XAU_OUTCOME_V2,
+)
 from aureon.reviews.reconcile import reconcile  # noqa: E402
 
 FIXTURE = REPO_ROOT / "aureon" / "data" / "fixtures" / "XAUUSD_M5.csv"
+SILVER_FIXTURE = REPO_ROOT / "aureon" / "data" / "fixtures" / "XAGUSD_M5.csv"
+SILVER = "XAGUSD"
 OUTPUT = REPO_ROOT / "docs" / "PHASE2_BASELINE.md"
 _FAILURES: list[str] = []
 MARKET_TZ = "Europe/Athens"
@@ -363,6 +378,9 @@ def build() -> str:
         by_day,
     )
 
+    # ── XAGUSD: the same shape, its own numbers (9A) ─────────────────────────
+    lines += _silver_section(v2)
+
     lines += [
         "",
         "---",
@@ -379,6 +397,10 @@ def build() -> str:
         "  v1.0.0 placeholders researched on nothing (decision 120), so every `liquidity`,",
         "  `breakout`, `wick` and `session_trend` count here is a count of what those",
         "  arbitrary numbers happened to select.",
+        "* **Anything about silver specifically.** XAGUSD's tuning is gold's thresholds",
+        "  scaled by the ratio of prices and `XAG_OUTCOME_V1` is gold's distances scaled the",
+        "  same way (decisions 142, 143). Both are arithmetic, not research, and its fixture",
+        "  is a second random walk rather than a second market.",
     ]
     return "\n".join(lines).rstrip() + "\n"
 
@@ -578,6 +600,209 @@ def _reconciliation_section(backfill, reports, rule, by_day: Counter) -> list[st
         lines += ["**NOT RECONCILED:**", ""]
         lines += [f"- {m}" for m in result.mismatches]
         _FAILURES.extend(result.mismatches)
+    return lines
+
+
+def silver_roster() -> list:
+    """XAGUSD's roster, with XAGUSD's tuning (9A).
+
+    Built through the observer's own ``default_agents`` rather than assembled here, so the
+    baseline is a replay of what the running system would do. The thresholds are not
+    dimensionless: gold's roster on silver's candles would be measuring 5-point penetrations
+    of an instrument whose tick is a tenth of gold's (decision 143).
+    """
+    from aureon.config import AureonConfig
+    from main_observer import default_agents
+
+    config = AureonConfig(
+        symbols=("XAUUSD", SILVER),
+        evaluation_rules={"XAUUSD": "XAU_OUTCOME_V2", SILVER: "XAG_OUTCOME_V1"},
+        ema_fast=EMA_FAST,
+        ema_slow=EMA_SLOW,
+    )
+    return default_agents(config, symbol=SILVER)
+
+
+def _silver_section(gold: BackfillResult) -> list[str]:
+    """XAGUSD's counts and outcomes, of the same shape as gold's (9A).
+
+    Gold's replay is passed in rather than re-run: the diagnostics compare the two ladders,
+    and a comparison against numbers produced by a second replay could differ from the ones
+    the document printed above it.
+    """
+    from aureon.config.symbol_tuning import require_tuning
+
+    point = require_tuning(SILVER).point
+    provider = HistoricalDataProvider(SILVER_FIXTURE, market_tz=MARKET_TZ)
+    candles = provider.candles
+
+    result = run_backfill(
+        candles,
+        silver_roster(),
+        XAG_OUTCOME_V1,
+        account_scope=ACCOUNT_SCOPE,
+        market_tz=MARKET_TZ,
+        point=point,
+    )
+    by_agent = Counter(d.agent_name for d in result.detections)
+    by_session = Counter(d.session.session.value for d in result.detections)
+    by_day = Counter(d.detected_at.market_date for d in result.detections)
+    report = aggregate(result.detections, result.evaluations, XAG_OUTCOME_V1, point=point)
+    total = report.total()
+
+    lines = [
+        "",
+        "---",
+        "",
+        "# XAGUSD",
+        "",
+        "The same pipeline, the same week's trading hours, a different instrument. Read this",
+        "section **beside** gold's rather than against it: `XAG_OUTCOME_V1`'s thresholds are",
+        "gold's scaled by the ratio of prices, so $0.10 of silver is not $3 of gold in any",
+        "sense a study would recognise (decision 142). What is comparable is the shape --",
+        "how much each roster selects, and how often each rule's own thresholds were reached.",
+        "",
+        "## Input",
+        "",
+        "| property | value |",
+        "|---|---|",
+        f"| fixture | `{SILVER_FIXTURE.relative_to(REPO_ROOT)}` (synthetic, decision 148) |",
+        f"| candles | {len(candles)} |",
+        f"| symbol / timeframe | {SILVER} M5 |",
+        f"| tick (`point`) | {point} |",
+        f"| outcome rule | `{XAG_OUTCOME_V1.rule_id}` |",
+        "| thresholds | " + " / ".join(f"${t:g}" for t in XAG_OUTCOME_V1.thresholds)
+        + " in **price** |",
+        "",
+        "## Detections",
+        "",
+        f"{len(result.detections)} detections from the whole roster.",
+        "",
+        "| agent | detections |",
+        "|---|---|",
+    ]
+    lines += [f"| `{name}` | {count} |" for name, count in sorted(by_agent.items())]
+    lines += [
+        "",
+        "### By session",
+        "",
+        "| session | detections |",
+        "|---|---|",
+    ]
+    lines += [
+        f"| {name} | {by_session.get(name, 0)} |"
+        for name in ("asia", "london", "new_york", "off")
+    ]
+    lines += [
+        "",
+        "### By broker trading day",
+        "",
+        "| market date | detections |",
+        "|---|---|",
+    ]
+    lines += [f"| {day} | {count} |" for day, count in sorted(by_day.items())]
+    lines += [
+        "",
+        f"## Detection outcomes — `{XAG_OUTCOME_V1.rule_id}`",
+        "",
+        f"{total.detections} detections, {total.evaluated} evaluated, "
+        f"{total.with_complete} with at least",
+        f"one COMPLETE horizon. {total.context_only} carry `direction=None` and have no",
+        "favourable side to measure (§16, decision 48).",
+        "",
+        "Every column is read exactly as gold's is: horizon counts rather than detection",
+        "counts, reached figures from COMPLETE horizons only, and `invalid` dominated by the",
+        "fixture's weekend gap.",
+    ]
+    lines += render_markdown(report)
+    lines += _silver_diagnostics(report, candles, point, gold)
+    return lines
+
+
+def _reach_by_threshold(report, rule) -> tuple[int, dict[float, int]]:
+    """COMPLETE horizons, and how many reached each threshold, across the whole roster."""
+    from aureon.models.evaluation import threshold_key
+
+    total = report.total()
+    complete = sum(h.complete for h in total.horizons.values())
+    reached = {
+        t: sum(h.reached.get(threshold_key(t), 0) for h in total.horizons.values())
+        for t in rule.thresholds
+    }
+    return complete, reached
+
+
+def _silver_diagnostics(report, candles, point: float, gold: BackfillResult) -> list[str]:
+    """What the table above actually shows about `XAG_OUTCOME_V1` (9A).
+
+    Generated from the report rather than written down, so it cannot claim yesterday's
+    finding about today's numbers.
+    """
+    complete, reached = _reach_by_threshold(report, XAG_OUTCOME_V1)
+    gold_report = aggregate(gold.detections, gold.evaluations, XAU_OUTCOME_V2, point=POINT)
+    gold_complete, gold_reached = _reach_by_threshold(gold_report, XAU_OUTCOME_V2)
+
+    # Fraction of price, which is what makes the two rules' thresholds comparable at all.
+    # Taken from the fixture's first close rather than a written-down price.
+    silver_price = candles[0].close
+    gold_price = HistoricalDataProvider(FIXTURE, market_tz=MARKET_TZ).candles[0].close
+
+    def share(count: int, of: int) -> float | None:
+        return count / of if of else None
+
+    dead = [t for t in XAG_OUTCOME_V1.thresholds if complete and reached[t] / complete < 0.01]
+
+    lines = [
+        "",
+        "### Diagnostics — read before using these numbers",
+        "",
+        "Each threshold as a fraction of price, beside gold's, because that is the only",
+        "sense in which the two rules' distances can be compared:",
+        "",
+        "| rung | XAGUSD | % of price | reached | XAUUSD | % of price | reached |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for rung, (silver_t, gold_t) in enumerate(
+        zip(XAG_OUTCOME_V1.thresholds, XAU_OUTCOME_V2.thresholds, strict=False), start=1
+    ):
+        silver_share = share(reached[silver_t], complete)
+        gold_share = share(gold_reached[gold_t], gold_complete)
+        lines.append(
+            f"| {rung} "
+            f"| ${silver_t:g} | {silver_t / silver_price * 100:.2f}% "
+            f"| {reached[silver_t]}/{complete}"
+            + (f" ({silver_share * 100:.1f}%)" if silver_share is not None else "")
+            + f" | ${gold_t:g} | {gold_t / gold_price * 100:.2f}% "
+            f"| {gold_reached[gold_t]}/{gold_complete}"
+            + (f" ({gold_share * 100:.1f}%)" if gold_share is not None else "")
+            + " |"
+        )
+
+    lines += [
+        "",
+        "Both `reached` columns are COMPLETE horizons only, whole roster, whole fixture week.",
+        "",
+    ]
+
+    if dead:
+        lines += [
+            "**A finding, not a defect to patch.** "
+            + " and ".join(f"${t:g}" for t in dead)
+            + (" is" if len(dead) == 1 else " are")
+            + " reached in under 1% of COMPLETE horizons here, where",
+            "gold's fourth and fifth rungs still catch a few per cent. The reason is arithmetic:",
+            "`XAG_OUTCOME_V1`'s distances are gold's scaled by the ratio of prices and then",
+            "**rounded to numbers a silver trader would name** (decision 142),"
+            "and every rung ended up a larger fraction of price than gold's — the table above",
+            "gives the multiple, rung by rung, beside what each one actually caught.",
+            "",
+            "The rule is **frozen** (§21). It is not edited to fix this: a better ladder is a",
+            "new `rule_id` evaluated alongside, which is the same discipline that kept",
+            "`EMA_OUTCOME_V1`'s saturated columns in this document rather than quietly",
+            "rescaling them (decision 121). Until then, read silver's top thresholds as",
+            "\"not measured here\" rather than as \"silver does not move\" — and remember the",
+            "fixture is a random walk, so none of this is evidence about the metal.",
+        ]
     return lines
 
 
