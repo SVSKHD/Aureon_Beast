@@ -195,7 +195,8 @@ entry is a valid answer: it means the defaults were reviewed and kept.
 | command | what it does |
 |---|---|
 | `/status` | the live panels on an open market, the completed review on a closed one |
-| `/execute-trade` | opens the confirmation wizard. Nothing is sent until a human confirms, and only the requester may confirm |
+| `/execute symbol side lot [detection]` | the market-order shortcut. One embed, one CONFIRM. The lot is typed — there is no default — and the filling mode is named on the screen rather than left to the broker |
+| `/execute-trade` | opens the confirmation wizard (order type, stops, execution mode). Nothing is sent until a human confirms, and only the requester may confirm |
 | `/cancel-order` | cancels a resting pending order |
 | `/close-trade` | closes an open position |
 | `/trading status` | is trading enabled, and who last changed it |

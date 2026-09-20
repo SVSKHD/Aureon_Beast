@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -87,6 +88,8 @@ def validate_lot(
     raw: str | float,
     info: SymbolInfo | None,
     settings: ExecutionSettings,
+    *,
+    symbol: str | None = None,
 ) -> LotCheck:
     """Validate a lot before the confirmation screen is ever shown (§37).
 
@@ -105,9 +108,14 @@ def validate_lot(
 
     if volume <= 0:
         return LotCheck(False, "lot size must be greater than zero")
-    if volume > settings.max_lot:
+    # This SYMBOL's ceiling. One lot is 100 oz of gold and 5000 oz of silver, so a
+    # single global number is two different notionals (9A).
+    limits = settings.limits_for(symbol or (info.symbol if info else ""))
+    if volume > limits.max_lot:
         return LotCheck(
-            False, f"{volume} exceeds Aureon's maximum lot of {settings.max_lot}"
+            False,
+            f"{volume} exceeds Aureon's maximum lot of {limits.max_lot}"
+            + (f" for {limits.symbol}" if limits.overridden else ""),
         )
 
     if info is None:
@@ -132,6 +140,68 @@ def execution_modes(info: SymbolInfo | None) -> tuple[tuple[FillingMode, bool], 
     return tuple((mode, mode in supported) for mode in FillingMode)
 
 
+@dataclass
+class FillingChoice:
+    """Which market filling mode to send, and whether that needed saying out loud (9A).
+
+    FOK is preferred: it either fills the whole volume at the price or nothing happens,
+    which is the behaviour a human pressing CONFIRM on one lot is imagining. IOC can fill
+    part of it, which is a different trade from the one on the screen.
+
+    So a substitution is never silent. If FOK is unsupported and IOC is, the embed says
+    which mode will be used and what that changes; if the symbol reports neither, the
+    command refuses rather than falling back to "broker default" -- §39's whole point is
+    that the mode is shown, and an unnamed default is not shown.
+    """
+
+    mode: FillingMode | None
+    message: str | None = None
+    ok: bool = True
+
+
+#: The two sides ``/execute`` accepts, mapped to market order types. A shortcut that
+#: accepted "long"/"short"/"b"/"s" would be guessing at intent on the one command that
+#: moves money.
+MARKET_SIDES: dict[str, OrderType] = {
+    "buy": OrderType.MARKET_BUY,
+    "sell": OrderType.MARKET_SELL,
+}
+
+#: Market filling modes in preference order. RETURN is absent on purpose: it leaves an
+#: unfilled remainder resting as an order, which is not a market execution at all.
+MARKET_FILLING_PREFERENCE: tuple[FillingMode, ...] = (FillingMode.FOK, FillingMode.IOC)
+
+
+def market_filling_mode(info: SymbolInfo | None) -> FillingChoice:
+    """The mode a market ``/execute`` will send for this symbol."""
+    if info is None or not info.filling_modes:
+        # No published copy, or a broker that reports nothing. The execution guard
+        # re-reads the live symbol either way (§56), so this is advisory -- but it must
+        # not claim a mode it has no evidence for.
+        return FillingChoice(
+            None,
+            "No filling mode published for this symbol; the broker's default will be "
+            "used and the guard will refuse it if the broker disagrees.",
+        )
+    for mode in MARKET_FILLING_PREFERENCE:
+        if mode in info.filling_modes:
+            if mode is FillingMode.FOK:
+                return FillingChoice(mode)
+            return FillingChoice(
+                mode,
+                f"FOK is not supported for {info.symbol}; using {mode.value.upper()}, "
+                "which may fill only part of the volume.",
+            )
+    available = ", ".join(m.value.upper() for m in info.filling_modes)
+    return FillingChoice(
+        None,
+        f"{info.symbol} supports no market filling mode (reports: {available}), so a "
+        "market order cannot be built for it (§39). Use /execute-trade for a pending "
+        "order instead.",
+        ok=False,
+    )
+
+
 def unsupported_mode_notice(info: SymbolInfo | None, mode: FillingMode) -> str | None:
     """The §39 message, or ``None`` when the mode is fine."""
     if info is None or not info.filling_modes:
@@ -140,6 +210,123 @@ def unsupported_mode_notice(info: SymbolInfo | None, mode: FillingMode) -> str |
         return None
     available = ", ".join(m.value.upper() for m in info.filling_modes)
     return f"{mode.value.upper()} not supported for {info.symbol} — available: {available}"
+
+
+# ── Reading the observer's published state (§59, decision 80) ─────────────────
+
+
+def symbol_state_of(state: Any, symbol: str) -> Any:
+    """The ``SymbolState`` for one symbol, or ``None``.
+
+    Lives here rather than in each command module because Discord's only honest source
+    of a price is the observer's published state: it may not call the broker (CLAUDE.md),
+    so "no state for this symbol" and "a quote Aureon can vouch for" are the same
+    question asked twice, and two copies of the answer would eventually disagree.
+    """
+    if state is None:
+        return None
+    wanted = symbol.upper()
+    for entry in state.symbols:
+        if entry.symbol.upper() == wanted:
+            return entry
+    return None
+
+
+def quote_of(state: Any, symbol: str) -> QuoteSnapshot | None:
+    entry = symbol_state_of(state, symbol)
+    return entry.last_quote if entry is not None else None
+
+
+def market_state_of(state: Any, symbol: str) -> MarketState:
+    entry = symbol_state_of(state, symbol)
+    return entry.market_state if entry is not None else MarketState.UNKNOWN
+
+
+# ── /execute: the market-order shortcut (9A) ──────────────────────────────────
+
+
+@dataclass
+class MarketOrderPlan:
+    """Whether a ``/execute`` may proceed, and with what.
+
+    A plan rather than a sequence of early returns inside the command, so every rule that
+    can refuse a market order is testable without a Discord interaction -- which is how
+    the rest of this module is arranged and why those rules are pinned rather than
+    inspected.
+    """
+
+    ok: bool
+    message: str | None = None
+    draft: DraftRequest | None = None
+    #: Said on the confirmation screen when the filling mode is not FOK, or unknown.
+    filling_note: str | None = None
+
+
+def plan_market_order(
+    *,
+    symbol: str,
+    side: str,
+    lot: str | float,
+    requested_by: str,
+    settings: ExecutionSettings,
+    info: SymbolInfo | None,
+    observed_symbols: Sequence[str],
+    detection: Detection | None = None,
+) -> MarketOrderPlan:
+    """Every rule ``/execute`` applies before a confirmation screen exists.
+
+    In this order, because each one makes the next one meaningful: the side has to parse,
+    the symbol has to be one this deployment observes (otherwise there is no quote, no
+    spec and no detection history to put on the screen), the lot has to be legal for that
+    symbol, the symbol has to support a market filling mode at all (§39), and a named
+    detection has to be for the same symbol -- a link that misdescribes what was acted on
+    poisons every review built on it (§50).
+    """
+    symbol = symbol.upper()
+    kind = MARKET_SIDES.get(str(side).lower())
+    if kind is None:
+        return MarketOrderPlan(
+            False, f"`{side}` is not a side — use {' or '.join(MARKET_SIDES)}"
+        )
+
+    if symbol not in {s.upper() for s in observed_symbols}:
+        return MarketOrderPlan(
+            False,
+            f"{symbol} is not observed by this deployment "
+            f"({', '.join(observed_symbols)}), so there is no quote or symbol spec to "
+            "show you.",
+        )
+
+    check = validate_lot(lot, info, settings, symbol=symbol)
+    if not check.ok:
+        return MarketOrderPlan(False, check.message or "invalid lot size")
+
+    filling = market_filling_mode(info)
+    if not filling.ok:
+        return MarketOrderPlan(False, filling.message or "no market filling mode")
+
+    if detection is not None and detection.symbol.upper() != symbol:
+        return MarketOrderPlan(
+            False,
+            f"detection `{detection.detection_id}` is for {detection.symbol}, not "
+            f"{symbol}. A link that misdescribes what was acted on poisons every review "
+            "built on it.",
+        )
+
+    limits = settings.limits_for(symbol)
+    return MarketOrderPlan(
+        True,
+        draft=DraftRequest(
+            symbol=symbol,
+            order_type=kind,
+            volume=check.normalized if check.normalized is not None else float(lot),
+            requested_by=requested_by,
+            filling_mode=filling.mode,
+            deviation_points=limits.max_deviation_points,
+            detection_id=detection.detection_id if detection else None,
+        ),
+        filling_note=filling.message,
+    )
 
 
 # ── Detection linking (§37, §50) ──────────────────────────────────────────────
@@ -250,6 +437,9 @@ def build_confirmation(
     moment = to_utc(now or utc_now())
     is_buy = draft.order_type.direction.value == "buy"
     entry = draft.price if draft.price is not None else quote.price_for(is_buy=is_buy)
+    # This symbol's limits, not the globals: two of the three are in points, and a point
+    # is different money on every instrument (9A).
+    limits = settings.limits_for(draft.symbol)
 
     screen = ConfirmationScreen(
         title=f"Confirm {draft.order_type.value.replace('_', ' ').upper()} {draft.symbol}",
@@ -268,7 +458,10 @@ def build_confirmation(
             "Execution mode",
             draft.filling_mode.value.upper() if draft.filling_mode else "broker default",
         ),
-        ("Max deviation", f"{min(draft.deviation_points, settings.max_deviation_points)} points"),
+        (
+            "Max deviation",
+            f"{min(draft.deviation_points, limits.max_deviation_points)} points",
+        ),
         ("Bid / Ask", f"{quote.bid:g} / {quote.ask:g}"),
         (
             "Spread",
@@ -277,6 +470,12 @@ def build_confirmation(
         ("Quote age", f"{screen.quote_age_seconds:.1f}s"),
         ("Market state", market_state.value),
         ("Linked detection", detection.event_key if detection else "none"),
+        (
+            "Limits",
+            f"{limits.symbol}-specific ({', '.join(limits.overridden)})"
+            if limits.overridden
+            else "global",
+        ),
         ("Requested by", draft.requested_by),
         ("Confirmation expires in", f"{settings.confirmation_ttl_seconds:g}s"),
     ]
@@ -287,10 +486,10 @@ def build_confirmation(
         screen.warnings.append(
             f"Market is {market_state.value} — this will be refused at execution."
         )
-    if quote.spread_points is not None and quote.spread_points > settings.max_spread_points:
+    if quote.spread_points is not None and quote.spread_points > limits.max_spread_points:
         screen.warnings.append(
-            f"Spread {quote.spread_points:.1f} exceeds the {settings.max_spread_points:g} "
-            "point limit — this will be refused."
+            f"Spread {quote.spread_points:.1f} exceeds the "
+            f"{limits.max_spread_points:g} point limit — this will be refused."
         )
     if not settings.trading_enabled:
         screen.warnings.append("Trading is DISABLED — this will be refused at execution.")

@@ -28,6 +28,10 @@ from aureon.discord.service import (
     check_confirm_press,
     execution_modes,
     linkable_detections,
+    market_filling_mode,
+    market_state_of,
+    plan_market_order,
+    quote_of,
     summarise_review,
     trading_change_summary,
     unsupported_mode_notice,
@@ -49,7 +53,7 @@ from aureon.models.enums import (
     TradeRequestStatus,
 )
 from aureon.models.market import QuoteSnapshot
-from aureon.models.settings import ExecutionSettings
+from aureon.models.settings import ExecutionSettings, SymbolLimits
 from aureon.models.system import Heartbeat, SymbolState, SystemState
 
 NOW = utc_now()
@@ -230,6 +234,17 @@ def test_a_valid_lot_is_normalised() -> None:
     assert check.normalized == pytest.approx(0.30)
 
 
+def test_the_per_symbol_ceiling_applies_without_a_published_spec() -> None:
+    """9A. ``validate_lot`` takes the symbol from the caller, not only from the spec.
+
+    A missing or stale published ``SymbolInfo`` must not silently promote a symbol back
+    to the global ceiling, which on silver is a different notional entirely.
+    """
+    limited = settings(max_lot=1.0, per_symbol={SILVER: SymbolLimits(max_lot=0.20)})
+    assert validate_lot("0.50", None, limited, symbol=SILVER).ok is False
+    assert validate_lot("0.50", None, limited, symbol=SYMBOL).ok is True
+
+
 def test_a_missing_symbol_spec_does_not_block_the_trade() -> None:
     """The published copy is advisory; the execution guard re-validates live (§56).
 
@@ -269,6 +284,197 @@ def test_a_supported_mode_produces_no_notice() -> None:
 def test_an_unknown_spec_produces_no_notice() -> None:
     """Without metadata we cannot claim a mode is unsupported; the broker decides."""
     assert unsupported_mode_notice(None, FillingMode.FOK) is None
+
+
+# ── 9A: /execute, the market-order shortcut ───────────────────────────────────
+
+SILVER = "XAGUSD"
+SILVER_INFO = DEFAULT_SYMBOL_INFO.model_copy(
+    update={"symbol": SILVER, "point": 0.001, "digits": 3}
+)
+OBSERVED = (SYMBOL, SILVER)
+
+
+def plan(**overrides):
+    base = dict(
+        symbol=SILVER,
+        side="buy",
+        lot="0.10",
+        requested_by=OWNER,
+        settings=settings(),
+        info=SILVER_INFO,
+        observed_symbols=OBSERVED,
+    )
+    return plan_market_order(**(base | overrides))
+
+
+def test_a_market_shortcut_plan_carries_everything_the_request_needs() -> None:
+    result = plan()
+    assert result.ok is True
+    assert result.draft is not None
+    assert result.draft.symbol == SILVER
+    assert result.draft.order_type is OrderType.MARKET_BUY
+    assert result.draft.volume == pytest.approx(0.10)
+    assert result.draft.requested_by == OWNER
+    # The mode is named, never left to a broker default (§39).
+    assert result.draft.filling_mode is FillingMode.FOK
+    assert result.filling_note is None
+
+
+@pytest.mark.parametrize(
+    ("side", "expected"),
+    [
+        ("buy", OrderType.MARKET_BUY),
+        ("sell", OrderType.MARKET_SELL),
+        ("SELL", OrderType.MARKET_SELL),
+    ],
+)
+def test_both_sides_parse_case_insensitively(side: str, expected: OrderType) -> None:
+    result = plan(side=side)
+    assert result.ok is True
+    assert result.draft is not None
+    assert result.draft.order_type is expected
+
+
+@pytest.mark.parametrize("side", ["long", "b", "", "market_buy"])
+def test_a_side_aureon_does_not_recognise_is_refused_not_guessed(side: str) -> None:
+    """Guessing at "long" on the one command that moves money is not a convenience."""
+    result = plan(side=side)
+    assert result.ok is False
+    assert result.draft is None
+
+
+def test_a_symbol_this_deployment_does_not_observe_is_refused() -> None:
+    """There would be no quote, no spec and no detection history to put on the screen."""
+    result = plan(symbol="EURUSD", info=None)
+    assert result.ok is False
+    assert "not observed" in (result.message or "")
+    assert "XAUUSD" in (result.message or "")
+
+
+def test_a_lot_over_the_per_symbol_maximum_is_refused_before_any_screen_exists() -> None:
+    """9A. One lot is 100 oz of gold and 5000 oz of silver.
+
+    The refusal happens in the plan, which is what the command needs: no draft means no
+    ``trade_requests`` document and no embed, so there is nothing for the executor to
+    find and nothing for a human to press.
+    """
+    limited = settings(max_lot=1.0, per_symbol={SILVER: SymbolLimits(max_lot=0.20)})
+    result = plan(lot="0.50", settings=limited)
+    assert result.ok is False
+    assert result.draft is None
+    assert "0.2" in (result.message or "")
+    assert SILVER in (result.message or "")
+    # The same lot is fine on the symbol that has no override.
+    assert plan(symbol=SYMBOL, lot="0.50", info=DEFAULT_SYMBOL_INFO, settings=limited).ok
+    # And with no published spec at all, the ceiling is still this symbol's: the limit is
+    # looked up from what the human typed, not from a convenience copy that may be absent.
+    assert plan(lot="0.50", info=None, settings=limited).ok is False
+
+
+def test_the_per_symbol_deviation_reaches_the_draft() -> None:
+    """A point is different money on every instrument, so the number must follow."""
+    limited = settings(
+        max_deviation_points=20, per_symbol={SILVER: SymbolLimits(max_deviation_points=5)}
+    )
+    silver = plan(settings=limited)
+    gold = plan(symbol=SYMBOL, info=DEFAULT_SYMBOL_INFO, settings=limited)
+    assert silver.draft is not None and gold.draft is not None
+    assert silver.draft.deviation_points == 5
+    assert gold.draft.deviation_points == 20
+
+
+def test_an_ioc_substitution_is_stated_rather_than_made_silently() -> None:
+    info = SILVER_INFO.model_copy(update={"filling_modes": (FillingMode.IOC,)})
+    result = plan(info=info)
+    assert result.ok is True
+    assert result.draft is not None
+    assert result.draft.filling_mode is FillingMode.IOC
+    assert "FOK is not supported" in (result.filling_note or "")
+    assert "part of the volume" in (result.filling_note or "")
+
+
+def test_a_symbol_with_no_market_filling_mode_refuses_rather_than_defaulting() -> None:
+    """§39: RETURN leaves a resting remainder, which is not a market execution."""
+    info = SILVER_INFO.model_copy(update={"filling_modes": (FillingMode.RETURN,)})
+    result = plan(info=info)
+    assert result.ok is False
+    assert result.draft is None
+    assert "/execute-trade" in (result.message or "")
+
+
+def test_a_missing_spec_proceeds_but_says_the_mode_is_unknown() -> None:
+    """The published copy is advisory; the guard re-reads the live symbol (§56)."""
+    result = plan(info=None)
+    assert result.ok is True
+    assert result.draft is not None
+    assert result.draft.filling_mode is None
+    assert "No filling mode published" in (result.filling_note or "")
+
+
+def test_a_detection_for_another_symbol_is_refused_not_attached() -> None:
+    """§50. A link that misdescribes what was acted on poisons every review on it."""
+    result = plan(detection=detection(symbol=SYMBOL))
+    assert result.ok is False
+    assert result.draft is None
+    assert SYMBOL in (result.message or "") and SILVER in (result.message or "")
+
+
+def test_a_detection_for_this_symbol_is_linked_explicitly() -> None:
+    linked = detection(symbol=SILVER)
+    result = plan(detection=linked)
+    assert result.ok is True
+    assert result.draft is not None
+    assert result.draft.detection_id == linked.detection_id
+    assert result.draft.to_request().link_type is LinkType.EXPLICIT
+
+
+def test_the_shortcut_has_no_default_lot() -> None:
+    """A wrong lot is the one field that costs money, so there is nothing to default."""
+    import inspect
+
+    parameters = inspect.signature(plan_market_order).parameters
+    assert parameters["lot"].default is inspect.Parameter.empty
+
+
+def test_the_filling_preference_prefers_fok_over_ioc() -> None:
+    both = market_filling_mode(DEFAULT_SYMBOL_INFO)
+    assert both.mode is FillingMode.FOK
+    assert both.message is None
+
+
+# ── 9A: reading one symbol out of the observer's published state ──────────────
+
+
+def test_a_symbols_quote_is_found_by_name_not_by_position() -> None:
+    state = SystemState(
+        symbols=(
+            SymbolState(
+                symbol=SYMBOL,
+                timeframe=Timeframe.M5,
+                market_state=MarketState.OPEN,
+                last_quote=quote(),
+            ),
+            SymbolState(
+                symbol=SILVER,
+                timeframe=Timeframe.M5,
+                market_state=MarketState.CLOSED,
+                last_quote=QuoteSnapshot(symbol=SILVER, bid=30.0, ask=30.02, point=0.001),
+            ),
+        )
+    )
+    assert quote_of(state, SILVER).bid == pytest.approx(30.0)
+    assert market_state_of(state, SILVER) is MarketState.CLOSED
+    assert market_state_of(state, SYMBOL) is MarketState.OPEN
+
+
+def test_an_absent_symbol_yields_no_quote_and_an_unknown_market() -> None:
+    """Discord may not call the broker, so "no state" must not become "some price"."""
+    assert quote_of(None, SILVER) is None
+    assert market_state_of(None, SILVER) is MarketState.UNKNOWN
+    empty = SystemState(symbols=())
+    assert quote_of(empty, SILVER) is None
+    assert market_state_of(empty, SILVER) is MarketState.UNKNOWN
 
 
 # ── §37: detection linking ────────────────────────────────────────────────────

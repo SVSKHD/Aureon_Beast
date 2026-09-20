@@ -28,6 +28,7 @@ from aureon.discord.service import (
     DraftRequest,
     build_confirmation,
     check_confirm_press,
+    quote_of,
     trading_change_summary,
 )
 from aureon.models.enums import MarketState
@@ -198,10 +199,4 @@ def _latest_quote(context: BotContext, symbol: str):
     Returns ``None`` when no quote has been published, which ``check_confirm_press`` treats
     as "cannot confirm, refresh" rather than as permission to proceed.
     """
-    state = context.system_state.read()
-    if state is None:
-        return None
-    for symbol_state in state.symbols:
-        if symbol_state.symbol == symbol and symbol_state.last_quote is not None:
-            return symbol_state.last_quote
-    return None
+    return quote_of(context.system_state.read(), symbol)

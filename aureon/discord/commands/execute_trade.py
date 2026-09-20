@@ -27,11 +27,13 @@ from aureon.discord.service import (
     DraftRequest,
     build_confirmation,
     linkable_detections,
+    market_state_of,
+    quote_of,
     unsupported_mode_notice,
     validate_lot,
 )
 from aureon.discord.views import ConfirmTradeView
-from aureon.models.enums import FillingMode, MarketState, OrderType
+from aureon.models.enums import FillingMode, OrderType
 
 log = logging.getLogger(__name__)
 
@@ -110,7 +112,7 @@ class ExecuteTradeCommands:
         )
 
         state = await context.run(context.system_state.read)
-        quote = _quote_from_state(state, symbol)
+        quote = quote_of(state, symbol)
         if quote is None:
             await self._fail(
                 interaction,
@@ -119,7 +121,7 @@ class ExecuteTradeCommands:
             )
             return
 
-        market_state = _market_state_from_state(state, symbol)
+        market_state = market_state_of(state, symbol)
         request = await context.run(context.requests.create, draft.to_request())
         screen = build_confirmation(
             draft, quote, spec, settings, market_state=market_state, detection=detection
@@ -150,24 +152,6 @@ class ExecuteTradeCommands:
         await interaction.followup.send(
             embed=notice_embed("Cannot place this trade", message, bad=True), ephemeral=True
         )
-
-
-def _quote_from_state(state: Any, symbol: str):
-    if state is None:
-        return None
-    for symbol_state in state.symbols:
-        if symbol_state.symbol == symbol and symbol_state.last_quote is not None:
-            return symbol_state.last_quote
-    return None
-
-
-def _market_state_from_state(state: Any, symbol: str) -> MarketState:
-    if state is None:
-        return MarketState.UNKNOWN
-    for symbol_state in state.symbols:
-        if symbol_state.symbol == symbol:
-            return symbol_state.market_state
-    return MarketState.UNKNOWN
 
 
 def register(tree: Any, context: BotContext) -> None:
