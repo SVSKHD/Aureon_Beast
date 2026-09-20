@@ -10,6 +10,11 @@ stored document.
 
 ## Collections
 
+Shown with the DEFAULT prefix `aureon_beast`. The live one
+comes from `AUREON_COLLECTION_PREFIX` (decision 111); the document describes the
+shape, not one deployment's value -- otherwise this file would differ between a
+test run and production and could never be checked in.
+
 | collection | document id | model |
 |---|---|---|
 | `aureon_beast_detections` | `detection_id` | `Detection` |

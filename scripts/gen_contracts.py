@@ -165,6 +165,17 @@ def transitions_table(title: str, table: dict) -> list[str]:
     return lines
 
 
+def as_default_prefix(text: str) -> str:
+    """Rewrite the resolved prefix to the default, so the output is environment-free.
+
+    Without this the generator emits ``aureon_test_detections`` under the test prefix and
+    ``aureon_beast_detections`` in production, and ``--check`` could never pass in both.
+    """
+    if paths.PREFIX == paths.DEFAULT_COLLECTION_PREFIX:
+        return text
+    return text.replace(f"{paths.PREFIX}_", f"{paths.DEFAULT_COLLECTION_PREFIX}_")
+
+
 def build() -> str:
     lines: list[str] = [
         "# Aureon contracts",
@@ -178,6 +189,11 @@ def build() -> str:
         "---",
         "",
         "## Collections",
+        "",
+        f"Shown with the DEFAULT prefix `{paths.DEFAULT_COLLECTION_PREFIX}`. The live one",
+        "comes from `AUREON_COLLECTION_PREFIX` (decision 111); the document describes the",
+        "shape, not one deployment's value -- otherwise this file would differ between a",
+        "test run and production and could never be checked in.",
         "",
         "| collection | document id | model |",
         "|---|---|---|",
@@ -289,7 +305,7 @@ def build() -> str:
     precedence = " → ".join(f"`{s.value}`" for s in SESSION_PRECEDENCE)
     lines += ["", f"Overlaps resolve by fixed precedence: {precedence}.", ""]
 
-    return "\n".join(lines).rstrip() + "\n"
+    return as_default_prefix("\n".join(lines).rstrip() + "\n")
 
 
 def main() -> int:
