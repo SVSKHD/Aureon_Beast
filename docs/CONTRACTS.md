@@ -881,6 +881,19 @@ Whether excursions were watched live or rebuilt afterwards (§45).
 | `LIVE_TICKS` | `live_ticks` |
 | `RECONSTRUCTED` | `reconstructed` |
 
+### ExecutionClassification
+
+How a human's execution compared with what the machine observed (§64).
+
+| member | value |
+|---|---|
+| `TAKEN_AND_REACHED` | `taken_and_reached` |
+| `TAKEN_AND_NOT_REACHED` | `taken_and_not_reached` |
+| `MISSED_AND_REACHED` | `missed_and_reached` |
+| `MISSED_AND_NOT_REACHED` | `missed_and_not_reached` |
+| `DISCRETIONARY` | `discretionary` |
+| `UNKNOWN` | `unknown` |
+
 ### DealEntry
 
 MT5 deal entry type, used to match deals to positions (§36).

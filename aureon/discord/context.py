@@ -22,6 +22,7 @@ from aureon.config import AureonConfig
 from aureon.models.settings import ExecutionSettings
 from aureon.storage.control_request_repository import ControlRequestRepository
 from aureon.storage.detection_repository import DetectionRepository
+from aureon.storage.review_reader import ReviewReader
 from aureon.storage.settings_repository import ExecutionSettingsRepository
 from aureon.storage.symbol_repository import SymbolRepository
 from aureon.storage.system_state_repository import HeartbeatRepository, SystemStateRepository
@@ -47,6 +48,8 @@ class BotContext:
     trades: TradeRepository
     detections: DetectionRepository
     settings: ExecutionSettingsRepository
+    # Deliberately the READER: Discord must not be able to overwrite a review (§61).
+    reviews: ReviewReader
     symbols: SymbolRepository
     system_state: SystemStateRepository
     heartbeats: HeartbeatRepository
@@ -78,6 +81,7 @@ def build_context(config: AureonConfig, client: Any) -> BotContext:
         trades=TradeRepository(client, account_scope=config.account_scope),
         detections=DetectionRepository(client),
         settings=ExecutionSettingsRepository(client),
+        reviews=ReviewReader(client),
         symbols=SymbolRepository(client),
         system_state=SystemStateRepository(client),
         heartbeats=HeartbeatRepository(client),

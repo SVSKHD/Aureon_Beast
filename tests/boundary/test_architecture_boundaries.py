@@ -194,27 +194,90 @@ def test_firestore_clients_are_built_only_in_storage() -> None:
 def test_reviews_never_read_horizons_directly() -> None:
     """Phase 3: ``complete_horizons`` is the only accessor review code may use.
 
-    Reading ``.horizons`` in a review would silently fold PENDING horizons into a
-    reached-N count, turning "we do not know yet" into "it did not happen" and
-    making every statistic in the review pessimistically wrong. The safe accessors
-    are ``complete_horizons``, ``pending_horizons`` and ``invalid_horizons``.
+    Reading ``DetectionEvaluation.horizons`` in a review would silently fold PENDING and
+    INVALID horizons into a reached-N count, turning "we do not know yet" into "it did not
+    happen" and making every statistic in the review pessimistically wrong -- with nothing
+    in the output to reveal it.
+
+    AST-based, not a text grep. A grep cannot tell these apart, and all four of the last
+    four are legitimate:
+
+    * ``evaluation.horizons``          -- the violation this guard exists for;
+    * ``rule.horizons``                -- the EvaluationRule's horizon *definitions*, which
+      a review must read to know which horizons exist at all;
+    * ``totals.horizons`` / ``result.horizons`` -- the aggregation's own output;
+    * ``horizons=...``                 -- a keyword argument building a review document.
+
+    So the rule is: ``<name>.horizons`` is forbidden unless ``<name>`` is in the documented
+    safe set below. A new receiver trips it by default, which is the right way round -- a
+    developer reaching for ``evaluation.horizons`` is caught, and one adding a genuinely
+    safe container has to say so deliberately.
     """
-    safe = ("complete_horizons", "pending_horizons", "invalid_horizons")
+    # Receivers whose `.horizons` is NOT a DetectionEvaluation's unfiltered tuple.
+    safe_receivers = {
+        "rule",  # EvaluationRule: the horizon definitions
+        "result",  # Aggregates: this module's own output
+        "totals",  # Aggregates, at the call site
+        "self",  # a review object's own field
+        "review",  # a built DailyReview/WeeklyReview
+    }
+    safe_attributes = {"complete_horizons", "pending_horizons", "invalid_horizons"}
+
     offenders: list[str] = []
     for path in _python_files("reviews"):
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if ".horizons" not in line:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute):
                 continue
-            # Strip the safe accessors first; whatever ".horizons" remains is a
-            # direct read of the unfiltered tuple.
-            stripped = line
-            for accessor in safe:
-                stripped = stripped.replace(f".{accessor}", "")
-            if ".horizons" in stripped:
-                offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {line.strip()}")
+            if node.attr in safe_attributes or node.attr != "horizons":
+                continue
+            receiver = node.value
+            name = receiver.id if isinstance(receiver, ast.Name) else None
+            if name in safe_receivers:
+                continue
+            rendered = name or type(receiver).__name__
+            offenders.append(
+                f"{path.relative_to(REPO_ROOT)}:{node.lineno}: {rendered}.horizons"
+            )
     assert not offenders, (
-        "review code must aggregate via DetectionEvaluation.complete_horizons, "
-        "never .horizons directly:\n" + "\n".join(offenders)
+        "review code must aggregate via DetectionEvaluation.complete_horizons, never the "
+        "unfiltered .horizons:\n" + "\n".join(offenders)
+    )
+
+
+def test_reviews_never_write_the_records_they_analyse() -> None:
+    """§50: an inferred link is analysis, and analysis must not edit its subject.
+
+    ``aureon/reviews`` reads detections, evaluations, trades and sessions, and writes only
+    its own two collections. A behavioural test already proves an inferred link does not
+    mutate the trade it points at, but that only covers the path it exercises. This covers
+    every path, by denying the package the ability: it may not import a repository that
+    writes anything else.
+
+    The failure this prevents is quiet. A review that "helpfully" stamped its best guess
+    onto the trade would turn a guess into a permanent record, indistinguishable from a
+    human's own statement, and every statistic built on those trades afterwards would
+    inherit it without being able to identify it as inferred.
+    """
+    forbidden_writers = {
+        "aureon.storage.trade_repository",
+        "aureon.storage.trade_request_repository",
+        "aureon.storage.detection_repository",
+        "aureon.storage.evaluation_repository",
+        "aureon.storage.session_repository",
+        "aureon.storage.control_request_repository",
+        "aureon.storage.settings_repository",
+        "aureon.outbox.local_outbox",
+        "aureon.outbox.outbox_worker",
+    }
+    offenders: list[str] = []
+    for path in _python_files("reviews"):
+        for module in _imported_modules(path):
+            if module in forbidden_writers:
+                offenders.append(f"{path.relative_to(REPO_ROOT)} imports {module}")
+    assert not offenders, (
+        "reviews may read detections, evaluations, trades and sessions but must write "
+        "only daily_reviews and weekly_reviews (§50):\n" + "\n".join(offenders)
     )
 
 
@@ -234,6 +297,9 @@ def test_discord_writes_only_what_it_is_permitted_to() -> None:
     read-only ones are fine -- Discord reads freely; it is writing that is constrained --
     so this checks for the repositories whose whole purpose is to write those collections.
     """
+    # Modules whose purpose is to WRITE those collections. Read-only counterparts are
+    # fine and exist precisely so Discord can read without being able to write:
+    # ``review_reader`` is the sanctioned way to show a review on /status (§61-§63).
     forbidden_writers = {
         "aureon.storage.evaluation_repository",
         "aureon.storage.session_repository",

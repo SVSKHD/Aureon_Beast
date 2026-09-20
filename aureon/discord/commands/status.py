@@ -56,15 +56,19 @@ class StatusCommands:
             [TradeRequestStatus.REQUESTED, TradeRequestStatus.CONFIRMED,
              TradeRequestStatus.PENDING],
         )
-        # Phase 7 will supply reviews; until then build_status reports "no completed
-        # review yet" rather than an empty panel.
+        # §61-§63: on a closed market show the latest completed review. The weekly one
+        # is preferred over the daily -- it is the wider picture, and on a weekend the most
+        # recent daily covers Friday alone.
+        latest = await context.run(context.reviews.latest_weekly)
+        if latest is None:
+            latest = await context.run(context.reviews.latest_daily)
         return build_status(
             system_state=state,
             heartbeats=heartbeats,
             settings=settings,
             open_trades=len(open_trades),
             pending_requests=len(pending),
-            latest_review=None,
+            latest_review=latest,
         )
 
 

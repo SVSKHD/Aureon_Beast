@@ -33,9 +33,11 @@ from aureon.engine.indicators import min_warmup  # noqa: E402
 from aureon.engine.levels import LevelTracker  # noqa: E402
 from aureon.evaluation.backfill import build_report, diagnose, run_backfill  # noqa: E402
 from aureon.evaluation.rules import EMA_OUTCOME_V1  # noqa: E402
+from aureon.reviews.reconcile import reconcile  # noqa: E402
 
 FIXTURE = REPO_ROOT / "aureon" / "data" / "fixtures" / "XAUUSD_M5.csv"
 OUTPUT = REPO_ROOT / "docs" / "PHASE2_BASELINE.md"
+_FAILURES: list[str] = []
 MARKET_TZ = "Europe/Athens"
 ACCOUNT_SCOPE = "primary"
 
@@ -285,6 +287,9 @@ def build() -> str:
             "(§21, decision 47).",
         ]
 
+    # ── Phase 7: weekly reviews must agree ───────────────────────────────────
+    lines += _reconciliation_section(backfill, reports, rule, by_day)
+
     lines += [
         "",
         "---",
@@ -298,12 +303,101 @@ def build() -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _reconciliation_section(backfill, reports, rule, by_day: Counter) -> list[str]:
+    """The §63 cross-check: weekly reviews against the counts recorded above.
+
+    The reviews are built from the replay's own detections through
+    ``aureon.reviews``, which slices the week on the **broker** clock and takes reached
+    counts from COMPLETE horizons only. The right-hand column is the plain
+    ``Counter`` from the sections above. Two code paths, one set of numbers.
+
+    Any disagreement is written into the document *and* fails the generator, so the
+    baseline cannot be regenerated while it is unreconciled.
+    """
+    evaluations = {e.detection_id: e for e in backfill.evaluations}
+    key = rule.threshold_keys[0]
+    result = reconcile(
+        backfill.detections,
+        evaluations,
+        rule,
+        market_tz=MARKET_TZ,
+        by_market_date=dict(by_day),
+        complete_by_horizon={h.id: reports[h.id].complete for h in rule.horizons},
+        reached_by_horizon={
+            h.id: reports[h.id].thresholds[key].reached for h in rule.horizons
+        },
+        pending_total=sum(reports[h.id].pending for h in rule.horizons),
+        invalid_total=sum(reports[h.id].invalid for h in rule.horizons),
+        threshold_key=key,
+    )
+
+    lines = [
+        "",
+        "---",
+        "",
+        "## Weekly review reconciliation (Phase 7)",
+        "",
+        "Weekly reviews generated from this same replay, one per ISO week the fixture",
+        "spans. The review path counts independently of everything above: half-open",
+        "market-clock week windows, reached counts from COMPLETE horizons only. The",
+        "numbers must match, and the generator fails if they do not.",
+        "",
+        "| ISO week | market dates | review detections | baseline days |",
+        "|---|---|---|---|",
+    ]
+    for iso in result.weeks:
+        dates = result.per_week_dates[iso]
+        expected = sum(by_day[d] for d in dates)
+        lines.append(
+            f"| `{iso[0]}-W{iso[1]:02d}` | `{dates[0]}` … `{dates[-1]}` | "
+            f"{result.per_week_detections[iso]} | {expected} |"
+        )
+    lines += [
+        f"| **total** | {len(by_day)} days | **{result.detections_total}** | "
+        f"**{result.baseline_detections_total}** |",
+        "",
+        "| check | reviews | baseline |",
+        "|---|---|---|",
+    ]
+    for horizon in rule.horizons:
+        report = reports[horizon.id]
+        lines.append(
+            f"| `{horizon.id}` COMPLETE | "
+            f"{result.complete_by_horizon.get(horizon.id, 0)} | {report.complete} |"
+        )
+        lines.append(
+            f"| `{horizon.id}` reached at {key} | "
+            f"{result.reached_by_horizon.get(horizon.id, 0)} | "
+            f"{report.thresholds[key].reached} |"
+        )
+    lines += [
+        f"| PENDING horizons excluded | {result.pending_excluded} | "
+        f"{sum(reports[h.id].pending for h in rule.horizons)} |",
+        f"| INVALID horizons excluded | {result.invalid_excluded} | "
+        f"{sum(reports[h.id].invalid for h in rule.horizons)} |",
+        "",
+    ]
+    if result.reconciled:
+        lines.append("Reconciled: every figure above agrees.")
+    else:
+        lines += ["**NOT RECONCILED:**", ""]
+        lines += [f"- {m}" for m in result.mismatches]
+        _FAILURES.extend(result.mismatches)
+    return lines
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="exit non-zero if stale")
     args = parser.parse_args()
 
     content = build()
+    if _FAILURES:
+        # A stale document is recoverable; a document asserting counts that do not
+        # reconcile is worse than none, so nothing is written.
+        for failure in _FAILURES:
+            print(f"reconciliation failed: {failure}", file=sys.stderr)
+        return 2
     if args.check:
         current = OUTPUT.read_text(encoding="utf-8") if OUTPUT.exists() else ""
         if current != content:

@@ -201,6 +201,42 @@ strategy. Correcting it means a **new `rule_id`**, never an edit to this one
 
 ---
 
+## Weekly review reconciliation (Phase 7)
+
+Weekly reviews generated from this same replay, one per ISO week the fixture
+spans. The review path counts independently of everything above: half-open
+market-clock week windows, reached counts from COMPLETE horizons only. The
+numbers must match, and the generator fails if they do not.
+
+| ISO week | market dates | review detections | baseline days |
+|---|---|---|---|
+| `2026-W38` | `2026-09-14` … `2026-09-18` | 55 | 55 |
+| `2026-W39` | `2026-09-21` … `2026-09-22` | 15 | 15 |
+| **total** | 7 days | **70** | **70** |
+
+| check | reviews | baseline |
+|---|---|---|
+| `c5` COMPLETE | 70 | 70 |
+| `c5` reached at 3 | 70 | 70 |
+| `c10` COMPLETE | 70 | 70 |
+| `c10` reached at 3 | 70 | 70 |
+| `c20` COMPLETE | 68 | 68 |
+| `c20` reached at 3 | 68 | 68 |
+| `m60` COMPLETE | 70 | 70 |
+| `m60` reached at 3 | 70 | 70 |
+| `session_close` COMPLETE | 67 | 67 |
+| `session_close` reached at 3 | 67 | 67 |
+| `day_close` COMPLETE | 57 | 57 |
+| `day_close` reached at 3 | 57 | 57 |
+| `opposite_cross` COMPLETE | 68 | 68 |
+| `opposite_cross` reached at 3 | 68 | 68 |
+| PENDING horizons excluded | 13 | 13 |
+| INVALID horizons excluded | 7 | 7 |
+
+Reconciled: every figure above agrees.
+
+---
+
 ## Not yet measured
 
 Outcomes for the Part B agents. `EMA_OUTCOME_V1` is written for `ema_cross`;

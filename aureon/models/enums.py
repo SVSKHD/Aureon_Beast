@@ -306,6 +306,48 @@ class PathClassification(StrEnum):
     NONE = "none"
 
 
+
+class ExecutionClassification(StrEnum):
+    """How a human's execution compared with what the machine observed (§64).
+
+    The comparison Phase 7 exists to make. Two of these six are the interesting ones:
+    ``MISSED_AND_REACHED`` is a signal the machine found and the human did not take that
+    then worked, and ``TAKEN_AND_NOT_REACHED`` is the reverse. Everything else is either
+    agreement or absence.
+
+    ``UNKNOWN`` is load-bearing and must never be folded into a "did not work" bucket. A
+    detection whose horizons are still PENDING has no outcome yet; counting it as a miss
+    would make every comparison here pessimistic, which is exactly the error Phase 3's
+    COMPLETE-only rule exists to prevent.
+    """
+
+    #: Linked to a trade, and the evaluated outcome reached the threshold.
+    TAKEN_AND_REACHED = "taken_and_reached"
+    #: Linked to a trade, and the outcome did not reach it.
+    TAKEN_AND_NOT_REACHED = "taken_and_not_reached"
+    #: No trade, but the outcome reached the threshold -- an opportunity not taken.
+    MISSED_AND_REACHED = "missed_and_reached"
+    #: No trade, and the outcome did not reach it -- correctly skipped.
+    MISSED_AND_NOT_REACHED = "missed_and_not_reached"
+    #: A trade with no detection behind it -- the human's own idea.
+    DISCRETIONARY = "discretionary"
+    #: The outcome is not known yet. NOT a miss.
+    UNKNOWN = "unknown"
+
+    @property
+    def was_taken(self) -> bool:
+        return self in {
+            ExecutionClassification.TAKEN_AND_REACHED,
+            ExecutionClassification.TAKEN_AND_NOT_REACHED,
+            ExecutionClassification.DISCRETIONARY,
+        }
+
+    @property
+    def is_conclusive(self) -> bool:
+        """Whether this classification says anything about an outcome."""
+        return self is not ExecutionClassification.UNKNOWN
+
+
 class ExcursionSource(StrEnum):
     """Whether excursions were watched live or rebuilt afterwards (§45)."""
 

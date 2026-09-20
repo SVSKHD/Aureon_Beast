@@ -60,6 +60,7 @@ ENUMS: tuple[type[StrEnum], ...] = (
     m.ReferencePrice,
     m.PathClassification,
     m.ExcursionSource,
+    m.ExecutionClassification,
     m.DealEntry,
 )
 

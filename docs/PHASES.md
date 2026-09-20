@@ -15,7 +15,7 @@ passes.** Partial passes do not count.
 | 4 | Execution safety core — exactly-once (**the money phase**) | Failure-injection scenarios A–H + the seeded acceptance suite pass under the emulator; one demo market order and one pending order end to end | 🟡 code + emulator suite green; **demo-account leg outstanding** |
 | 5 | Position lifecycle — MT5 is the truth | Demo: open via executor, close from mobile; `trades/` shows CLOSED with right close_price/close_reason/P&L within one poll | 🟡 code + emulator suite green; **demo-account leg outstanding** |
 | 6 | Discord — human interface over a safe backend | FOK trade and stop order placed from Discord; `/trading disable` blocks with a clear FAILED embed; every action audited | 🟡 code + emulator suite green; **live-Discord leg outstanding** |
-| 7 | Reviews — machine observation vs human execution | `/status` on a CLOSED market renders the weekly review; baseline numbers reconcile | ⬜ not started |
+| 7 | Reviews — machine observation vs human execution | `/status` on a CLOSED market renders the weekly review; baseline numbers reconcile | ✅ done |
 | 8 | Aureon Vue — read-only dashboard | Dashboard matches `/status` at the same second; STALE banner on observer stop; non-allowlisted account sees nothing; rules tests pass | ⬜ not started |
 
 ## Cross-phase checklist (run after each phase)
@@ -43,7 +43,10 @@ Two rows want confirmation against the real section text before the phase that
 depends on them:
 
 - **row 17** — the `DailyReview` / `WeeklyReview` field sets, modelled as a
-  superset because §61/§63 were unavailable. Confirm before Phase 7.
+  superset because §61/§63 were unavailable. Phase 7 has now been built on that
+  superset, so the fields are exercised and reconciled but still unratified: a
+  §61/§63 that names *fewer* fields would leave harmless extras, one that names a
+  field this superset lacks would be a gap. Still worth confirming.
 - **row 16** — `agent_version` excluded from `detection_id`. Confirm against §12
   before Phase 2 writes detections to a real project, since changing it later
   re-keys history.
@@ -175,3 +178,57 @@ values regardless.
 *from Discord* on the demo account and seeing the result appear within seconds. That needs
 a Discord application, a guild, a bot token and an MT5 terminal. No gateway connection has
 been made; `bot.py`, the commands and the views have never rendered in a real client.
+
+## Phase 7 — what is proven, and what is not
+
+**Proven.** The gate, both halves. `/status` on a CLOSED market renders the stored weekly
+review, read through `ReviewReader` — which has no write method at all, so the human
+interface cannot rewrite the figures it displays. And `docs/PHASE2_BASELINE.md` now carries
+a **Weekly review reconciliation** section: weekly reviews generated from the same replay
+agree with the baseline's per-day detection counts, per-horizon COMPLETE counts, reached-3
+counts, and both excluded counts — 70 detections, 55 in week 38 and 15 in week 39, 13
+PENDING and 7 INVALID horizons excluded. `scripts/gen_baseline.py` refuses to write the
+document when they disagree.
+
+The reconciliation is two genuinely independent paths to the same number, and that was
+verified by breaking each: bounding the week in UTC instead of on the broker clock moves one
+detection between weeks and is caught by name, while the grand total stays right; folding
+PENDING horizons into the denominator is caught on four horizons at once. Neither would have
+looked anomalous in its own output.
+
+Two boundary guards, both verified against a planted violation. An AST-precise one forbids
+`aureon/reviews` from reading `.horizons` directly — precise rather than textual because the
+first version produced seven false positives on docstrings and `rule.horizons`, and the fix
+was to sharpen the guard rather than weaken it. The second denies the package any repository
+that writes detections, trades, evaluations or sessions, so §50 rests on a capability the
+code does not have rather than on a behavioural test's chosen path.
+
+The rule that governs the whole package: reached counts come from `complete_horizons` only.
+A detection whose horizon is still PENDING classifies as `UNKNOWN`, never as a miss, and
+both excluded counts ride on every review. Inferred links live only on the review, require
+all four criteria, and never mutate a trade — a test asserts a trade cannot carry an
+inferred link at all. Reviews are idempotent: the same period overwrites the same document
+id with byte-identical content, verified across re-runs, under input reordering, and through
+Firestore.
+
+One real bug, found by testing the CLI's own defaults rather than its output: the weekly
+period defaulted to "seven days ago", which on Friday, Saturday and Sunday names the week
+*before* the one that just traded. §63 asks for the review to be generated after Friday's
+close — precisely when the old rule was wrong — so the cron the spec describes would have
+produced last week's numbers under this week's heading. It now walks back to the most recent
+completed Friday, with every weekday pinned and a year-long invariant that the default never
+names a week still trading (decision 96).
+
+Against the emulator: a review round-trips with its tuples, enum-keyed dicts and tz-aware
+timestamps intact; the exact broker-midnight boundary is half-open (21:00 UTC belongs to the
+next day, 20:59 to the previous); regeneration picks up a late detection; and `/status`
+picks the *latest* weekly review rather than merely a weekly review — that last test exists
+because reverting `max` to `min` in the reader passed the whole suite until it was added.
+
+**Not proven, and not claimed:** nothing has been generated from live trading data. Every
+review in this repository is built from the synthetic fixture or from documents a test
+wrote, so the linking heuristic has never been shown a real human's trade. Its four
+criteria are a reasonable rank, not a calibrated one, and `confidence` is explicitly
+documented as an ordering, not a probability. Whether §61/§63 want these exact fields is
+still unconfirmed (see the standing caveat above).
+

@@ -1,0 +1,341 @@
+"""Turning a period's data into a review (§61-§65).
+
+Shared by the session, daily and weekly reviews so all three count the same way. Three
+counts differing by which file computed them would be worse than having only one.
+
+## The one rule that governs everything here
+
+**Reached counts come from ``complete_horizons`` only**, and the number of horizons
+excluded for being PENDING or INVALID is reported alongside them. A boundary test forbids
+this package from touching ``.horizons`` directly, because folding an unknown outcome into
+a denominator is the single easiest way to make a strategy look worse than it is -- and
+nothing in the resulting numbers would reveal it had happened.
+
+## Determinism
+
+A review is a pure function of the data it aggregates. Re-running it for the same period
+must produce a **byte-identical** document, so every collection is sorted before folding
+and no wall-clock value enters the result except ``generated_at``, which the caller
+supplies.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections import Counter
+from dataclasses import dataclass, field
+from datetime import datetime
+
+from aureon.models.detection import Detection
+from aureon.models.enums import (
+    ExecutionClassification,
+    HorizonStatus,
+    LinkType,
+    SessionName,
+    TradeStatus,
+)
+from aureon.models.evaluation import DetectionEvaluation, EvaluationRule
+from aureon.models.review import (
+    DailyReview,
+    HorizonOutcome,
+    InferredLink,
+    ThresholdOutcome,
+    WeeklyReview,
+)
+from aureon.models.session import SessionSummary
+from aureon.models.trade import Trade
+from aureon.reviews.linking import classify_period, infer_links
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class PeriodData:
+    """Everything a review aggregates, for one period."""
+
+    detections: list[Detection] = field(default_factory=list)
+    evaluations: dict[str, DetectionEvaluation] = field(default_factory=dict)
+    trades: list[Trade] = field(default_factory=list)
+    sessions: list[SessionSummary] = field(default_factory=list)
+
+    def sorted_detections(self) -> list[Detection]:
+        return sorted(self.detections, key=lambda d: (d.detected_at.utc, d.detection_id))
+
+    def sorted_trades(self) -> list[Trade]:
+        return sorted(self.trades, key=lambda t: (t.open_time.utc, t.trade_id))
+
+
+@dataclass
+class Aggregates:
+    """The counted result, before it becomes a document."""
+
+    detections_total: int = 0
+    detections_by_agent: dict[str, int] = field(default_factory=dict)
+    detections_by_session: dict[SessionName, int] = field(default_factory=dict)
+    horizons: list[HorizonOutcome] = field(default_factory=list)
+    pending_excluded: int = 0
+    invalid_excluded: int = 0
+    trades_total: int = 0
+    trades_closed: int = 0
+    realized_pnl: float = 0.0
+    trades_by_session: dict[SessionName, int] = field(default_factory=dict)
+    explicit_links: int = 0
+    inferred_links: list[InferredLink] = field(default_factory=list)
+    classifications: dict[ExecutionClassification, int] = field(default_factory=dict)
+
+
+def aggregate(
+    data: PeriodData,
+    rule: EvaluationRule,
+    *,
+    market_tz: str,
+    infer_window_minutes: int,
+    classification_threshold: float | None = None,
+    classification_horizon: str | None = None,
+) -> Aggregates:
+    """Count a period (§61, §63, §64)."""
+    detections = data.sorted_detections()
+    trades = data.sorted_trades()
+    result = Aggregates(detections_total=len(detections))
+
+    result.detections_by_agent = dict(
+        sorted(Counter(d.agent_name for d in detections).items())
+    )
+    result.detections_by_session = dict(
+        sorted(
+            Counter(d.session.session for d in detections).items(),
+            key=lambda item: item[0].value,
+        )
+    )
+
+    result.horizons = _horizon_outcomes(data, rule, result)
+
+    result.trades_total = len(trades)
+    result.trades_closed = sum(1 for t in trades if t.status is TradeStatus.CLOSED)
+    # Only realised money counts. Including an open trade's floating profit would make the
+    # figure change every time the review was regenerated.
+    result.realized_pnl = round(
+        sum(t.realized_pnl or 0.0 for t in trades if t.status is TradeStatus.CLOSED), 8
+    )
+    result.trades_by_session = dict(
+        sorted(
+            Counter(
+                _session_for_trade(t, market_tz) for t in trades
+            ).items(),
+            key=lambda item: item[0].value,
+        )
+    )
+
+    result.explicit_links = sum(
+        1 for t in trades if t.detection_id and t.link_type is LinkType.EXPLICIT
+    )
+    result.inferred_links = infer_links(
+        detections, trades, market_tz=market_tz, window_minutes=infer_window_minutes
+    )
+
+    threshold = classification_threshold or rule.thresholds[0]
+    horizon_id = classification_horizon or rule.horizons[0].id
+    result.classifications = classify_period(
+        detections,
+        data.evaluations,
+        trades,
+        result.inferred_links,
+        threshold=threshold,
+        horizon_id=horizon_id,
+    )
+    return result
+
+
+def _session_for_trade(trade: Trade, market_tz: str) -> SessionName:
+    from zoneinfo import ZoneInfo
+
+    from aureon.config.sessions import session_for
+
+    return session_for(trade.open_time.utc.astimezone(ZoneInfo(market_tz)))
+
+
+def _horizon_outcomes(
+    data: PeriodData, rule: EvaluationRule, result: Aggregates
+) -> list[HorizonOutcome]:
+    """Per-horizon reached counts, from COMPLETE horizons only (§22, §61).
+
+    ``pending_excluded`` and ``invalid_excluded`` are accumulated as a side effect, because
+    the two must be reported together: a reached-N figure without the count it left out
+    invites exactly the misreading Phase 3 exists to prevent.
+    """
+    outcomes: list[HorizonOutcome] = []
+
+    for horizon in rule.horizons:
+        thresholds = {
+            key: ThresholdOutcome(threshold=value)
+            for key, value in zip(rule.threshold_keys, rule.thresholds, strict=True)
+        }
+        mfe_values: list[float] = []
+        mae_values: list[float] = []
+        mfe_first = 0
+        mae_first = 0
+
+        for evaluation in _sorted_evaluations(data.evaluations):
+            # COMPLETE only. The boundary test forbids reading .horizons here.
+            for completed in evaluation.complete_horizons:
+                if completed.horizon_id != horizon.id:
+                    continue
+                for key, entry in thresholds.items():
+                    entry.evaluated += 1
+                    if completed.reached.get(key):
+                        entry.reached += 1
+                if completed.mfe is not None:
+                    mfe_values.append(completed.mfe)
+                if completed.mae is not None:
+                    mae_values.append(completed.mae)
+                if completed.path.value == "mfe_first":
+                    mfe_first += 1
+                elif completed.path.value == "mae_first":
+                    mae_first += 1
+
+        outcomes.append(
+            HorizonOutcome(
+                horizon_id=horizon.id,
+                thresholds=tuple(thresholds[key] for key in rule.threshold_keys),
+                mfe_mean=round(sum(mfe_values) / len(mfe_values), 6) if mfe_values else None,
+                mae_mean=round(sum(mae_values) / len(mae_values), 6) if mae_values else None,
+                mfe_first=mfe_first,
+                mae_first=mae_first,
+            )
+        )
+
+    # Counted once across all horizons, not per horizon, so the figure means "this much
+    # work is still unanswered" rather than something that scales with the rule's shape.
+    for evaluation in data.evaluations.values():
+        result.pending_excluded += len(evaluation.pending_horizons)
+        result.invalid_excluded += len(evaluation.invalid_horizons)
+    return outcomes
+
+
+def _sorted_evaluations(
+    evaluations: dict[str, DetectionEvaluation]
+) -> list[DetectionEvaluation]:
+    return [evaluations[key] for key in sorted(evaluations)]
+
+
+# ── Building the documents ────────────────────────────────────────────────────
+
+
+def build_daily_review(
+    data: PeriodData,
+    rule: EvaluationRule,
+    *,
+    market_date: str,
+    period_start: datetime,
+    period_end: datetime,
+    market_tz: str,
+    infer_window_minutes: int,
+    generated_at: datetime | None = None,
+) -> DailyReview:
+    """One broker trading day (§61)."""
+    totals = aggregate(
+        data, rule, market_tz=market_tz, infer_window_minutes=infer_window_minutes
+    )
+    sessions_covered = tuple(
+        sorted({s.session for s in data.sessions}, key=lambda s: s.value)
+    )
+    return DailyReview(
+        period_start=period_start,
+        period_end=period_end,
+        market_tz=market_tz,
+        generated_at=generated_at,
+        evaluation_rule_id=rule.rule_id,
+        detections_total=totals.detections_total,
+        detections_by_agent=totals.detections_by_agent,
+        detections_by_session=totals.detections_by_session,
+        horizons=tuple(totals.horizons),
+        pending_horizons_excluded=totals.pending_excluded,
+        invalid_horizons_excluded=totals.invalid_excluded,
+        trades_total=totals.trades_total,
+        trades_closed=totals.trades_closed,
+        realized_pnl=totals.realized_pnl,
+        trades_by_session=totals.trades_by_session,
+        explicit_links=totals.explicit_links,
+        inferred_links=tuple(totals.inferred_links),
+        market_date=market_date,
+        sessions_covered=sessions_covered,
+        notes=_classification_note(totals),
+    )
+
+
+def build_weekly_review(
+    data: PeriodData,
+    rule: EvaluationRule,
+    *,
+    iso_year: int,
+    iso_week: int,
+    period_start: datetime,
+    period_end: datetime,
+    market_tz: str,
+    infer_window_minutes: int,
+    daily_review_ids: tuple[str, ...] = (),
+    generated_at: datetime | None = None,
+) -> WeeklyReview:
+    """One trading week, generated after Friday's close (§63)."""
+    totals = aggregate(
+        data, rule, market_tz=market_tz, infer_window_minutes=infer_window_minutes
+    )
+    return WeeklyReview(
+        period_start=period_start,
+        period_end=period_end,
+        market_tz=market_tz,
+        generated_at=generated_at,
+        evaluation_rule_id=rule.rule_id,
+        detections_total=totals.detections_total,
+        detections_by_agent=totals.detections_by_agent,
+        detections_by_session=totals.detections_by_session,
+        horizons=tuple(totals.horizons),
+        pending_horizons_excluded=totals.pending_excluded,
+        invalid_horizons_excluded=totals.invalid_excluded,
+        trades_total=totals.trades_total,
+        trades_closed=totals.trades_closed,
+        realized_pnl=totals.realized_pnl,
+        trades_by_session=totals.trades_by_session,
+        explicit_links=totals.explicit_links,
+        inferred_links=tuple(totals.inferred_links),
+        iso_year=iso_year,
+        iso_week=iso_week,
+        daily_review_ids=tuple(sorted(daily_review_ids)),
+        notes=_classification_note(totals),
+    )
+
+
+def _classification_note(totals: Aggregates) -> str:
+    """The §64 comparison, rendered as a stable one-liner.
+
+    ``unknown`` is named explicitly rather than omitted: a reader who cannot see how much
+    was unresolved cannot judge the rest.
+    """
+    parts = [
+        f"{name.value}={totals.classifications.get(name, 0)}"
+        for name in ExecutionClassification
+    ]
+    return "execution vs observation: " + ", ".join(parts)
+
+
+def excluded_summary(data: PeriodData) -> str:
+    """How much of the period's evaluation work is still unanswered."""
+    pending = sum(len(e.pending_horizons) for e in data.evaluations.values())
+    invalid = sum(len(e.invalid_horizons) for e in data.evaluations.values())
+    complete = sum(len(e.complete_horizons) for e in data.evaluations.values())
+    total = pending + invalid + complete
+    if total == 0:
+        return "no evaluations in this period"
+    return (
+        f"{complete} complete, {pending} pending, {invalid} invalid "
+        f"({100 * complete / total:.0f}% answered)"
+    )
+
+
+def horizon_status_counts(data: PeriodData) -> dict[HorizonStatus, int]:
+    counts = {status: 0 for status in HorizonStatus}
+    for evaluation in data.evaluations.values():
+        counts[HorizonStatus.COMPLETE] += len(evaluation.complete_horizons)
+        counts[HorizonStatus.PENDING] += len(evaluation.pending_horizons)
+        counts[HorizonStatus.INVALID] += len(evaluation.invalid_horizons)
+    return counts
