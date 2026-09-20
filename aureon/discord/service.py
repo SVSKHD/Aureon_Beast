@@ -842,8 +842,62 @@ def build_live_panel(state: Any) -> LivePanel:
         f"last wick {_event(state.last_wick, 'classification')} at "
         f"{_fmt_at((state.last_wick or {}).get('at'))}",
         f"detections today {state.detections_today}",
+        *_context_lines(state, quote),
     ]
     return panel
+
+
+def _context_lines(state: Any, quote: Any) -> list[str]:
+    """The §19 block: value areas, the nodes nearest price, and volatility (9B).
+
+    Rendered whether or not the values exist, like every other row on this panel: a block
+    that appears only when populated changes the panel's shape as data arrives, and a reader
+    cannot tell "no profile yet" from "this panel never had that row".
+
+    Nearest node is computed against the CURRENT bid rather than stored, because "nearest"
+    depends on where price is now and a stored answer would be as old as the last candle.
+    """
+    profiles = getattr(state, "volume_profile", None) or {}
+    volatility = getattr(state, "volatility", None)
+    price = getattr(quote, "bid", None)
+
+    lines = []
+    for scope in ("current_session", "asia"):
+        summary = profiles.get(scope)
+        label = scope.replace("_", " ")
+        if summary is None:
+            lines.append(f"{label} profile {UNKNOWN}")
+            continue
+        lines.append(
+            f"{label} ({summary.scope}) POC {_fmt(summary.poc_price)}"
+            f"  VA {_fmt(summary.value_area_low)}–{_fmt(summary.value_area_high)}"
+        )
+    day = profiles.get("day")
+    if day is not None and price is not None:
+        lines.append(
+            f"nearest HVN {_fmt(_closest(day.hvn, price))}"
+            f"  LVN {_fmt(_closest(day.lvn, price))}"
+        )
+    else:
+        lines.append(f"nearest HVN {UNKNOWN}  LVN {UNKNOWN}")
+
+    if volatility is None:
+        lines.append(f"ATR14 {UNKNOWN}  regime {UNKNOWN}")
+    else:
+        ratio = volatility.session_range_vs_median
+        lines.append(
+            f"ATR14 {_fmt(volatility.atr_14)}"
+            f" ({_fmt(volatility.atr_points, digits=0)} pts)"
+            f"  regime {volatility.regime or UNKNOWN}"
+            + (f" ({ratio:.2f}× median)" if ratio is not None else "")
+        )
+    return lines
+
+
+def _closest(prices: tuple[float, ...], price: float) -> float | None:
+    if not prices:
+        return None
+    return min(prices, key=lambda candidate: (abs(candidate - price), candidate))
 
 
 def _event(payload: dict[str, object] | None, *keys: str) -> str:

@@ -304,6 +304,7 @@ class Observer:
                         .cross_counts(symbol, timeframe)
                         .as_state(),
                         **self._snapshot(symbol, timeframe).as_state(),
+                        **self._market_context(symbol, timeframe),
                     )
                 )
         try:
@@ -312,6 +313,29 @@ class Observer:
             )
         except Exception:  # noqa: BLE001 - state reporting must not stop observation
             log.exception("system_state write failed")
+
+    def _market_context(self, symbol: str, timeframe) -> dict[str, object]:
+        """This symbol's profile summaries and volatility, for the state document (9B).
+
+        Read from the engine's tracker rather than recomputed here, for the same reason the
+        cross counts are: a second computation would eventually disagree with the one the
+        detections were stamped with, and the panel would then describe a market the stored
+        detections never saw.
+        """
+        from aureon.models.profile import ProfileSummary
+
+        tracker = self.engines.for_symbol(symbol).context_tracker(symbol, timeframe)
+        if tracker is None:
+            # No candle has closed for this symbol yet. An absent block is honest; an empty
+            # one would render as a profile that found nothing.
+            return {}
+        return {
+            "volume_profile": {
+                scope: ProfileSummary.of(profile)
+                for scope, profile in tracker.profiles().items()
+            },
+            "volatility": tracker.volatility(),
+        }
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 

@@ -92,6 +92,7 @@ VALUE_MODELS: tuple[type[BaseModel], ...] = (
     m.SymbolLimits,
     m.ResolvedLimits,
     m.ProfileBin,
+    m.ProfileSummary,
     m.VolumeProfile,
     m.VolumeProfileRef,
     m.VolatilityContext,

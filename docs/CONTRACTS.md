@@ -677,6 +677,8 @@ Per symbol/timeframe observation state (§59).
 | `ema_distance` | `float \| null` | no | `None` | fast - slow, in price. Sign is the current bias. |
 | `rsi` | `float \| null` | no | `None` |  |
 | `rsi_zone` | `str \| null` | no | `None` | overbought \| oversold \| neutral, derived from rsi. |
+| `volume_profile` | `dict[str, ProfileSummary]` | no | `dict()` | current_session \| asia \| day -> that scope's summary (9B). |
+| `volatility` | `VolatilityContext \| null` | no | `None` | ATR(14) and the session range vs its median (9B). |
 | `session` | `SessionName \| null` | no | `None` |  |
 | `session_trend` | `str \| null` | no | `None` |  |
 | `session_high` | `float \| null` | no | `None` |  |
@@ -717,6 +719,20 @@ One price bin and the volume estimated to have traded in it.
 |---|---|---|---|---|
 | `price` | `float` | yes | — | The bin's LOWER edge, in price. |
 | `volume` | `float` | yes | — | Estimated tick volume in this bin. |
+
+### ProfileSummary
+
+A profile without its bins, for ``SystemState`` and ``/status`` (9B).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `scope` | `str` | yes | — |  |
+| `poc_price` | `float \| null` | no | `None` |  |
+| `value_area_high` | `float \| null` | no | `None` |  |
+| `value_area_low` | `float \| null` | no | `None` |  |
+| `hvn` | `tuple[float]` | no | `()` |  |
+| `lvn` | `tuple[float]` | no | `()` |  |
+| `total_volume` | `float` | no | `0.0` |  |
 
 ### VolumeProfile
 

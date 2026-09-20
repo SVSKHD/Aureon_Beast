@@ -29,7 +29,7 @@ Gaps (weekend discontinuity):
 
 | property | value |
 |---|---|
-| agent | `ema_cross` v2.0.0 |
+| agent | `ema_cross` v2.1.0 |
 | fast / slow EMA | 20 / 50 |
 | RSI period | 14 (context only, never a gate) |
 | warm-up bars | 150 (slow × 3) |
@@ -75,12 +75,12 @@ alone -- adding an agent never changes another's output.
 
 | agent | version | window | detections |
 |---|---|---|---|
-| `ema_cross` | 2.0.0 | 151 | 29 |
-| `rsi` | 1.0.0 | 44 | 110 |
-| `session_trend` | 1.0.0 | 98 | 19 |
-| `wick` | 1.0.0 | 1 | 235 |
-| `liquidity` | 1.0.0 | 583 | 528 |
-| `breakout` | 1.0.0 | 583 | 251 |
+| `ema_cross` | 2.1.0 | 151 | 29 |
+| `rsi` | 1.1.0 | 44 | 110 |
+| `session_trend` | 1.1.0 | 98 | 19 |
+| `wick` | 1.1.0 | 1 | 235 |
+| `liquidity` | 1.1.0 | 583 | 528 |
+| `breakout` | 1.1.0 | 583 | 251 |
 
 ### Crosses, sweeps and breakouts per session
 

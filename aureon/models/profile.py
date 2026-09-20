@@ -120,6 +120,44 @@ class VolumeProfile(AureonModel):
         return not self.bins or self.total_volume <= 0
 
 
+class ProfileSummary(AureonModel):
+    """A profile without its bins, for ``SystemState`` and ``/status`` (9B).
+
+    A separate model rather than a ``VolumeProfile`` with ``bins=()``, because the two say
+    different things. An empty ``bins`` tuple on a profile means "nothing traded"; this model
+    means "the shape is not carried here". Confusing the two is how a panel comes to report a
+    quiet session for a busy one.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    scope: str
+    poc_price: float | None = None
+    value_area_high: float | None = None
+    value_area_low: float | None = None
+    hvn: tuple[float, ...] = ()
+    lvn: tuple[float, ...] = ()
+    total_volume: float = Field(default=0.0, ge=0)
+
+    @model_validator(mode="after")
+    def _known_scope(self) -> ProfileSummary:
+        if self.scope not in PROFILE_SCOPES:
+            raise ValueError(f"unknown profile scope {self.scope!r}")
+        return self
+
+    @classmethod
+    def of(cls, profile: VolumeProfile) -> ProfileSummary:
+        return cls(
+            scope=profile.scope,
+            poc_price=profile.poc_price,
+            value_area_high=profile.value_area_high,
+            value_area_low=profile.value_area_low,
+            hvn=profile.hvn,
+            lvn=profile.lvn,
+            total_volume=profile.total_volume,
+        )
+
+
 class VolumeProfileRef(AureonModel):
     """What a detection records about the profile that existed when it fired (9B).
 

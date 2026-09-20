@@ -475,3 +475,103 @@ def test_every_section_59_label_reaches_the_screen() -> None:
     assert len(screen.services) == 4
     # Provenance
     assert "last updated" in screen.updated_line
+
+
+# ── 9B: the volume-profile and volatility block ───────────────────────────────
+
+
+def profile_summary(scope: str, **overrides):
+    from aureon.models.profile import ProfileSummary
+
+    base = dict(
+        scope=scope,
+        poc_price=2400.50,
+        value_area_high=2401.00,
+        value_area_low=2400.00,
+        hvn=(2400.50, 2402.00),
+        lvn=(2401.50,),
+        total_volume=12_345.0,
+    )
+    return ProfileSummary(**(base | overrides))
+
+
+def volatility_context(**overrides):
+    from aureon.config.symbol_tuning import VOLATILITY_BANDS_VERSION
+    from aureon.models.profile import VolatilityContext
+
+    base = dict(
+        atr_14=1.25,
+        atr_points=125.0,
+        candle_range_pct_of_atr=0.8,
+        session_range=9.0,
+        session_range_vs_median=1.8,
+        regime="high",
+        bands_version=VOLATILITY_BANDS_VERSION,
+    )
+    return VolatilityContext(**(base | overrides))
+
+
+def state_with_context(**overrides):
+    from aureon.models.enums import MarketState, Timeframe
+    from aureon.models.market import QuoteSnapshot
+    from aureon.models.system import SymbolState
+
+    base = dict(
+        symbol="XAUUSD",
+        timeframe=Timeframe.M5,
+        market_state=MarketState.OPEN,
+        last_quote=QuoteSnapshot(symbol="XAUUSD", bid=2401.40, ask=2401.70, point=0.01),
+        volume_profile={
+            "current_session": profile_summary("london"),
+            "asia": profile_summary("asia", poc_price=2399.00),
+            "day": profile_summary("day"),
+        },
+        volatility=volatility_context(),
+    )
+    return SymbolState(**(base | overrides))
+
+
+def test_the_panel_shows_both_value_areas_and_the_volatility_regime() -> None:
+    """§19's block: what a trader would otherwise read off a chart."""
+    from aureon.discord.service import build_live_panel
+
+    panel = build_live_panel(state_with_context())
+    text = "\n".join(panel.lines)
+    assert "current session (london) POC 2400.50" in text
+    assert "VA 2400.00–2401.00" in text
+    assert "asia (asia) POC 2399.00" in text
+    assert "ATR14 1.25 (125 pts)" in text
+    assert "regime high (1.80× median)" in text
+
+
+def test_the_nearest_nodes_are_measured_from_the_current_bid() -> None:
+    """"Nearest" depends on where price is NOW; a stored answer would be a candle old."""
+    from aureon.discord.service import build_live_panel
+
+    text = "\n".join(build_live_panel(state_with_context()).lines)
+    # bid 2401.40: the nearer HVN is 2402.00, and the only LVN is 2401.50.
+    assert "nearest HVN 2402.00  LVN 2401.50" in text
+
+
+def test_the_block_renders_its_rows_even_with_no_profile_at_all() -> None:
+    """A block that appears only when populated changes the panel's shape as data arrives."""
+    from aureon.discord.service import build_live_panel
+
+    panel = build_live_panel(state_with_context(volume_profile={}, volatility=None))
+    text = "\n".join(panel.lines)
+    assert "current session profile —" in text
+    assert "asia profile —" in text
+    assert "nearest HVN —  LVN —" in text
+    assert "ATR14 —  regime —" in text
+
+
+def test_an_unwarmed_atr_reads_as_unknown_rather_than_zero() -> None:
+    from aureon.discord.service import build_live_panel
+
+    state = state_with_context(
+        volatility=volatility_context(atr_14=None, atr_points=None, regime=None,
+                                      bands_version=None, session_range_vs_median=None)
+    )
+    text = "\n".join(build_live_panel(state).lines)
+    assert "ATR14 —" in text
+    assert "regime —" in text
