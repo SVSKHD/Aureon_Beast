@@ -140,6 +140,9 @@ def status_embed(screen: StatusScreen) -> Any:
         )
     if screen.review_summary is not None:
         embed.add_field(name="Latest review", value=screen.review_summary, inline=False)
+    # §59's last line. In the footer rather than a field: it is the provenance of
+    # everything above it, and a reader who doubts a number looks here.
+    embed.set_footer(text=screen.updated_line)
     return embed
 
 
