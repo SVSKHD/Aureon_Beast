@@ -206,7 +206,7 @@ def build() -> str:
         f"| `{paths.CONTROL_REQUESTS}` | `control_id` | `ControlRequest` |",
         f"| `{paths.AUDIT_LOGS}` | `audit_id` | `AuditRecord` |",
         f"| `{paths.HEARTBEATS}` | `{{service}}` | `Heartbeat` |",
-        f"| `{paths.SYSTEM_STATE}` | `{paths.SYSTEM_STATE_DOC}` | `SystemState` |",
+        f"| `{paths.SYSTEM_STATE}` | `{{symbol}}_{{timeframe}}` | `SystemState` |",
         f"| `{paths.SETTINGS}` | `{paths.EXECUTION_SETTINGS_DOC}` | `ExecutionSettings` |",
         f"| `{paths.DAILY_REVIEWS}` | `{{market_date}}` | `DailyReview` |",
         f"| `{paths.WEEKLY_REVIEWS}` | `{{iso_year}}-W{{iso_week}}` | `WeeklyReview` |",

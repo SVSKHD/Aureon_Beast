@@ -94,7 +94,11 @@ ALL_COLLECTIONS: tuple[str, ...] = (
 )
 
 # ── Fixed document ids ────────────────────────────────────────────────────────
-SYSTEM_STATE_DOC = "current"
+#: The whole-system document id, used until Phase 9A split ``system_state`` per symbol.
+#: Kept named so the read path can SKIP it: a deployment that ran before the split still
+#: has one, and merging it back in would report every symbol twice -- once live, once
+#: frozen at whenever the split happened.
+LEGACY_SYSTEM_STATE_DOC = "current"
 EXECUTION_SETTINGS_DOC = "execution"
 
 # Service names used as heartbeat document ids (§67).
@@ -166,8 +170,20 @@ def heartbeat_path(service: str) -> str:
     return f"{HEARTBEATS}/{_require(service, 'service')}"
 
 
-def system_state_path() -> str:
-    return f"{SYSTEM_STATE}/{SYSTEM_STATE_DOC}"
+def system_state_doc_id(symbol: str, timeframe: object) -> str:
+    """``XAUUSD_M5``. One document per symbol and timeframe (9A).
+
+    Per symbol rather than one document for everything, for two reasons that only appear
+    with a second symbol: the write throttle is per document, so gold's candle close would
+    otherwise suppress silver's state for the next few seconds, and a reader that wants one
+    symbol should not have to read every symbol to get it.
+    """
+    frame = getattr(timeframe, "value", timeframe)
+    return f"{_require(symbol, 'symbol')}_{_require(str(frame), 'timeframe')}"
+
+
+def system_state_path(symbol: str, timeframe: object) -> str:
+    return f"{SYSTEM_STATE}/{system_state_doc_id(symbol, timeframe)}"
 
 
 def execution_settings_path() -> str:

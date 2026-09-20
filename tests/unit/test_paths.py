@@ -27,8 +27,27 @@ def test_execution_settings_live_at_settings_execution() -> None:
     assert paths.execution_settings_path() == f"{paths.SETTINGS}/execution"
 
 
-def test_system_state_is_a_single_document() -> None:
-    assert paths.system_state_path() == f"{paths.SYSTEM_STATE}/current"
+def test_system_state_is_one_document_per_symbol() -> None:
+    """Per symbol since 9A. A shared document means gold's candle close resets the write
+    throttle and suppresses silver's state for the next few seconds."""
+    from aureon.models.enums import Timeframe
+
+    assert (
+        paths.system_state_path("XAUUSD", Timeframe.M5)
+        == f"{paths.SYSTEM_STATE}/XAUUSD_M5"
+    )
+    assert paths.system_state_path("XAGUSD", "M5") == f"{paths.SYSTEM_STATE}/XAGUSD_M5"
+    assert paths.system_state_doc_id("XAGUSD", Timeframe.M5) == "XAGUSD_M5"
+
+
+def test_a_symbol_or_timeframe_must_be_named() -> None:
+    """There is no "current" document any more, so there is no default to fall back to."""
+    for bad in (("", "M5"), ("XAUUSD", "")):
+        try:
+            paths.system_state_path(*bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"expected a ValueError for {bad}")
 
 
 def test_evaluation_path_pairs_detection_with_rule() -> None:
@@ -77,7 +96,7 @@ def test_every_path_carries_the_prefix() -> None:
         paths.control_request_path("c1"),
         paths.audit_path("a1"),
         paths.heartbeat_path("observer"),
-        paths.system_state_path(),
+        paths.system_state_path("XAUUSD", "M5"),
         paths.execution_settings_path(),
         paths.symbol_spec_path("XAUUSD"),
         paths.daily_review_path("2026-09-18"),

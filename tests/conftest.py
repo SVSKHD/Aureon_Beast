@@ -181,9 +181,14 @@ class InMemoryFirestore:
 
 
 class _FakeSnapshot:
-    def __init__(self, data: dict[str, Any] | None) -> None:
+    def __init__(self, data: dict[str, Any] | None, doc_id: str | None = None) -> None:
         self._data = data
         self.exists = data is not None
+        # Real snapshots carry their document id, and code reads it: the detection
+        # repository logs it for an unreadable document, and the state repository uses it
+        # to skip the pre-9A whole-system document. Without it here, both paths are
+        # exercised against something the real client does not look like.
+        self.id = doc_id
 
     def to_dict(self) -> dict[str, Any] | None:
         return dict(self._data) if self._data is not None else None
@@ -204,7 +209,9 @@ class _FakeDoc:
     def get(self, transaction: Any | None = None) -> _FakeSnapshot:
         # `transaction` accepted and ignored: reads inside a transaction see the same
         # store, which is exactly the no-isolation caveat above.
-        return _FakeSnapshot(self._store.docs.get(self._path))
+        return _FakeSnapshot(
+            self._store.docs.get(self._path), self._path.rsplit("/", 1)[-1]
+        )
 
     def delete(self) -> None:
         self._store.docs.pop(self._path, None)
@@ -244,16 +251,16 @@ class _FakeCollection:
 
     def stream(self) -> list[_FakeSnapshot]:
         rows = [
-            data
+            (path.rsplit("/", 1)[-1], data)
             for path, data in self._store.docs.items()
             if path.startswith(f"{self._path}/")
         ]
         for field, op, value in self._filters:
             if op == "==":
-                rows = [r for r in rows if r.get(field) == value]
+                rows = [(i, r) for i, r in rows if r.get(field) == value]
         if self._limit is not None:
             rows = rows[: self._limit]
-        return [_FakeSnapshot(r) for r in rows]
+        return [_FakeSnapshot(data, doc_id) for doc_id, data in rows]
 
 
 @pytest.fixture

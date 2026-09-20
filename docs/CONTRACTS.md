@@ -25,7 +25,7 @@ test run and production and could never be checked in.
 | `aureon_beast_control_requests` | `control_id` | `ControlRequest` |
 | `aureon_beast_audit_logs` | `audit_id` | `AuditRecord` |
 | `aureon_beast_heartbeats` | `{service}` | `Heartbeat` |
-| `aureon_beast_system_state` | `current` | `SystemState` |
+| `aureon_beast_system_state` | `{symbol}_{timeframe}` | `SystemState` |
 | `aureon_beast_settings` | `execution` | `ExecutionSettings` |
 | `aureon_beast_daily_reviews` | `{market_date}` | `DailyReview` |
 | `aureon_beast_weekly_reviews` | `{iso_year}-W{iso_week}` | `WeeklyReview` |
