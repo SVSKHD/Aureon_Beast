@@ -11,7 +11,8 @@ EMULATOR_ENV  = FIRESTORE_EMULATOR_HOST=$(EMULATOR_HOST) \
                 AUREON_COLLECTION_PREFIX=aureon_test \
                 no_grpc_proxy=127.0.0.1,localhost
 
-.PHONY: help emulator emulator-stop test test-fast test-emulator contracts baseline lint check
+.PHONY: help emulator emulator-stop test test-fast test-emulator contracts baseline
+.PHONY: drills preflight lint check
 
 help:
 	@grep -E '^[a-z-]+:.*?##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -31,6 +32,14 @@ test-emulator: ## the failure-injection suite, against a running emulator
 
 test: ## the whole suite
 	$(EMULATOR_ENV) pytest -q
+
+drills: ## rehearse the nine execution drills against FakeBroker + the emulator (P-4)
+	$(EMULATOR_ENV) AUREON_FIREBASE_PROJECT_ID=aureon-test \
+	    python scripts/demo_drills.py --all --broker fake
+
+preflight: ## the pre-session checks, against the emulator (no terminal)
+	$(EMULATOR_ENV) AUREON_FIREBASE_PROJECT_ID=aureon-test \
+	    python scripts/preflight.py --skip-mt5
 
 contracts: ## regenerate docs/CONTRACTS.md
 	python scripts/gen_contracts.py
