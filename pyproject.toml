@@ -10,6 +10,8 @@ requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.6",
     "pandas>=2.1",
+    # Parquet for the live-candle archive the live-vs-replay comparison reads (§82).
+    "pyarrow>=14",
     "google-cloud-firestore>=2.14",
     "firebase-admin>=6.4",
     "python-dotenv>=1.0",

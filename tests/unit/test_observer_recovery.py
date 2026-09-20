@@ -22,6 +22,7 @@ from aureon.models.market import Candle
 from aureon.outbox.local_outbox import LocalOutbox
 from aureon.outbox.outbox_worker import OutboxWorker
 from aureon.services.observer_state import ObserverState
+from aureon.storage import paths
 from aureon.storage.detection_repository import DetectionRepository
 from main_observer import Observer
 from tests.conftest import MARKET_TZ, FakeLiveProvider, InMemoryFirestore, cross_agent
@@ -80,9 +81,13 @@ def kill(observer: Observer, outbox: LocalOutbox) -> None:
 
 
 def stored_ids(firestore: InMemoryFirestore) -> list[str]:
+    # From paths.DETECTIONS, not a literal: collections are prefixed (decision 111), and a
+    # hardcoded "detections/" here matched nothing once the prefix landed. The negative
+    # assertions then passed vacuously (empty vs empty) while the positive one failed --
+    # which is how a stale literal in a test helper wastes an afternoon.
     return sorted(
         str(doc["detection_id"]) for path, doc in firestore.docs.items()
-        if path.startswith("detections/")
+        if path.startswith(f"{paths.DETECTIONS}/")
     )
 
 

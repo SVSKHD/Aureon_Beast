@@ -287,9 +287,20 @@ def test_no_bare_collection_literal_outside_paths() -> None:
     path does not trip it while a real ``client.collection("trades")`` does.
     """
     paths_module = AUREON / "storage" / "paths.py"
+    # tests/ is scanned too. A stale literal in a test HELPER is worse than one in
+    # production code: it matches nothing, so the negative assertions pass vacuously and
+    # only a positive one fails -- if there happens to be one.
+    scanned = [*AUREON.rglob("*.py"), *(REPO_ROOT / "tests").rglob("*.py")]
+    # paths.py builds the names; its own test has to pass bare ones to test the builder;
+    # this file lists them to check for them. Those three, and nothing else.
+    exempt = {
+        paths_module,
+        Path(__file__).resolve(),
+        (REPO_ROOT / "tests" / "unit" / "test_paths.py").resolve(),
+    }
     offenders: list[str] = []
-    for path in sorted(AUREON.rglob("*.py")):
-        if path == paths_module:
+    for path in sorted(scanned):
+        if path.resolve() in exempt:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):

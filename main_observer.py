@@ -41,6 +41,7 @@ from aureon.agents.wick_agent import WickAgent
 from aureon.config import AureonConfig
 from aureon.config.sessions import session_for
 from aureon.data.base_provider import BaseMarketDataProvider
+from aureon.data.live_candle_archive import LiveCandleArchive
 from aureon.engine.analysis_engine import AnalysisEngine
 from aureon.engine.levels import LevelTracker
 from aureon.engine.market_engine import MarketEngine
@@ -88,6 +89,7 @@ class Observer:
         evaluation_repository: object | None = None,
         outcome_tracker: OutcomeTracker | None = None,
         heartbeat: HeartbeatService | None = None,
+        candle_archive: LiveCandleArchive | None = None,
         agents: list[BaseAgent] | None = None,
     ) -> None:
         self.config = config
@@ -124,6 +126,7 @@ class Observer:
         # /status reports the SAME indicator values that were stored, never a
         # recomputation that could disagree with them (§59, §66).
         self._snapshots: dict[tuple[str, Timeframe], MarketSnapshot] = {}
+        self.candle_archive = candle_archive
 
     # ── Detection sink ────────────────────────────────────────────────────────
 
@@ -230,6 +233,13 @@ class Observer:
             low=candle.low,
             session=session_for(candle.open_time.market),
         )
+        if self.candle_archive is not None:
+            # §82: record what the broker actually served, so a live-vs-replay
+            # comparison can replay these exact bytes rather than a fresh fetch.
+            try:
+                self.candle_archive.add(candle)
+            except Exception:  # noqa: BLE001 - archiving must never stop observing
+                log.exception("could not archive %s", candle.open_time.utc)
         self._advance_evaluations(candle)
         # Saved per candle, not per poll: a crash between two candles must not
         # re-process the earlier one.
@@ -477,6 +487,15 @@ class Observer:
         """Stop cleanly, leaving nothing queued if Firestore is reachable."""
         log.info("observer shutting down")
         self.market_engine.stop()
+        if self.candle_archive is not None:
+            # Flushed here, not per candle: rewriting a parquet file every five minutes
+            # would cost more than the archive is worth. A crash therefore loses the
+            # current day's tail, which the merge on the next flush recovers.
+            try:
+                for path in self.candle_archive.flush_all():
+                    log.info("flushed live candles to %s", path)
+            except Exception:  # noqa: BLE001
+                log.exception("could not flush the live-candle archive")
         if self.heartbeat is not None:
             self.heartbeat.stop()
         self.worker.stop()
@@ -561,6 +580,7 @@ def build_observer(config: AureonConfig) -> Observer:
         outcome_tracker=OutcomeTracker(
             get_rule(config.evaluation_rule_id), market_tz=config.market_tz
         ),
+        candle_archive=LiveCandleArchive(),
         heartbeat=HeartbeatService(heartbeat_repo, paths.SERVICE_OBSERVER),
     )
 
