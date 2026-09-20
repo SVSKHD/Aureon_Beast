@@ -41,5 +41,17 @@ test suite runs on any OS against a fake broker.
 ## Rules and status
 
 - `CLAUDE.md` — standing rules. Read before any change.
-- `docs/PHASES.md` — phase plan, gates, and the cross-phase checklist.
+- `docs/PHASES.md` — phase plan, gates, the cross-phase checklist, and an **Evidence**
+  column derived from the files that actually exist (`make phases`).
 - `docs/PHASE0_STATUS.md` — what has landed and what Phases 2–8 are waiting on.
+
+## Running it
+
+- `docs/RUNBOOK.md` — **start here to operate it.** What to type, what each tool refuses
+  to do, and what to do when something is wrong at an hour when reading source is not an
+  option.
+- `docs/MT5_SESSION_CHECKLIST.md` — the manual half of one observation session.
+- `docs/DEMO_EXECUTION_CHECKLIST.md` — the nine execution drills, and the three that can
+  only be done by hand.
+- `docs/evidence/` — one generated, committed file per session. Nothing here is written by
+  hand.
