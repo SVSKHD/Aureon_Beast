@@ -49,6 +49,28 @@ DEFAULT_MAX_CLOSE_POSITION = 0.35
 DEFAULT_MIN_RANGE_POINTS = 20.0
 DEFAULT_FLAT_POINTS = 50.0
 
+# ── 9B: volume profile and volatility context ────────────────────────────────
+# Also placeholders, and worth saying so twice: a bin width decides what a "node" is, and
+# a regime band decides what "high volatility" means. Both are choices about resolution,
+# not measurements of the market.
+#
+# The bin width is in POINTS, so it is as instrument-specific as every other distance
+# here: 10 points is $0.10 of gold and $0.01 of silver. Too wide and the POC is the
+# session's mid; too narrow and every candle is its own node.
+DEFAULT_VOLUME_BIN_POINTS = 10.0
+#: The share of a scope's volume the value area covers (§19's 70%). Not per symbol -- it
+#: is the definition of a value area, not a parameter of an instrument.
+VALUE_AREA_FRACTION = 0.70
+#: Session range as a multiple of the 20-day median, below which the regime reads `low`
+#: and above which it reads `high`. Dimensionless ratios, so they are NOT scaled per
+#: symbol -- a session half its usual size means the same thing on any instrument.
+DEFAULT_LOW_VOLATILITY_RATIO = 0.70
+DEFAULT_HIGH_VOLATILITY_RATIO = 1.40
+#: Bumped when any regime band changes, so a stored `VolatilityContext` says which bands
+#: produced its verdict. A regime is a label, and a label whose definition moved silently
+#: is worse than no label (§21's discipline, applied to context rather than to outcomes).
+VOLATILITY_BANDS_VERSION = 1
+
 
 @dataclass(frozen=True)
 class SymbolTuning:
@@ -76,6 +98,11 @@ class SymbolTuning:
 
     # Session trend (§18)
     flat_points: float = DEFAULT_FLAT_POINTS
+
+    # Volume profile and volatility (9B, §19)
+    volume_bin_points: float = DEFAULT_VOLUME_BIN_POINTS
+    low_volatility_ratio: float = DEFAULT_LOW_VOLATILITY_RATIO
+    high_volatility_ratio: float = DEFAULT_HIGH_VOLATILITY_RATIO
 
     #: Set when any value differs from the shipped default, so a reader of a params
     #: snapshot can tell a tuned symbol from an untuned one without diffing.
@@ -137,6 +164,12 @@ OVERRIDES: dict[str, dict[str, float]] = {
         "min_close_beyond_points": 1.25,
         "min_range_points": 2.5,
         "flat_points": 6.25,
+        # 10 points of gold is $0.10, 4.2e-5 of price; the same fraction of ~$30 is
+        # $0.00125, or 1.25 ticks. Rounded to 2 rather than clamped to 1: a one-tick bin
+        # would make every candle its own node on an instrument whose whole daily range is
+        # ~600 ticks, and a profile with 600 bins has no peaks to speak of. The ratios
+        # (low/high volatility) are dimensionless and deliberately unscaled.
+        "volume_bin_points": 2.0,
     },
 }
 

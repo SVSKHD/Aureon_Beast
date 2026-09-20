@@ -707,6 +707,63 @@ The limits that actually apply to one symbol, with no ``None`` left.
 | `max_deviation_points` | `int` | yes | — |  |
 | `overridden` | `tuple[str]` | no | `()` |  |
 
+### ProfileBin
+
+One price bin and the volume estimated to have traded in it.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `price` | `float` | yes | — | The bin's LOWER edge, in price. |
+| `volume` | `float` | yes | — | Estimated tick volume in this bin. |
+
+### VolumeProfile
+
+Estimated volume by price over one scope (9B, §19).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `symbol` | `str` | yes | — |  |
+| `timeframe` | `Timeframe` | yes | — |  |
+| `scope` | `str` | yes | — | One of ('asia', 'london', 'new_york', 'day', 'rolling_24h', 'previous_session'). |
+| `start_utc` | `AwareDatetime` | yes | — |  |
+| `end_utc` | `AwareDatetime` | yes | — |  |
+| `bin_points` | `float` | yes | — | Bin width in POINTS. Part of the record because the POC depends on it. |
+| `poc_price` | `float \| null` | no | `None` | Lower edge of the highest-volume bin, or None if empty. |
+| `value_area_high` | `float \| null` | no | `None` |  |
+| `value_area_low` | `float \| null` | no | `None` | The band around the POC holding 70% of estimated volume (§19). |
+| `hvn` | `tuple[float]` | no | `()` |  |
+| `lvn` | `tuple[float]` | no | `()` |  |
+| `total_volume` | `float` | no | `0.0` |  |
+| `bins` | `tuple[ProfileBin]` | no | `()` | At most 200, coarsest-first. |
+
+### VolumeProfileRef
+
+What a detection records about the profile that existed when it fired (9B).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `scope` | `str` | yes | — |  |
+| `poc_price` | `float \| null` | no | `None` |  |
+| `va_high` | `float \| null` | no | `None` |  |
+| `va_low` | `float \| null` | no | `None` |  |
+| `price_vs_va` | `str \| null` | no | `None` | above \| inside \| below, at the detection's price. |
+| `nearest_lvn` | `float \| null` | no | `None` |  |
+| `nearest_hvn` | `float \| null` | no | `None` |  |
+
+### VolatilityContext
+
+How big this candle, and this session, are by recent standards (9B).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `atr_14` | `float \| null` | no | `None` | ATR(14) in PRICE. |
+| `atr_points` | `float \| null` | no | `None` | The same, in points. |
+| `candle_range_pct_of_atr` | `float \| null` | no | `None` | This candle's range as a fraction of ATR(14). |
+| `session_range` | `float \| null` | no | `None` | High-low of the session so far, in price. |
+| `session_range_vs_median` | `float \| null` | no | `None` | That range over the 20-day median for this session. |
+| `regime` | `str \| null` | no | `None` | One of ('low', 'normal', 'high'). |
+| `bands_version` | `int \| null` | no | `None` | Which regime bands produced `regime` (9B). |
+
 ---
 
 ## Enums

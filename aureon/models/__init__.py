@@ -83,6 +83,15 @@ from aureon.models.identity import (
     execution_attempt_id,
 )
 from aureon.models.market import Candle, QuoteSnapshot, SymbolInfo
+from aureon.models.profile import (
+    MAX_PROFILE_BINS,
+    PROFILE_SCOPES,
+    VOLATILITY_REGIMES,
+    ProfileBin,
+    VolatilityContext,
+    VolumeProfile,
+    VolumeProfileRef,
+)
 from aureon.models.review import (
     DailyReview,
     HorizonOutcome,
@@ -201,6 +210,13 @@ __all__ = [
     "Candle",
     "QuoteSnapshot",
     "SymbolInfo",
+    "MAX_PROFILE_BINS",
+    "PROFILE_SCOPES",
+    "VOLATILITY_REGIMES",
+    "ProfileBin",
+    "VolatilityContext",
+    "VolumeProfile",
+    "VolumeProfileRef",
     "DailyReview",
     "HorizonOutcome",
     "InferredLink",
