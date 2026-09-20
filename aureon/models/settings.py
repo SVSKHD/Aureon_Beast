@@ -61,6 +61,35 @@ class ResolvedLimits(AureonModel):
     overridden: tuple[str, ...] = ()
 
 
+#: Which agents Discord announces by default (9C). The four a human watching a chart would
+#: notice: a cross, a sweep, a break and a rejection wick. `rsi` and `session_trend` are
+#: deliberately absent -- they are context, and an alert for every RSI reading is an alert
+#: for nothing.
+DEFAULT_NOTIFIED_AGENTS: tuple[str, ...] = ("ema_cross", "wick", "liquidity", "breakout")
+
+
+class NotificationSettings(AureonDocument):
+    """What Discord announces, held at ``settings/notifications`` (9C).
+
+    In Firestore rather than the environment for the same reason `trading_enabled` is
+    (decision 11): silencing a noisy agent at 02:00 must take effect on the next detection,
+    without a redeploy. Nothing here can enable trading or change what is detected -- an
+    agent's output is stored either way, and this decides only whether a message is posted.
+    """
+
+    enabled_kinds: tuple[str, ...] = Field(
+        default=DEFAULT_NOTIFIED_AGENTS,
+        description="agent_name values Discord posts an embed for (9C).",
+    )
+    #: False silences every detection embed without forgetting which kinds were enabled.
+    detections_enabled: bool = True
+    updated_at: UtcDatetime | None = None
+    updated_by: str | None = None
+
+    def announces(self, agent_name: str) -> bool:
+        return self.detections_enabled and agent_name in self.enabled_kinds
+
+
 class ExecutionSettings(AureonDocument):
     """Execution gates and limits (§56, §84)."""
 

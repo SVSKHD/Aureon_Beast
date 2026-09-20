@@ -226,6 +226,15 @@ class InMemoryFirestore:
         return _FakeTransaction(self)
 
 
+class FakeAlreadyExists(Exception):
+    """What the double raises for a ``create`` over an existing document (9C).
+
+    Named for the Firestore error it stands in for, because the repository matches on the
+    exception's NAME rather than importing ``google.api_core`` -- which would make a
+    Firestore package a hard dependency of the module these doubles exercise.
+    """
+
+
 class _FakeSnapshot:
     def __init__(self, data: dict[str, Any] | None, doc_id: str | None = None) -> None:
         self._data = data
@@ -251,6 +260,17 @@ class _FakeDoc:
             raise ConnectionError("simulated firestore failure")
         self._store.docs[self._path] = dict(payload)
         self._store.writes += 1
+
+    def create(self, payload: dict[str, Any]) -> None:
+        """Write only if the document does not exist, as the real client does.
+
+        Needed by the notification repository, whose whole exactly-once mechanism is a
+        create that fails on an existing document (9C). A double whose ``create`` behaved
+        like ``set`` would make the dedup tests pass while proving nothing.
+        """
+        if self._path in self._store.docs:
+            raise FakeAlreadyExists(self._path)
+        self.set(payload)
 
     def get(self, transaction: Any | None = None) -> _FakeSnapshot:
         # `transaction` accepted and ignored: reads inside a transaction see the same

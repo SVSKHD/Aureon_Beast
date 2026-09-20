@@ -76,6 +76,9 @@ SETTINGS = collection("settings")
 SYMBOL_SPECS = collection("symbol_specs")
 DAILY_REVIEWS = collection("daily_reviews")
 WEEKLY_REVIEWS = collection("weekly_reviews")
+# 9C: what Discord has already said, and what a human asked to be told.
+NOTIFICATIONS = collection("notifications")
+ALERTS = collection("alerts")
 
 ALL_COLLECTIONS: tuple[str, ...] = (
     DETECTIONS,
@@ -91,6 +94,8 @@ ALL_COLLECTIONS: tuple[str, ...] = (
     SYMBOL_SPECS,
     DAILY_REVIEWS,
     WEEKLY_REVIEWS,
+    NOTIFICATIONS,
+    ALERTS,
 )
 
 # ── Fixed document ids ────────────────────────────────────────────────────────
@@ -100,6 +105,8 @@ ALL_COLLECTIONS: tuple[str, ...] = (
 #: frozen at whenever the split happened.
 LEGACY_SYSTEM_STATE_DOC = "current"
 EXECUTION_SETTINGS_DOC = "execution"
+#: ``settings/notifications`` -- which agents Discord announces (9C).
+NOTIFICATION_SETTINGS_DOC = "notifications"
 
 # Service names used as heartbeat document ids (§67).
 SERVICE_OBSERVER = "observer"
@@ -198,6 +205,30 @@ def symbol_spec_path(symbol: str) -> str:
     at execution time.
     """
     return f"{SYMBOL_SPECS}/{_require(symbol, 'symbol')}"
+
+
+def notification_settings_path() -> str:
+    """``settings/notifications`` (9C)."""
+    return f"{SETTINGS}/{NOTIFICATION_SETTINGS_DOC}"
+
+
+def notification_id(kind: str, ref_id: str) -> str:
+    """``{kind}__{ref_id}`` -- the id that makes a send exactly-once (9C).
+
+    Derived from what the message is ABOUT rather than auto-generated, so a bot that dies
+    between posting and recording, then restarts, finds the document instead of posting
+    again. The two parts are joined by a double underscore because a detection_id is a hex
+    digest and an alert id is ours: neither contains one, so the id cannot be ambiguous.
+    """
+    return f"{_require(kind, 'kind')}__{_require(ref_id, 'ref_id')}"
+
+
+def notification_path(kind: str, ref_id: str) -> str:
+    return f"{NOTIFICATIONS}/{notification_id(kind, ref_id)}"
+
+
+def alert_path(alert_id: str) -> str:
+    return f"{ALERTS}/{_require(alert_id, 'alert_id')}"
 
 
 def daily_review_doc_id(market_date: str, symbol: str | None = None) -> str:

@@ -331,6 +331,43 @@ One trading week, generated after Friday's close (§63).
 | `iso_week` | `int` | yes | — |  |
 | `daily_review_ids` | `tuple[str]` | no | `()` |  |
 
+### PriceAlert
+
+A level a human asked to be told about (9C, §71).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
+| `alert_id` | `str` | yes | — |  |
+| `symbol` | `str` | yes | — |  |
+| `level` | `float` | yes | — |  |
+| `side` | `str` | yes | — | One of ('above', 'below'). |
+| `requested_by` | `str` | yes | — | Discord user id -- the only recipient. |
+| `note` | `str \| null` | no | `None` | The human's own words, echoed back when it fires. |
+| `status` | `PriceAlertStatus` | no | `'armed'` |  |
+| `created_at` | `AwareDatetime \| null` | no | `None` |  |
+| `expires_at` | `AwareDatetime \| null` | no | `None` |  |
+| `fired_at` | `AwareDatetime \| null` | no | `None` |  |
+| `fired_price` | `float \| null` | no | `None` |  |
+| `fired_snapshot` | `dict[str, object]` | no | `dict()` | What the market looked like when it crossed, frozen by the observer. Rendered by Discord as-is; never recomputed (9C). |
+| `cancelled_by` | `str \| null` | no | `None` |  |
+
+### Notification
+
+One thing Discord said, so it cannot say it twice (9C).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
+| `notification_id` | `str` | yes | — | {kind}__{ref_id}; see paths.notification_id. |
+| `kind` | `NotificationKind` | yes | — |  |
+| `symbol` | `str` | yes | — |  |
+| `ref_id` | `str` | yes | — | detection_id or alert_id -- what this is about. |
+| `channel_id` | `str` | yes | — |  |
+| `sent_at` | `AwareDatetime \| null` | no | `None` |  |
+| `status` | `NotificationStatus` | no | `'sent'` |  |
+| `failure_message` | `str \| null` | no | `None` |  |
+
 ---
 
 ## Embedded value models
@@ -710,6 +747,18 @@ The limits that actually apply to one symbol, with no ``None`` left.
 | `max_spread_points` | `float` | yes | — |  |
 | `max_deviation_points` | `int` | yes | — |  |
 | `overridden` | `tuple[str]` | no | `()` |  |
+
+### NotificationSettings
+
+What Discord announces, held at ``settings/notifications`` (9C).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
+| `enabled_kinds` | `tuple[str]` | no | `('ema_cross', 'wick', 'liquidity', 'breakout')` | agent_name values Discord posts an embed for (9C). |
+| `detections_enabled` | `bool` | no | `True` |  |
+| `updated_at` | `AwareDatetime \| null` | no | `None` |  |
+| `updated_by` | `str \| null` | no | `None` |  |
 
 ### ProfileBin
 

@@ -91,6 +91,7 @@ VALUE_MODELS: tuple[type[BaseModel], ...] = (
     m.SymbolState,
     m.SymbolLimits,
     m.ResolvedLimits,
+    m.NotificationSettings,
     m.ProfileBin,
     m.ProfileSummary,
     m.VolumeProfile,

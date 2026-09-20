@@ -284,6 +284,9 @@ BARE_COLLECTION_NAMES = frozenset(
         "symbol_specs",
         "daily_reviews",
         "weekly_reviews",
+        # 9C: what Discord has already said, and what a human asked to be told.
+        "notifications",
+        "alerts",
     }
 )
 
