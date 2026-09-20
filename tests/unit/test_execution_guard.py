@@ -364,23 +364,17 @@ def test_a_per_symbol_max_lot_is_tighter_than_the_global_one() -> None:
     from aureon.models.settings import SymbolLimits
 
     limited = settings(max_lot=1.0, per_symbol={"XAGUSD": SymbolLimits(max_lot=0.2)})
-    verdict = check(
-        request(symbol="XAGUSD", volume=0.5, quote=silver_quote()),
-        limited,
-        market_state=MarketState.OPEN,
-        broker=silver_snapshot(),
+    result = verdict(
+        req=request(symbol="XAGUSD", volume=0.5, quote=silver_quote()),
+        sett=limited,
+        snap=silver_snapshot(),
     )
-    assert not verdict.ok
-    assert verdict.failure_code is FailureCode.MAX_LOT_EXCEEDED
-    assert "XAGUSD" in verdict.message
+    assert not result.ok
+    assert result.failure_code is FailureCode.MAX_LOT_EXCEEDED
+    assert "XAGUSD" in result.message
 
     # And gold keeps the global ceiling: an entry for one symbol touches no other.
-    assert check(
-        request(symbol="XAUUSD", volume=0.5),
-        limited,
-        market_state=MarketState.OPEN,
-        broker=snapshot(),
-    ).ok
+    assert verdict(req=request(symbol="XAUUSD", volume=0.5), sett=limited).ok
 
 
 def test_a_per_symbol_spread_limit_is_used_and_named() -> None:
@@ -390,15 +384,14 @@ def test_a_per_symbol_spread_limit_is_used_and_named() -> None:
     limited = settings(
         max_spread_points=500.0, per_symbol={"XAGUSD": SymbolLimits(max_spread_points=10.0)}
     )
-    verdict = check(
-        request(symbol="XAGUSD", quote=silver_quote()),
-        limited,
-        market_state=MarketState.OPEN,
-        broker=silver_snapshot(quote=silver_quote(bid=30.000, ask=30.030)),
+    result = verdict(
+        req=request(symbol="XAGUSD", quote=silver_quote()),
+        sett=limited,
+        snap=silver_snapshot(quote=silver_quote(bid=30.000, ask=30.030)),
     )
-    assert not verdict.ok
-    assert verdict.failure_code is FailureCode.SPREAD_LIMIT
-    assert "XAGUSD" in verdict.message
+    assert not result.ok
+    assert result.failure_code is FailureCode.SPREAD_LIMIT
+    assert "XAGUSD" in result.message
 
 
 def test_the_deviation_clamp_uses_the_symbols_own_limit() -> None:
@@ -409,14 +402,41 @@ def test_the_deviation_clamp_uses_the_symbols_own_limit() -> None:
     limited = settings(
         max_deviation_points=20, per_symbol={"XAGUSD": SymbolLimits(max_deviation_points=3)}
     )
-    verdict = check(
-        request(symbol="XAGUSD", deviation_points=50, quote=silver_quote()),
-        limited,
-        market_state=MarketState.OPEN,
-        broker=silver_snapshot(quote=silver_quote(bid=30.000, ask=30.003)),
+    result = verdict(
+        req=request(symbol="XAGUSD", deviation_points=50, quote=silver_quote()),
+        sett=limited,
+        snap=silver_snapshot(quote=silver_quote(bid=30.000, ask=30.003)),
     )
-    assert verdict.ok
-    assert verdict.effective_deviation_points == 3
+    assert result.ok
+    assert result.effective_deviation_points == 3
+
+
+def test_every_guard_test_pins_the_clock(
+) -> None:
+    """The bug this file grew: a direct ``check()`` call reads the wall clock (9A).
+
+    ``NOW`` is captured when this module is imported, and ``rule_quote_fresh`` measures the
+    broker quote against ``ctx.now``. A test that lets ``check`` default ``now`` to
+    ``utc_now()`` therefore passes when the file runs alone and fails with STALE_QUOTE once
+    the whole suite has been running for longer than ``quote_ttl_seconds`` -- fifteen
+    seconds. Three per-symbol tests were written that way and did exactly that.
+
+    So the helper that pins the clock is the only way in, and this asserts it: every call
+    to ``check`` in this file is ``verdict``'s.
+    """
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "check"
+    ]
+    assert len(calls) == 1, "call verdict(...) instead of check(...) so the clock is pinned"
+    assert any(kw.arg == "now" for kw in calls[0].keywords)
 
 
 def test_with_no_entry_every_symbol_gets_the_global_limits() -> None:
