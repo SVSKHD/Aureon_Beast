@@ -25,21 +25,50 @@ Three things that only a live session can break, all of which the fixture cannot
 
 ## Before the session
 
+Most of this list is now machine-checked. Run it first, and read the table rather than
+skimming for green:
+
+    python scripts/preflight.py
+
+Exit 0 with no `FAIL` row is the gate. **A `SKIP` is not a pass** — the summary line says
+how many checks did not run, and a terminal check that did not run means the terminal was
+not checked. Keep the output: it carries the terminal build, the broker server, the
+resolved collection prefix and `trading_enabled`, which is most of what this session's
+evidence needs to be re-readable a month later.
+
 - [ ] **Set `AUREON_ACCOUNT_SCOPE` and never change it.** It is part of every
-      `detection_id`. Changing it later re-keys all of history.
+      `detection_id`. Changing it later re-keys all of history. *(preflight: `config`
+      prints it; it cannot know whether you meant it.)*
 - [ ] **Set `AUREON_COLLECTION_PREFIX`.** Use something other than `aureon_beast` for a
       first run — the validation data is worth keeping separate from whatever becomes
-      production.
+      production. *(preflight: `collection_prefix`, which WARNs on the production
+      default.)*
 - [ ] Confirm `AUREON_EMA_FAST` / `AUREON_EMA_SLOW` are the pair you mean (20 / 50). They
       are in `agent_params_snapshot`, and under §12 the agent version is in the detection
       id, so changing them after the fact forks the history rather than correcting it.
+      *(preflight: `config` prints the pair.)*
 - [ ] `AUREON_MARKET_TZ` matches the broker's server clock. Check it against the terminal,
-      do not assume.
+      do not assume. *(preflight: `config` prints the zone AND its current UTC offset,
+      which is the number to compare.)*
 - [ ] **`trading_enabled` is false.** This is an observation session. `settings/execution`
-      defaults to false; confirm it rather than trusting the default.
+      defaults to false; confirm it rather than trusting the default. *(preflight:
+      `trading_enabled`, printed as INFO — it is not preflight's business to decide which
+      session this is, only to make sure you know.)*
+- [ ] The terminal is logged into the account and server the config names. *(preflight:
+      `mt5_account`, a FAIL on mismatch. A session recorded from the wrong server looks
+      completely normal afterwards.)*
 - [ ] `data/live_candles/` is writable and has room. A day of M5 is a few hundred rows.
+      *(preflight: `archive_dir`.)*
+- [ ] The outbox has no undelivered rows from a previous run. *(preflight: `outbox` WARNs
+      with the count. Two runs' delivery failures mixed together cannot be separated
+      afterwards.)*
+- [ ] This machine's clock agrees with the broker's. Candle boundaries are decided on the
+      LOCAL clock, so a fast clock reads a bar as closed while the terminal is still
+      writing it. *(preflight: `clock_drift`, which can only measure this while the symbol
+      is ticking — re-run it near the open.)*
 - [ ] Note the terminal's build number and the broker's server name. If a comparison fails
-      later, "which terminal was this?" is the first question.
+      later, "which terminal was this?" is the first question. *(preflight: `mt5_init`
+      prints the build, `mt5_account` the server.)*
 
 ## Running it
 

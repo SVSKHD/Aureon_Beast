@@ -59,7 +59,19 @@ def _imported_modules(path: Path) -> set[str]:
 # ── A detection never creates a trade ─────────────────────────────────────────
 
 # The observation half of the system. Nothing here may reach the broker.
-OBSERVER_SIDE = ("agents", "engine", "outbox", "data", "evaluation", "reviews")
+# ``services`` joined the list with P-2: the observer's own services (market state,
+# heartbeats, preflight) read the broker's DATA through a provider, which is what `data`
+# is for, and must never acquire the ability to act on it. Preflight in particular holds
+# a live terminal handle and runs beside a human who is about to enable trading.
+OBSERVER_SIDE = (
+    "agents",
+    "engine",
+    "outbox",
+    "data",
+    "evaluation",
+    "reviews",
+    "services",
+)
 
 # Only these two modules may touch MetaTrader5 at all (CLAUDE.md).
 MT5_PERMITTED = {
@@ -69,7 +81,7 @@ MT5_PERMITTED = {
 
 
 def test_observer_side_never_imports_execution() -> None:
-    """agents/engine/outbox/data/evaluation/reviews must not import execution.
+    """The observation packages must not import execution.
 
     This is the structural half of "a detection never creates a trade": if the
     observation packages cannot even name the execution package, no code path
