@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from aureon.models.base import AureonDocument, AureonModel, UtcDatetime, to_utc, utc_now
-from aureon.models.enums import Freshness, MarketState, Timeframe
+from aureon.models.enums import Freshness, MarketState, SessionName, Timeframe
 from aureon.models.market import QuoteSnapshot
 
 # §84 defaults; overridable via config. 46s old must read STALE at 45s.
@@ -103,6 +103,76 @@ class SymbolState(AureonModel):
     bearish_crosses_today: int = Field(default=0, ge=0)
     bullish_crosses_session: int = Field(default=0, ge=0)
     bearish_crosses_session: int = Field(default=0, ge=0)
+
+    # ── The indicator snapshot (§59, §66) ─────────────────────────────────────
+    # Values, not labels, for the same reason IndicatorSnapshot stores values: "rsi was
+    # 61.4" survives a later change to whatever we currently call overbought, where a
+    # stored label does not. ``rsi_zone`` is the one exception and is derived here so
+    # /status and a dashboard cannot disagree about the thresholds.
+    ema_fast: float | None = None
+    ema_slow: float | None = None
+    ema_distance: float | None = Field(
+        default=None, description="fast - slow, in price. Sign is the current bias."
+    )
+    rsi: float | None = None
+    rsi_zone: str | None = Field(
+        default=None, description="overbought | oversold | neutral, derived from rsi."
+    )
+
+    # ── Session context (§18) ─────────────────────────────────────────────────
+    session: SessionName | None = None
+    session_trend: str | None = None
+    session_high: float | None = None
+    session_low: float | None = None
+
+    # ── Last of each event kind (§59) ─────────────────────────────────────────
+    # A dict rather than a typed sub-model per event: these are display values read by
+    # /status and, later, a dashboard, and a new agent must be able to report its last
+    # event without a schema migration. Shapes are documented on LastEvent below.
+    last_cross: dict[str, object] | None = Field(
+        default=None, description="{direction, at, price, detection_id}"
+    )
+    last_cross_at: UtcDatetime | None = Field(
+        default=None,
+        description="Denormalised from last_cross so freshness needs no dict parsing.",
+    )
+    last_sweep: dict[str, object] | None = Field(
+        default=None, description="{direction, level_type, at}"
+    )
+    last_wick: dict[str, object] | None = Field(
+        default=None, description="{classification, at}"
+    )
+    last_breakout: dict[str, object] | None = Field(
+        default=None, description="{direction, level_type, at}"
+    )
+
+
+    @model_validator(mode="after")
+    def _derive_display_values(self) -> SymbolState:
+        """Fill ``ema_distance`` and ``rsi_zone`` from their inputs when absent.
+
+        They are stored rather than computed on read because a dashboard reads this
+        document directly and should not have to re-implement "where does overbought
+        begin". But a stored derivation can go stale or arrive inconsistent, so it is
+        derived HERE, on every validation -- which means a document that carries an EMA
+        pair always carries the matching distance, and one that carries neither carries
+        no distance either.
+
+        Only filled when absent, never overwritten: a writer that computed them from the
+        same values gets the same answer, and one that deliberately set something else
+        deserves to keep it rather than have it silently corrected.
+        """
+        if self.ema_distance is None and None not in (self.ema_fast, self.ema_slow):
+            object.__setattr__(
+                self, "ema_distance", round(self.ema_fast - self.ema_slow, 8)
+            )
+        if self.rsi_zone is None and self.rsi is not None:
+            from aureon.agents.rsi_agent import rsi_zone
+
+            object.__setattr__(
+                self, "rsi_zone", rsi_zone(self.rsi, overbought=70.0, oversold=30.0)
+            )
+        return self
 
 
 class SystemState(AureonDocument):

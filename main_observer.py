@@ -39,6 +39,7 @@ from aureon.agents.rsi_agent import RsiAgent
 from aureon.agents.session_trend_agent import SessionTrendAgent, summary_from_detection
 from aureon.agents.wick_agent import WickAgent
 from aureon.config import AureonConfig
+from aureon.config.sessions import session_for
 from aureon.data.base_provider import BaseMarketDataProvider
 from aureon.engine.analysis_engine import AnalysisEngine
 from aureon.engine.levels import LevelTracker
@@ -52,6 +53,7 @@ from aureon.models.system import SymbolState, SystemState
 from aureon.outbox.local_outbox import LocalOutbox
 from aureon.outbox.outbox_worker import OutboxWorker
 from aureon.services.heartbeat_service import HeartbeatService
+from aureon.services.market_snapshot import MarketSnapshot
 from aureon.services.market_state_service import MarketStateService
 from aureon.services.observer_state import ObserverState
 from aureon.storage import paths
@@ -118,8 +120,17 @@ class Observer:
             on_candle_close=self._on_candle_close,
         )
         self._last_candles: dict[tuple[str, Timeframe], Candle] = {}
+        # One snapshot per symbol/timeframe, fed by every detection and candle so
+        # /status reports the SAME indicator values that were stored, never a
+        # recomputation that could disagree with them (§59, §66).
+        self._snapshots: dict[tuple[str, Timeframe], MarketSnapshot] = {}
 
     # ── Detection sink ────────────────────────────────────────────────────────
+
+    def _snapshot(self, symbol: str, timeframe: Timeframe) -> MarketSnapshot:
+        return self._snapshots.setdefault(
+            (symbol, timeframe), MarketSnapshot(symbol=symbol)
+        )
 
     def _on_detections(self, detections: list[Detection]) -> None:
         """Queue detections durably. Local write first, delivery later (§83)."""
@@ -130,6 +141,8 @@ class Observer:
             inserted,
             ", ".join(f"{d.agent_name}/{d.event_key}" for d in detections),
         )
+        for detection in detections:
+            self._snapshot(detection.symbol, detection.timeframe).observe(detection)
         self._write_session_summaries(detections)
         self._track_outcomes(detections)
 
@@ -210,6 +223,13 @@ class Observer:
         """Advance the cursor, evaluations and state on every candle close."""
         key = (candle.symbol, candle.timeframe)
         self._last_candles[key] = candle
+        # Session extremes come from candles, not detections: a session has a high
+        # whether or not anything detected anything.
+        self._snapshot(candle.symbol, candle.timeframe).observe_candle(
+            high=candle.high,
+            low=candle.low,
+            session=session_for(candle.open_time.market),
+        )
         self._advance_evaluations(candle)
         # Saved per candle, not per poll: a crash between two candles must not
         # re-process the earlier one.
@@ -254,6 +274,7 @@ class Observer:
                         # already resets them on the market clock, and a second tally
                         # would eventually disagree with the first.
                         **self.engine.cross_counts(symbol, timeframe).as_state(),
+                        **self._snapshot(symbol, timeframe).as_state(),
                     )
                 )
         try:

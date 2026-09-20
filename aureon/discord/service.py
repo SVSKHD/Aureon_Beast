@@ -415,9 +415,101 @@ class StatusScreen:
     pending_requests: int = 0
     review_summary: str | None = None
     market_closed: bool = False
+    #: The live §59 panels, one entry per symbol. Populated only when the market is
+    #: OPEN: on a closed market the numbers are a snapshot of whenever it shut, and
+    #: showing them beside a live layout invites reading them as current.
+    live_panels: list[LivePanel] = field(default_factory=list)
 
 
 NO_REVIEW_YET = "no completed review yet"
+UNKNOWN = "—"
+
+
+def _fmt(value: object, *, digits: int = 2) -> str:
+    """A number for a human, or an em dash.
+
+    ``None`` renders as a dash rather than 0 or "n/a": a zero is a measurement and a dash
+    is the absence of one, and on a status screen that difference is the whole point of
+    the field.
+    """
+    if value is None:
+        return UNKNOWN
+    if isinstance(value, (int, float)):
+        return f"{value:.{digits}f}"
+    return str(value)
+
+
+def _fmt_signed(value: float | None, *, digits: int = 2) -> str:
+    return UNKNOWN if value is None else f"{value:+.{digits}f}"
+
+
+def _fmt_at(value: object) -> str:
+    """An instant as HH:MM:SS UTC, or a dash. Never a bare ISO string on a screen."""
+    if value is None:
+        return UNKNOWN
+    if isinstance(value, str):
+        return value[11:19] + "Z" if len(value) >= 19 else value
+    if isinstance(value, datetime):
+        return value.strftime("%H:%M:%SZ")
+    return str(value)
+
+
+@dataclass
+class LivePanel:
+    """One symbol's live §59 lines, already rendered.
+
+    Rendered here rather than in ``embeds.py`` so the layout is unit-testable without a
+    Discord client -- the same reason every other decision in this module lives here.
+    """
+
+    symbol: str
+    market_state: str
+    lines: list[str] = field(default_factory=list)
+
+
+def build_live_panel(state: Any) -> LivePanel:
+    """The §59 layout for one symbol, from a ``SymbolState``.
+
+    Every field is rendered whether or not it has a value, because a panel that hides
+    its empty rows changes shape as data arrives -- and a reader cannot tell a missing
+    EMA from a panel that never had that row.
+    """
+    panel = LivePanel(
+        symbol=getattr(state, "symbol", "?"),
+        market_state=getattr(getattr(state, "market_state", None), "value", "unknown"),
+    )
+    quote = getattr(state, "last_quote", None)
+    session = getattr(state, "session", None)
+
+    panel.lines = [
+        f"bid/ask {_fmt(getattr(quote, 'bid', None))} / {_fmt(getattr(quote, 'ask', None))}",
+        f"EMA {_fmt(state.ema_fast)} / {_fmt(state.ema_slow)}"
+        f"  (dist {_fmt_signed(state.ema_distance)})",
+        f"RSI {_fmt(state.rsi, digits=1)} {state.rsi_zone or UNKNOWN}",
+        f"session {getattr(session, 'value', UNKNOWN)} {state.session_trend or UNKNOWN}"
+        f"  H {_fmt(state.session_high)}  L {_fmt(state.session_low)}",
+        f"crosses today {state.ema_crosses_today}"
+        f" ({state.bullish_crosses_today}↑ {state.bearish_crosses_today}↓)"
+        f"  session {state.ema_crosses_session}"
+        f" ({state.bullish_crosses_session}↑ {state.bearish_crosses_session}↓)",
+        f"last cross {_event(state.last_cross, 'direction')} at "
+        f"{_fmt_at((state.last_cross or {}).get('at'))}",
+        f"last sweep {_event(state.last_sweep, 'direction', 'level_type')} at "
+        f"{_fmt_at((state.last_sweep or {}).get('at'))}",
+        f"last breakout {_event(state.last_breakout, 'direction', 'level_type')} at "
+        f"{_fmt_at((state.last_breakout or {}).get('at'))}",
+        f"last wick {_event(state.last_wick, 'classification')} at "
+        f"{_fmt_at((state.last_wick or {}).get('at'))}",
+        f"detections today {state.detections_today}",
+    ]
+    return panel
+
+
+def _event(payload: dict[str, object] | None, *keys: str) -> str:
+    if not payload:
+        return UNKNOWN
+    parts = [str(payload.get(key)) for key in keys if payload.get(key) is not None]
+    return " ".join(parts) or UNKNOWN
 
 
 def build_status(
@@ -483,12 +575,22 @@ def build_status(
         market_closed=market_closed,
     )
 
-    # §61-§63: on a closed market, show the latest completed review. Until Phase 7 ships
-    # there is nothing to show, and saying so plainly beats an empty panel.
+    # §59 vs §61-§63: the two modes are mutually exclusive, deliberately.
+    #
+    # On an OPEN market the screen is live: the indicator, session and last-event panels
+    # below. On a CLOSED market those numbers are a snapshot of whenever the market shut,
+    # and rendering them in a live layout invites reading them as current -- so the closed
+    # screen shows the completed review instead, which is what a reader actually wants
+    # after the close.
     if market_closed:
         screen.review_summary = (
             summarise_review(latest_review) if latest_review is not None else NO_REVIEW_YET
         )
+    else:
+        screen.live_panels = [
+            build_live_panel(symbol_state)
+            for symbol_state in getattr(system_state, "symbols", ()) or ()
+        ]
     return screen
 
 

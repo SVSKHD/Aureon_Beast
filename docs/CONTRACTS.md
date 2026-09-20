@@ -12,18 +12,18 @@ stored document.
 
 | collection | document id | model |
 |---|---|---|
-| `aureon_test_detections` | `detection_id` | `Detection` |
-| `aureon_test_detection_evaluations` | `{detection_id}__{rule_id}` | `DetectionEvaluation` |
-| `aureon_test_sessions` | `{market_date}__{session}` | _(Phase 2)_ |
-| `aureon_test_trade_requests` | `request_id` | `TradeRequest` |
-| `aureon_test_trades` | `trade_id` | `Trade` |
-| `aureon_test_control_requests` | `control_id` | `ControlRequest` |
-| `aureon_test_audit_logs` | `audit_id` | `AuditRecord` |
-| `aureon_test_heartbeats` | `{service}` | `Heartbeat` |
-| `aureon_test_system_state` | `current` | `SystemState` |
-| `aureon_test_settings` | `execution` | `ExecutionSettings` |
-| `aureon_test_daily_reviews` | `{market_date}` | `DailyReview` |
-| `aureon_test_weekly_reviews` | `{iso_year}-W{iso_week}` | `WeeklyReview` |
+| `aureon_beast_detections` | `detection_id` | `Detection` |
+| `aureon_beast_detection_evaluations` | `{detection_id}__{rule_id}` | `DetectionEvaluation` |
+| `aureon_beast_sessions` | `{market_date}__{session}` | _(Phase 2)_ |
+| `aureon_beast_trade_requests` | `request_id` | `TradeRequest` |
+| `aureon_beast_trades` | `trade_id` | `Trade` |
+| `aureon_beast_control_requests` | `control_id` | `ControlRequest` |
+| `aureon_beast_audit_logs` | `audit_id` | `AuditRecord` |
+| `aureon_beast_heartbeats` | `{service}` | `Heartbeat` |
+| `aureon_beast_system_state` | `current` | `SystemState` |
+| `aureon_beast_settings` | `execution` | `ExecutionSettings` |
+| `aureon_beast_daily_reviews` | `{market_date}` | `DailyReview` |
+| `aureon_beast_weekly_reviews` | `{iso_year}-W{iso_week}` | `WeeklyReview` |
 
 Tick data is never stored in Firestore. There is no `pending_orders`
 collection (decision 9): a pending order *is* the `PENDING` trade request.
@@ -662,6 +662,20 @@ Per symbol/timeframe observation state (§59).
 | `bearish_crosses_today` | `int` | no | `0` |  |
 | `bullish_crosses_session` | `int` | no | `0` |  |
 | `bearish_crosses_session` | `int` | no | `0` |  |
+| `ema_fast` | `float \| null` | no | `None` |  |
+| `ema_slow` | `float \| null` | no | `None` |  |
+| `ema_distance` | `float \| null` | no | `None` | fast - slow, in price. Sign is the current bias. |
+| `rsi` | `float \| null` | no | `None` |  |
+| `rsi_zone` | `str \| null` | no | `None` | overbought \| oversold \| neutral, derived from rsi. |
+| `session` | `SessionName \| null` | no | `None` |  |
+| `session_trend` | `str \| null` | no | `None` |  |
+| `session_high` | `float \| null` | no | `None` |  |
+| `session_low` | `float \| null` | no | `None` |  |
+| `last_cross` | `dict[str, object] \| null` | no | `None` | {direction, at, price, detection_id} |
+| `last_cross_at` | `AwareDatetime \| null` | no | `None` | Denormalised from last_cross so freshness needs no dict parsing. |
+| `last_sweep` | `dict[str, object] \| null` | no | `None` | {direction, level_type, at} |
+| `last_wick` | `dict[str, object] \| null` | no | `None` | {classification, at} |
+| `last_breakout` | `dict[str, object] \| null` | no | `None` | {direction, level_type, at} |
 
 ---
 
