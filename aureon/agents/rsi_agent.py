@@ -68,7 +68,7 @@ class RsiAgent(BaseAgent):
     """Context-only RSI zone transitions (§14)."""
 
     agent_name = "rsi"
-    agent_version = "1.1.0"  # 9B
+    agent_version = "1.2.0"  # 11D
 
     def __init__(
         self,

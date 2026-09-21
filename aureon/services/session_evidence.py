@@ -73,6 +73,43 @@ def evidence_path(
     return (root or DEFAULT_EVIDENCE_DIR) / f"{stem}.md"
 
 
+#: The line ``session_verify.py`` writes when every check passed. Matched, rather than a
+#: field parsed out of the file, because it is the same string the PHASES evidence column
+#: greps for: one marker, one meaning.
+VERIFIED_MARKER = "SESSION VERIFIED"
+
+
+def verified_market_dates(
+    symbol: str, *, root: Path | None = None
+) -> tuple[str, ...]:
+    """Every broker date this symbol has a VERIFIED session for (11C, F-9).
+
+    This is the system's answer to "which days really happened". It reads the evidence
+    directory rather than Firestore, and that is the point: a replay run writes detections
+    into the same collection a live session does, so nothing in Firestore can distinguish
+    a day the broker served from a day a fixture generated. The evidence file can, because
+    it is written by ``session_verify.py`` after six checks against a real terminal and
+    carries the commit it was verified at.
+
+    A file that exists without the marker does not count. One is written when a session
+    STARTS, so "there is a file" and "the session was verified" are different claims and
+    only the second one is evidence.
+    """
+    directory = root or DEFAULT_EVIDENCE_DIR
+    if not directory.is_dir():
+        return ()
+    wanted = symbol.upper()
+    found: set[str] = set()
+    for path in directory.glob(f"session_*_{wanted}.md"):
+        if VERIFIED_MARKER not in path.read_text(encoding="utf-8"):
+            continue
+        # ``session_{market_date}_{symbol}.md``
+        stem = path.stem[len("session_") : -(len(wanted) + 1)]
+        if stem:
+            found.add(stem)
+    return tuple(sorted(found))
+
+
 def git_commit(*, cwd: Path | None = None) -> str | None:
     """The commit the tool is running at, or ``None`` if that cannot be determined.
 

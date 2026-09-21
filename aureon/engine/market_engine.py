@@ -56,6 +56,9 @@ class MarketEngine:
         on_detections: Callable[[list[Detection]], None] | None = None,
         on_candle_close: Callable[[Candle], None] | None = None,
         on_poll: Callable[[], None] | None = None,
+        before_poll: Callable[[], None] | None = None,
+        parked: Callable[[], bool] | None = None,
+        pace: Callable[[float], float] | None = None,
         grace_seconds: float = DEFAULT_GRACE_SECONDS,
         lookback_bars: int = DEFAULT_LOOKBACK_BARS,
     ) -> None:
@@ -71,6 +74,18 @@ class MarketEngine:
         #: is the thing a human asked about and a five-minute granularity would answer a
         #: different question.
         self.on_poll = on_poll
+        #: Called FIRST on every poll, before any stream is read (11B). The observer puts
+        #: its sleep decision here: a hook that ran after the streams could only park the
+        #: loop from the NEXT iteration, and a wake would lose a poll at the open.
+        self.before_poll = before_poll
+        #: Asked, after ``before_poll``, whether to skip the streams entirely (11B). Not a
+        #: flag: the answer belongs to whoever owns the sleep cycle, and an engine holding
+        #: its own copy would be a second place for it to be wrong.
+        self.parked = parked
+        #: Given the awake cadence, returns the wait before the next iteration (11B). The
+        #: loop keeps running while asleep -- slowly -- because a loop that exited would
+        #: turn the weekend into a restart.
+        self.pace = pace
         self.grace_seconds = grace_seconds
         self.lookback_bars = lookback_bars
 
@@ -96,10 +111,16 @@ class MarketEngine:
         Safe to call as often as desired: candles already processed are filtered by
         the cursor, and ``AnalysisEngine`` independently ignores a duplicate.
         """
+        if self.before_poll is not None:
+            try:
+                self.before_poll()
+            except Exception:  # noqa: BLE001 - a side errand must not stop observation
+                log.exception("before_poll hook failed")
         produced: list[Detection] = []
-        for symbol in self.symbols:
-            for timeframe in self.timeframes:
-                produced.extend(self._poll_stream(symbol, timeframe))
+        if not self.is_parked:
+            for symbol in self.symbols:
+                for timeframe in self.timeframes:
+                    produced.extend(self._poll_stream(symbol, timeframe))
         if self.on_poll is not None:
             try:
                 self.on_poll()
@@ -146,6 +167,22 @@ class MarketEngine:
                     self.on_detections(detections)
         return produced
 
+    @property
+    def is_parked(self) -> bool:
+        """Whether the streams are skipped this poll (11B).
+
+        Fails toward polling: a ``parked`` callable that raises leaves the engine awake,
+        because observing a closed market wastes a request and missing an open one loses
+        candles that no later poll will bring back.
+        """
+        if self.parked is None:
+            return False
+        try:
+            return bool(self.parked())
+        except Exception:  # noqa: BLE001
+            log.exception("parked hook failed; staying awake")
+            return False
+
     # ── Loop ──────────────────────────────────────────────────────────────────
 
     def run(self, *, poll_seconds: float = 1.0) -> None:
@@ -153,13 +190,25 @@ class MarketEngine:
 
         A transient provider error must not take the observer down: the cursor is
         only advanced on success, so the next poll retries the same candles.
+
+        The wait is asked for on every iteration rather than fixed at the top, so a
+        market that closes mid-loop slows this loop down without restarting it (11B).
         """
         while not self._stop.is_set():
             try:
                 self.poll_once()
             except Exception:  # noqa: BLE001 - a poll failure must not kill the loop
                 log.exception("market engine poll failed; retrying")
-            self._stop.wait(poll_seconds)
+            self._stop.wait(self._wait(poll_seconds))
+
+    def _wait(self, poll_seconds: float) -> float:
+        if self.pace is None:
+            return poll_seconds
+        try:
+            return float(self.pace(poll_seconds))
+        except Exception:  # noqa: BLE001
+            log.exception("pace hook failed; using the awake cadence")
+            return poll_seconds
 
     def stop(self) -> None:
         self._stop.set()

@@ -47,6 +47,7 @@ from aureon.evaluation.rules import get_rule
 from aureon.models.base import to_utc, utc_now
 from aureon.models.detection import Detection
 from aureon.services.assessment_service import build_assessment, population_from
+from aureon.services.session_evidence import verified_market_dates
 
 log = logging.getLogger(__name__)
 
@@ -170,6 +171,11 @@ class MonitorCommands:
             subject_evaluation=evaluations.get(subject.detection_id),
             pair=_pair_for(rule),
             point=spec.point if spec is not None else 0.01,
+            # 11C F-9: which broker days this symbol has a VERIFIED session for. Read from
+            # the evidence directory, because a replay run writes detections into the same
+            # collection a live session does and nothing in Firestore can tell them apart.
+            # A file read on a command that already does five Firestore round trips.
+            real_days=verified_market_dates(subject.symbol),
         )
         if context.assessments is not None:
             # Stored BEFORE it is rendered, so the weekly review can score what a human was

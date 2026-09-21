@@ -30,7 +30,7 @@ from aureon.data.base_provider import (
     floor_to_timeframe,
 )
 from aureon.models.base import MarketTime, utc_now
-from aureon.models.enums import FillingMode, Timeframe
+from aureon.models.enums import AccountMode, FillingMode, Timeframe
 from aureon.models.market import Candle, QuoteSnapshot, SymbolInfo
 
 # MT5 timeframe constants, by name. Resolved at call time against the imported
@@ -238,6 +238,12 @@ class MT5DataProvider(BaseMarketDataProvider):
             "currency": str(getattr(info, "currency", "")),
             "leverage": int(getattr(info, "leverage", 0)),
             "trade_allowed": bool(getattr(info, "trade_allowed", False)),
+            # 11A F-3. The integer AND the name: the integer so an operator can check it
+            # against MT5's own documentation, the name so nothing downstream has to.
+            "trade_mode": getattr(info, "trade_mode", None),
+            "account_mode": AccountMode.from_trade_mode(
+                getattr(info, "trade_mode", None)
+            ).value,
         }
 
     def terminal_info(self) -> dict[str, Any]:

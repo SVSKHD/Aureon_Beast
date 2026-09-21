@@ -131,3 +131,80 @@ def test_an_empty_prefix_falls_back_to_the_default(monkeypatch) -> None:
     assert paths.collection_prefix() == paths.DEFAULT_COLLECTION_PREFIX
     monkeypatch.setenv("AUREON_COLLECTION_PREFIX", "___")
     assert paths.collection_prefix() == paths.DEFAULT_COLLECTION_PREFIX
+
+
+# ── 11A F-10: the registry cannot drift ───────────────────────────────────────
+
+
+def _collection_names_from_source() -> set[str]:
+    """Every ``X = collection("name")`` in ``paths.py``, read from the SOURCE.
+
+    An INDEPENDENT derivation, and that is the whole point. ``ALL_COLLECTIONS`` is generated
+    by scanning the module's runtime namespace, so a test that scanned the same namespace
+    would be asking the implementation to agree with itself. Parsing the text catches the one
+    failure mode the runtime scan cannot see: a constant defined BELOW the line where
+    ``ALL_COLLECTIONS`` is assigned, which the scan would miss and nothing would report.
+    """
+    import ast
+    from pathlib import Path
+
+    source = Path(paths.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        call = node.value
+        if not isinstance(call, ast.Call):
+            continue
+        callee = call.func
+        if not (isinstance(callee, ast.Name) and callee.id == "collection"):
+            continue
+        if not call.args or not isinstance(call.args[0], ast.Constant):
+            continue
+        found.add(f"{paths.PREFIX}_{call.args[0].value}")
+    return found
+
+
+def test_every_collection_constant_is_in_the_registry() -> None:
+    """The flaw this closes had already happened twice in one phase.
+
+    ``assessments`` and ``trade_notes`` were added in 9D and never added to the
+    hand-maintained tuple, so every consumer of the registry — the contracts table, the
+    emulator cleanup, the docs check — silently did not know two collections existed. Nothing
+    failed; the collections simply were not considered.
+    """
+    from_source = _collection_names_from_source()
+    assert from_source, "the source scan found nothing; the parser is broken, not the module"
+    assert set(paths.ALL_COLLECTIONS) == from_source, (
+        "ALL_COLLECTIONS and the collection() calls in paths.py disagree:\n"
+        f"  missing from the registry: {sorted(from_source - set(paths.ALL_COLLECTIONS))}\n"
+        f"  in the registry but not defined: "
+        f"{sorted(set(paths.ALL_COLLECTIONS) - from_source)}"
+    )
+
+
+def test_the_registry_holds_no_document_ids() -> None:
+    """``LEGACY_SYSTEM_STATE_DOC`` and friends are upper-case strings too.
+
+    The scan discriminates on the PREFIX rather than on naming convention, precisely so a
+    doc-id constant cannot be swept into a list of collections — a cleanup routine iterating
+    that list would then try to delete a collection named ``current``.
+    """
+    for value in paths.ALL_COLLECTIONS:
+        assert value.startswith(f"{paths.PREFIX}_")
+    assert paths.LEGACY_SYSTEM_STATE_DOC not in paths.ALL_COLLECTIONS
+    assert paths.EXECUTION_SETTINGS_DOC not in paths.ALL_COLLECTIONS
+    assert paths.PREFIX not in paths.ALL_COLLECTIONS
+
+
+def test_the_registry_is_sorted_and_unique() -> None:
+    """Stable ordering, so the contracts file does not differ between runs."""
+    assert list(paths.ALL_COLLECTIONS) == sorted(paths.ALL_COLLECTIONS)
+    assert len(set(paths.ALL_COLLECTIONS)) == len(paths.ALL_COLLECTIONS)
+
+
+def test_the_9d_collections_are_present() -> None:
+    """Named explicitly, because these two are the ones that were missing."""
+    assert paths.ASSESSMENTS in paths.ALL_COLLECTIONS
+    assert paths.TRADE_NOTES in paths.ALL_COLLECTIONS

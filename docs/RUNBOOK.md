@@ -100,6 +100,168 @@ dates and both ends are inclusive.
 deliberately, because after the close those numbers are a snapshot of whenever the market
 shut, and rendering them in a live layout invites reading them as current.
 
+Since 11B there is a fourth way to run these, and it is the one to prefer:
+
+    python main_review.py watch
+
+It stays up and generates the week's last daily and every symbol's weekly **at the close**,
+on the market's word rather than a cron line's. A cron line holding a UTC time is a fourth
+opinion about when the week ends, and it cannot notice a broker that closed early for a
+holiday or stayed open late after an outage. A closure that is *not* the week's end sleeps
+the watcher and generates nothing: a "weekly review" of three days would be published with
+the same field names as a real one, and nothing downstream could tell them apart.
+
+## The weekend: what the services do when nothing is open
+
+Nobody has to stop or start anything at the close. The four processes stay up, park what
+they cannot usefully do, and bring themselves back before the open.
+
+    AUREON_CLOSE_CONFIRM_SECONDS=300     # CLOSED must hold this long, on every symbol
+    AUREON_PREOPEN_SECONDS=900           # how early they wake
+    AUREON_SLEEP_HEARTBEAT_SECONDS=300   # heartbeat cadence while asleep
+    AUREON_SLEEP_POLL_SECONDS=60         # how often a sleeping service asks
+
+What each one does is different, and the differences are deliberate:
+
+| service | at the close | while asleep |
+|---------|--------------|--------------|
+| observer | drains the outbox, flushes the candle archive, saves the cursor | stops polling candles and answering alerts; keeps the terminal connected |
+| executor | nothing | **keeps serving requests**, slowly. A trade confirmed on a Saturday is refused with `MARKET_CLOSED`, not left waiting |
+| monitor | one full reconciliation | stops polling: every number it records comes from a quote |
+| review | the week's last daily and every symbol's weekly | waits |
+| Discord | — | slows its heartbeat and its announcement sweep; `/status` says "closed — next open …"; `/execute` is refused; `/remind` still arms |
+
+Three things to expect, so none of them reads as a fault:
+
+* **`/status` on a Saturday shows every service LIVE**, not STALE, even though they are
+  beating once every five minutes. The freshness threshold widens to twice the sleep cadence
+  while the services are asleep. Two missed sleep beats is still reported, so a process that
+  really died over the weekend still shows up.
+* **`/execute` is refused outright**, where a merely stale feed is only a warning. A
+  confirmation lives for a minute and the market will not open for two days, so the only
+  thing it could do is expire.
+* **a bar straddling the close is thrown away**, with a WARNING naming it. Its open is the
+  last price before the weekend and its close the first price after, so its range is the
+  weekend gap; a cross found in it would be a two-day move that involved no trading.
+
+Only CLOSED sleeps anything. A STALE feed inside trading hours, or a provider that cannot
+say what a symbol is, keeps everything awake and the heartbeats fast — those are faults, and
+they are exactly when the system must stay loud. One symbol closing is not the market
+closing: every configured symbol has to read CLOSED, or the observer would stop watching
+gold because silver was disabled.
+
+If you need a service to behave as it did before 11B, set `AUREON_CLOSE_CONFIRM_SECONDS` to
+something longer than a weekend. Nothing will ever confirm a close, and everything stays
+awake.
+
+## Higher timeframes, and where they come from
+
+The observer polls **one** stream per symbol: M5. M15, M30, H1, H4 and D1 are aggregated from
+those bars — no second poll loop, no extra broker call, no second cursor. Parity is the reason:
+replay feeds the same engine the same M5 bars, so an H1 bias derived from them is reproducible
+from the archive, where a broker's own H1 is its own aggregation and a difference between the
+two would be indistinguishable from a bug in either.
+
+A higher bar exists only when **every M5 bar inside it has closed, with none missing**. An hour
+holding eleven of its twelve bars has a high that may still be exceeded and a close that is not
+the close, so it is simply absent — the same rule the M5 grace period applies, one level up. A
+daily bar is complete when a bar from the NEXT broker day arrives, because there is no fixed bar
+count for a day and a holiday makes any number wrong.
+
+Every detection now carries `mtf`: one read per timeframe (the EMA pair, the close and the
+bias) plus an `alignment` of `aligned` / `mixed` / `against`. Three things to know when reading
+it:
+
+* **nothing gates on it.** No agent reads it, no guard refuses a trade because H4 disagrees.
+  Whether alignment predicts anything is a question for the evaluation rules, and
+  `scripts/report_outcomes.py` is where it will be answered.
+* **`mtf` being absent is not "flat".** A detection with no context came from a process with too
+  little history; a timeframe that was read and had no view records `sideways`. `mixed` covers
+  both "some agree and some do not" and "nobody has a view" — a sideways timeframe is an
+  absence of evidence, and counting it as agreement would make `aligned` mean "we could not
+  tell".
+* **the agent versions moved.** ema_cross is 2.2.0 and the other five are 1.2.0, because a
+  detection carrying the context and one without it would otherwise sit at the same
+  `detection_id` — indistinguishable and incomparable.
+
+    AUREON_MTF_M5_BARS=2880   # ten 24-hour days; enough for an H4 EMA(50). 0 disables it
+
+That buffer is deliberately separate from the analysis window, which is a **correctness**
+parameter fixed at the hungriest agent's requirement: widening it to reach H4 would silently
+change every agent's detections.
+
+D1 needs fifty trading days, which no live buffer will hold. That is what the day cache is for.
+
+## The broker-day cache
+
+At each day rollover the observer writes two documents per symbol:
+
+* `{prefix}_market_days/{SYMBOL}_{date}` — the day's open, high, low, close, bar count and tick
+  count. One small read for "what did Tuesday do".
+* `{prefix}_market_day_frames/{SYMBOL}_{date}_{M5|M15|H1}` — the bars, so a process with no
+  broker connection can rebuild a chart or a multi-week H4 bias.
+
+M30, H4 and D1 are **not** cached: each is derivable from the stored M5 or H1, and a second
+stored copy is a second thing that can disagree with the first. M1 is not cached either — tick
+data never goes to Firestore, and the M1 archive is parquet, where it is read for exactly one
+job (rebuilding a position's excursions for a stretch the monitor was down).
+
+Two things to expect:
+
+* **the day in progress is not stored.** Only finished days. A document flagged incomplete is
+  one mistake away from an aggregation reading it as finished, which produces a daily bar whose
+  close is not the close. Use the parquet archive for a live view.
+* **a truncated frame says so.** The bar list is capped at 600 and sets `truncated`; the day's
+  first bars are kept. Hitting the cap means the aggregation is wrong, not that the market was
+  busy.
+
+## Choosing a threshold, and why no tool applies one
+
+    python scripts/tune_report.py --symbol XAGUSD --days 10
+
+Writes `docs/TUNING_{SYMBOL}.md`: one section per threshold, each with the distribution of
+the quantity the agent compares against it and a table of candidate values against how many
+bars each would admit. Read it for the two extremes rather than for a recommendation — a
+value above every observed measure produces no detections and looks exactly like a quiet
+market, and one below the first quartile produces a detection on most bars and looks exactly
+like a busy one. Neither is visible from the detections.
+
+It reads the parquet archive the observer writes, so it needs a recorded session and refuses
+without one. `--fixture` reads the generated fixture instead and stamps **SYNTHETIC** on
+every page: a random walk has the distribution its generator was given, so a threshold
+chosen from one is a threshold chosen from `scripts/gen_fixtures.py`.
+
+**There is no `--apply`, and there will not be.** Changing a threshold is an `agent_version`
+bump: edit `OVERRIDES` in `aureon/config/symbol_tuning.py` and bump the agent's version in
+the same commit. Without the bump the detections from before and after sit at ids produced by
+the same version — indistinguishable and incomparable — and the whole point of D-1 putting
+`agent_version` back into `detection_id` was to make a retune safe to do and safe to undo.
+
+The first thing the tool said, on gold: `min_range_points = 20` admits about 99% of
+five-minute bars. As a filter it does almost nothing.
+
+## Reading a `/monitor` history line
+
+Since 11C every stored readout records where its cohort came from, and the screen says so
+above the numbers whenever it is anything other than a mature real one:
+
+| line | what it means |
+|------|---------------|
+| (nothing) | real bars, ten or more verified broker days. The only case that is evidence about the instrument |
+| `history: SYNTHETIC` | replayed fixture bars. Every rate describes `gen_fixtures.py` |
+| `history: MIXED` | some of each. The rate is a weighted average of a real frequency and a generated one |
+| `history: N verified broker day(s) … immature` | real, but too few days. Two hundred detections from one Tuesday are not two hundred independent observations |
+| `history: not recorded` | written before the field existed. Treat the rates as unverified |
+
+"Verified" means a `docs/evidence/session_{date}_{SYMBOL}.md` containing `SESSION VERIFIED`
+— written by `scripts/session_verify.py` after six checks against a real terminal. A replay
+writes detections into the same collection a live session does, so the evidence file is the
+only thing that can tell the two apart. **Today this repository has none**, so every cohort
+it can build is synthetic and every `/monitor` screen says so.
+
+The weekly review keeps its single `assessment_hit_rate` and adds `assessment_hit_by_source`
+beside it. Read the split before quoting the rate.
+
 ## Enabling execution
 
 Read `docs/DEMO_EXECUTION_CHECKLIST.md` first, in full, and run the drills:
@@ -213,7 +375,7 @@ re-running one overwrites the same document.
 
 | command | what it does |
 |---|---|
-| `/status [symbol]` | the live panels on an open market, the completed review on a closed one. `symbol:` narrows every number — panels, open trades, pending requests — to one instrument, read from that symbol's own state document. Each panel ends with the §19 block: the POC and value area for the current session and for Asia, the HVN and LVN nearest price, and ATR14 with its volatility regime (9B) |
+| `/status [symbol]` | the live panels on an open market, the completed review on a closed one. `symbol:` narrows every number — panels, open trades, pending requests — to one instrument, read from that symbol's own state document. Each panel ends with the §19 block: the tick-volume POC and value area for the current session and for Asia, the HVN and LVN nearest price, and ATR14 with its volatility regime (9B) |
 | `/execute symbol side lot [detection]` | the market-order shortcut. One embed, one CONFIRM. The lot is typed — there is no default — and the filling mode is named on the screen rather than left to the broker |
 | `/execute-trade` | opens the confirmation wizard (order type, stops, execution mode). Nothing is sent until a human confirms, and only the requester may confirm |
 | `/close symbol:` | closes the one open position on that symbol. Two open positions on it, or none, and it says what it found and stops — Aureon does not choose which of your trades to end |
@@ -323,6 +485,113 @@ and from what evidence; the review says how it turned out.
 the `#tags` you used. They are copied into the review document rather than linked, so a
 review read next year still says what you said at the time. No number in the review, and
 nothing in `/monitor`, ever reads one.
+
+## Firebase key rotation
+
+The key is a service-account JSON that lives **outside the repo** — on the VPS at
+`/etc/aureon/firebase-key.json`, readable only by the service user — and `.env` records its
+path, never its contents.
+
+To rotate:
+
+1. Create a new key for the same service account in the Google console. Do not delete the
+   old one yet.
+2. Copy it to the box beside the current one (`firebase-key.new.json`), `chown` and `chmod`
+   it to match.
+3. `GOOGLE_APPLICATION_CREDENTIALS=/etc/aureon/firebase-key.new.json python
+   scripts/preflight.py --skip-mt5`. The `credentials` row names the service account and
+   project it resolved to, and the `firestore` row does a real write and read-back. Both
+   green, or stop.
+4. Move the new key over the old path, restart the four services, run preflight again.
+5. Only then delete the old key in the console.
+
+**What preflight tells you when it is wrong.** The `credentials` row is a diagnosis and the
+`firestore` row is the proof, and they are separate on purpose:
+
+- `no such file` — the path in `.env` does not exist. Check the path, not the key.
+- `missing client_email … this looks like an OAuth client secret` — the single most common
+  mistake. Both files are JSON and both come from the same console; only the
+  service-account key has `client_email`. Downloading the same file again will not help.
+- `not valid JSON` — usually a truncated copy or a PEM pasted over the JSON.
+- `GOOGLE_APPLICATION_CREDENTIALS is unset` — a WARN, not a failure: application default
+  credentials from `gcloud auth application-default login` are a legitimate developer setup.
+  On a box that runs unattended for a week, set the variable.
+- `no usable credentials` on the `firestore` row — the library found nothing at all. This is
+  a different action from a permission denial, which is why it is reported separately.
+- an emulator host is set — `credentials` reports SKIP, never PASS. A green row for a check
+  that never ran is how an emulator-only run comes to look like evidence about production.
+
+## Which account is the terminal on?
+
+`preflight` prints `mode=DEMO`, `mode=REAL`, `mode=CONTEST` or `mode=UNKNOWN` on the
+`mt5_account` row, from MT5's own `account_info().trade_mode`. A real or unidentified account
+is a **WARN, never a silent pass** — an operator scanning a green table would not notice.
+
+What each part of the system does about it:
+
+- **Observer and position monitor** run on a live account quite happily. They are read-only,
+  and the observer publishes `system_state.account_mode` so `/status` and the session
+  evidence file record which account the candles came from.
+- **Executor** starts in **reconcile-only** mode on a real-money account unless
+  `AUREON_ALLOW_LIVE_EXECUTION=true` is set on that box: startup reconciliation runs as
+  usual, every confirmed request is refused with `live_execution_not_allowed`, and one ops
+  message says which terminal is open. The refusal is the guard's *first* rule, ahead of
+  `trading_enabled` — when both are wrong at once you need to hear about the terminal, not
+  about a switch you turned off on purpose.
+- **`/trading enable`** refuses outright on a live account without that variable, rather
+  than arming a switch the executor is going to ignore. With the variable set it shows a
+  second screen naming the account and the word LIVE before offering the button.
+- **`demo_drills.py`** refuses any account that is not `DEMO` — contest included, since a
+  contest account is somebody's competition entry and one drill drops a connection
+  mid-send. `--i-know-this-is-real-money` overrides it, and is spelled that way on purpose.
+
+`UNKNOWN` is treated as real money everywhere. A terminal that will not say what it is
+logged into has not said it is a demo, and the asymmetry is not close: being wrong in that
+direction costs a refused order, being wrong the other way costs somebody's savings.
+
+## The ops register: `/ops`
+
+Aureon runs four processes on a box nobody is watching. The failure that costs money is almost
+never a crash — the supervisor handles those. It is a service that is **still running and no
+longer doing its job**: an observer whose candle loop stopped while the market is open, an
+outbox whose deliveries have been failing for a minute, a reconciliation that ended ambiguous
+and left a trade nobody has looked at.
+
+Ten named conditions now cover those, each posted **once when it starts and once when it
+clears**:
+
+| condition | what it means | threshold |
+|---|---|---|
+| `observer_stale` | no candle has closed while the market is OPEN — running, not observing | `AUREON_OPS_OBSERVER_STALE_INTERVALS` × timeframe (2) |
+| `executor_stale` | the executor's heartbeat stopped; confirmed requests will sit | heartbeat freshness |
+| `monitor_stale` | positions are not being reconciled against the broker | heartbeat freshness |
+| `firestore_unavailable` | outbox delivery failing; detections are queued on disk | `AUREON_OPS_FIRESTORE_UNAVAILABLE_SECONDS` (60) |
+| `outbox_backlog` | deliveries are slower than detections arrive | `AUREON_OPS_OUTBOX_BACKLOG` (50) |
+| `reconciliation_ambiguous` | a request is FAILED_RECONCILIATION — whether an order exists is UNKNOWN | any |
+| `archive_write_failed` | a candle did not reach the parquet archive; parity cannot be checked for that session | any |
+| `symbol_feed_stale` | **per symbol**: no tick while OPEN — the feed is dark | `AUREON_OPS_FEED_STALE_SECONDS` (30) |
+| `mt5_reconnect` | the terminal connection dropped and is being re-established | any |
+| `live_account_detected` | this process is on a real-money account | any |
+
+**Once, not every poll.** A condition that persists for six hours produces two lines, not six
+hours of identical ones. An operator who gets the latter mutes the channel, and a muted channel
+is strictly worse than no channel because it looks like coverage.
+
+**`/ops` distinguishes three states**, which is why cleared rows are kept rather than deleted:
+
+- 🔴 **active**, with how long — `since` records when the state *began*, so a three-hour-old
+  onset reads as three hours old.
+- 🟢 **clear**, with a count — "this flapped twice this morning and cleared" and "this fired
+  once and cleared" are different problems, and both read as fine without it.
+- **no row at all** — it has never happened since this deployment started. The footer says how
+  many of the ten are in that state, because a register with two rows could mean eight are
+  healthy or that eight are not wired up.
+
+`symbol_feed_stale` is the only per-symbol condition. One event covering both instruments would
+clear the moment either recovered — reporting healthy while silver was still dark.
+
+Nothing gates on an ops event. A condition that should stop execution stops it through the
+execution guard with a `FailureCode`, where it is testable; the register only reports.
 
 ## What the tools refuse to do
 

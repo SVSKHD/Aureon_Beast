@@ -14,7 +14,7 @@ from __future__ import annotations
 from pydantic import Field
 
 from aureon.models.base import AureonModel, UtcDatetime
-from aureon.models.enums import DealEntry, Direction, OrderType
+from aureon.models.enums import AccountMode, DealEntry, Direction, OrderType
 
 
 class AccountInfo(AureonModel):
@@ -29,6 +29,11 @@ class AccountInfo(AureonModel):
     margin_level: float | None = None
     leverage: int | None = None
     server: str | None = None
+    #: Demo, contest or real (11A, F-3). Defaults to UNKNOWN rather than DEMO, and
+    #: ``AccountMode.is_real_money`` treats UNKNOWN as real: a broker double or an older
+    #: provider that does not report ``trade_mode`` must not be read as a practice account
+    #: by a guard whose job is to stop an order reaching somebody's savings.
+    mode: AccountMode = AccountMode.UNKNOWN
     raw: dict[str, object] = Field(default_factory=dict)
 
 

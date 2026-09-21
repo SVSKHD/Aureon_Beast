@@ -62,6 +62,18 @@ def _env_csv(key: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
+def _env_true(key: str) -> bool:
+    """True only for the exact string ``"true"``, case-insensitively (11A, F-3).
+
+    Strict on purpose, and only used for flags that unlock something dangerous. The usual
+    permissive parsing -- "1", "yes", "on", any non-empty value -- means a stray
+    ``AUREON_ALLOW_LIVE_EXECUTION=false`` or a leftover ``=0`` reads as permission. A flag
+    whose whole job is to be hard to set by accident should be hard to set by accident.
+    """
+    raw = _env_opt(key)
+    return raw is not None and raw.strip().lower() == "true"
+
+
 def _env_map(key: str) -> dict[str, str]:
     """``KEY=A:x,B:y`` -> ``{"A": "x", "B": "y"}``.
 
@@ -127,6 +139,28 @@ class AureonConfig(AureonModel):
     reconcile_grace_seconds: float = 120.0
     monitor_poll_seconds: float = 2.0
 
+    # ── Sleeping through the close (11B) ──────────────────────────────────────
+    #: How long CLOSED must hold on every symbol before a service parks its loops. A
+    #: single closed poll is a broker hiccup far more often than it is the weekend.
+    close_confirm_seconds: float = 300.0
+    #: How far before the scheduled open a sleeping service wakes itself. Being up *at*
+    #: the open is too late -- the observer still has a backfill to do.
+    preopen_seconds: float = 900.0
+    #: Heartbeat cadence while asleep. Slow, never absent.
+    sleep_heartbeat_seconds: float = 300.0
+    #: How often a sleeping service asks whether the market is open yet.
+    sleep_poll_seconds: float = 60.0
+
+    # ── Higher timeframes (11D) ───────────────────────────────────────────────
+    #: How many M5 bars the engine keeps for aggregating M15…D1. SEPARATE from the analysis
+    #: window, which is a correctness parameter fixed at the hungriest agent's requirement --
+    #: widening that to reach H4 would silently rewrite every agent's history.
+    #:
+    #: 2880 is ten 24-hour days, which covers an H4 EMA(50) (200 hours) with room to spare. D1
+    #: needs fifty trading days and will not be reachable from a live buffer at any sane size;
+    #: that is what the ``market_day_frames`` cache is for. Zero disables the context entirely.
+    mtf_m5_bars: int = 2880
+
     # ── Evaluation (§84) ──────────────────────────────────────────────────────
     #: The rule for a SINGLE-symbol deployment, and the historical name of this
     #: setting. With more than one symbol it is not enough -- see evaluation_rules.
@@ -159,6 +193,36 @@ class AureonConfig(AureonModel):
     #: long enough to survive a restart or a slow Firestore write, short enough that a bot
     #: which was down for an hour does not wake up and post an hour of history at once.
     notify_window_seconds: float = 120.0
+
+    # ── 11A F-3: the live-account gate ────────────────────────────────────────
+    #: Whether the executor may place orders on a REAL-money account.
+    #:
+    #: An environment variable on the box, NOT a Firestore setting, and that is the whole
+    #: point. ``trading_enabled`` is a switch a human flips in Discord in a hurry; this is
+    #: a line somebody had to write on the machine, while looking at which terminal is
+    #: open. Making it flippable from the phone would collapse the two decisions into one.
+    #:
+    #: Fails closed, and ``UNKNOWN`` counts as real money (``AccountMode.is_real_money``):
+    #: a terminal that will not say what it is logged into has not said it is a demo.
+    allow_live_execution: bool = False
+
+    # ── 11A F-15: ops event thresholds ────────────────────────────────────────
+    #: How many closed-candle intervals may pass with nothing arriving, while the market is
+    #: OPEN, before `observer_stale` fires. Two rather than one: a single missed interval is a
+    #: slow broker or a poll landing a second early, and an alert on that would fire most days.
+    ops_observer_stale_intervals: float = 2.0
+    #: Seconds without a tick, while OPEN, before `symbol_feed_stale` fires for that symbol.
+    #: Thirty because gold and silver tick several times a second in any session that is
+    #: really open, so thirty seconds of silence is not quiet -- it is dark.
+    ops_feed_stale_seconds: float = 30.0
+    #: How long outbox delivery may keep failing before `firestore_unavailable` fires. A
+    #: minute, because a few seconds of failure is a retry working as designed and the outbox
+    #: exists precisely so that is survivable.
+    ops_firestore_unavailable_seconds: float = 60.0
+    #: Undelivered outbox rows before `outbox_backlog` fires. Fifty is roughly a busy hour of
+    #: detections: below it the queue is draining, above it deliveries are slower than
+    #: detections arrive and the gap will only grow.
+    ops_outbox_backlog: int = 50
 
     # ── Reviews ───────────────────────────────────────────────────────────────
     infer_window_minutes: int = 30
@@ -245,6 +309,11 @@ class AureonConfig(AureonModel):
             executor_poll_seconds=_env_float("AUREON_EXECUTOR_POLL_SECONDS", 2.0),
             reconcile_grace_seconds=_env_float("AUREON_RECONCILE_GRACE_SECONDS", 120.0),
             monitor_poll_seconds=_env_float("AUREON_MONITOR_POLL_SECONDS", 2.0),
+            close_confirm_seconds=_env_float("AUREON_CLOSE_CONFIRM_SECONDS", 300.0),
+            preopen_seconds=_env_float("AUREON_PREOPEN_SECONDS", 900.0),
+            sleep_heartbeat_seconds=_env_float("AUREON_SLEEP_HEARTBEAT_SECONDS", 300.0),
+            sleep_poll_seconds=_env_float("AUREON_SLEEP_POLL_SECONDS", 60.0),
+            mtf_m5_bars=_env_int("AUREON_MTF_M5_BARS", 2880),
             # AUREON_EVAL_RULE is the current name. The older
             # AUREON_EVALUATION_RULE_ID still wins when set, so an existing .env
             # pinning EMA_OUTCOME_V1 keeps getting V1 rather than silently switching
@@ -263,6 +332,15 @@ class AureonConfig(AureonModel):
             link_window_minutes=_env_int("AUREON_LINK_WINDOW_MINUTES", 90),
             alert_channel_id=int(channel) if channel else None,
             notify_window_seconds=_env_float("AUREON_NOTIFY_WINDOW_SECONDS", 120.0),
+            allow_live_execution=_env_true("AUREON_ALLOW_LIVE_EXECUTION"),
+            ops_observer_stale_intervals=_env_float(
+                "AUREON_OPS_OBSERVER_STALE_INTERVALS", 2.0
+            ),
+            ops_feed_stale_seconds=_env_float("AUREON_OPS_FEED_STALE_SECONDS", 30.0),
+            ops_firestore_unavailable_seconds=_env_float(
+                "AUREON_OPS_FIRESTORE_UNAVAILABLE_SECONDS", 60.0
+            ),
+            ops_outbox_backlog=_env_int("AUREON_OPS_OUTBOX_BACKLOG", 50),
             infer_window_minutes=_env_int("AUREON_INFER_WINDOW_MINUTES", 30),
             mt5_login=int(login) if login else None,
             mt5_password=_env_opt("AUREON_MT5_PASSWORD"),

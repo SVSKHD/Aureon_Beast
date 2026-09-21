@@ -36,8 +36,9 @@ whereas a candle index is deterministic and reproducible under replay.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 
 import pandas as pd
 
@@ -50,6 +51,27 @@ from aureon.models.market import Candle
 # Extra bars beyond the agents' stated minimum. Zero by default: any margin must be
 # identical in live and replay, so it is explicit rather than incidental.
 DEFAULT_WINDOW_MARGIN = 0
+
+
+@dataclass(frozen=True)
+class SkippedCandle:
+    """A bar the engine refused to analyse, and why (11B).
+
+    Kept as a record rather than dropped silently: "no detections on Friday evening" and
+    "the engine threw a bar away" look identical in the detections collection, and only one
+    of them is expected.
+    """
+
+    symbol: str
+    timeframe: Timeframe
+    open_time: datetime
+    close_time: datetime
+    reason: str
+
+
+#: How many skips are remembered. A bounded list, because the observer runs for weeks and
+#: this is diagnostic: two a week is the expected rate, and a burst is what matters.
+MAX_REMEMBERED_SKIPS = 20
 
 
 #: A "cross" is an ema_cross detection carrying a direction. Named explicitly rather
@@ -131,12 +153,42 @@ class AnalysisEngine:
         market_tz: str,
         window_size: int | None = None,
         window_margin: int = DEFAULT_WINDOW_MARGIN,
+        gap_guard: Callable[[datetime, datetime], datetime | None] | None = None,
+        mtf_bars: int = 0,
+        mtf_periods: tuple[int, int] | None = None,
     ) -> None:
         if not agents:
             raise ValueError("AnalysisEngine needs at least one agent")
         self.agents = list(agents)
         self.account_scope = account_scope
         self.market_tz = market_tz
+        #: Given a bar's start and end, returns the weekly close it straddles, or None
+        #: (11B). Injected rather than imported: the engine stays free of the services
+        #: package, and `WeeklySchedule.close_spanned_by` is what the observer passes.
+        #: Optional, because an engine built without one analyses every bar it is given --
+        #: which is what the replay fixtures and the agent unit tests want, since they feed
+        #: contiguous synthetic candles and a schedule would be one more thing to keep in
+        #: step.
+        self.gap_guard = gap_guard
+        #: Bars refused by the gap guard, newest last. See ``SkippedCandle``.
+        self.skipped: list[SkippedCandle] = []
+        #: 11D. A LONGER M5 tail than ``window_size``, for the higher timeframes.
+        #:
+        #: Separate from the analysis window on purpose. The window is a correctness
+        #: parameter -- it is fixed at the hungriest agent's stated requirement so that adding
+        #: an agent cannot change another's detections -- and widening it to reach H4 would
+        #: silently rewrite every agent's history. This buffer feeds nothing but the MTF
+        #: context, so its length is a coverage choice rather than a correctness one.
+        #:
+        #: Zero disables it, and that is the default: an engine that was not asked for MTF
+        #: context keeps exactly the memory it had before 11D.
+        self.mtf_bars = mtf_bars
+        self.mtf_periods = mtf_periods
+        self._mtf_tail: dict[tuple[str, Timeframe], deque[Candle]] = {}
+        #: This candle's frames, so ``_with_context`` can compute one alignment per detection
+        #: without re-aggregating. Set by ``_mtf_context`` on every candle, including to an
+        #: empty list, so a stale set from an earlier candle can never be read.
+        self._frames_cache: list = []
 
         required = max(agent.min_window() for agent in self.agents)
         self.window_size = window_size if window_size is not None else required + window_margin
@@ -179,8 +231,21 @@ class AnalysisEngine:
         if last is not None and opened <= last:
             return []
 
+        spanning = self._spans_a_close(candle)
+        if spanning is not None:
+            # Recorded, and NOT appended. Appending would poison the window: the bar's
+            # range is the weekend gap, so every EMA for the next window_size bars would
+            # be computed from a two-day move that involved no trading. Excluding it
+            # leaves the window contiguous in MARKET time, which is what the indicators
+            # are defined over and what the replay fixtures already do.
+            self._remember_skip(spanning)
+            self._last_open[key] = opened
+            return []
+
         window = self._windows.setdefault(key, deque(maxlen=self.window_size))
         window.append(candle)
+        if self.mtf_bars:
+            self._mtf_tail.setdefault(key, deque(maxlen=self.mtf_bars)).append(candle)
         self._last_open[key] = opened
 
         ctx = self._context(candle, key)
@@ -199,10 +264,31 @@ class AnalysisEngine:
             needed = agent.min_window()
             view = frame if len(frame) <= needed else frame.iloc[-needed:]
             detections.extend(agent.on_closed_candle(view, ctx))
+        mtf = self._mtf_context(key)
         return [
-            self._with_context(self._number(detection, key), tracker)
+            self._with_context(self._number(detection, key), tracker, mtf)
             for detection in detections
         ]
+
+    def _spans_a_close(self, candle: Candle) -> SkippedCandle | None:
+        """Whether this bar straddles a weekly close, and the record if it does."""
+        if self.gap_guard is None:
+            return None
+        start, end = candle.open_time.utc, candle.close_time
+        boundary = self.gap_guard(start, end)
+        if boundary is None:
+            return None
+        return SkippedCandle(
+            symbol=candle.symbol,
+            timeframe=candle.timeframe,
+            open_time=start,
+            close_time=end,
+            reason=f"bar spans the weekly close at {boundary.isoformat()}",
+        )
+
+    def _remember_skip(self, skipped: SkippedCandle) -> None:
+        self.skipped.append(skipped)
+        del self.skipped[:-MAX_REMEMBERED_SKIPS]
 
     def _tracker(self, key: tuple[str, Timeframe]):
         """This symbol's context tracker, built on first sight (9B)."""
@@ -219,24 +305,94 @@ class AnalysisEngine:
         self._context_trackers[key] = tracker
         return tracker
 
+    def mtf_context(self, symbol: str, timeframe: Timeframe):
+        """The higher-timeframe reads for one stream, for ``system_state`` (11D).
+
+        The public read of ``_mtf_context``. No alignment on it: alignment needs a direction
+        and ``system_state`` describes a market rather than a signal, so publishing one would
+        be an answer to a question nobody asked.
+        """
+        return self._mtf_context((symbol, timeframe))
+
     def context_tracker(self, symbol: str, timeframe: Timeframe):
         """The tracker for one symbol, for ``system_state`` and ``/status`` (9B)."""
         return self._context_trackers.get((symbol, timeframe))
 
-    def _with_context(self, detection: Detection, tracker) -> Detection:
-        """Attach the profile reference and volatility of this candle's close (9B).
+    def _with_context(self, detection: Detection, tracker, mtf=None) -> Detection:
+        """Attach the profile reference, volatility and higher-timeframe reads (9B, 11D).
 
         Done in the engine rather than in each agent for the same reason the cross
         sequence is: an agent is a pure function of ``(window, ctx)``, and reaching for
         a day's worth of candles inside one would break the replay/live parity the whole
         engine rests on. Attaching here also guarantees every agent's detections from one
         candle carry the SAME context, computed once.
+
+        The MTF context is computed once per candle and shared, not once per detection: it
+        depends only on the bars, so deriving it per agent would be the same answer at N times
+        the cost -- and if it ever were not the same answer, two agents on one candle would
+        disagree about what H1 was doing.
         """
+        alignment = None
+        if mtf is not None:
+            from aureon.engine.mtf import alignment as align
+
+            alignment = mtf.model_copy(
+                update={"alignment": align(self._frames_cache, detection.direction)}
+            )
         return detection.model_copy(
             update={
                 "volume_profile_ref": tracker.reference(detection.price),
                 "volatility": tracker.volatility(),
+                "mtf": alignment,
             }
+        )
+
+    def _mtf_context(self, key: tuple[str, Timeframe]):
+        """The higher-timeframe reads at this candle's close, or ``None`` (11D).
+
+        ``None`` when no MTF tail was asked for, when the source stream is not M5, or when no
+        timeframe has enough aggregated history to seed an EMA. The last of those is not
+        "flat": a detection with no context and one whose H4 was sideways are different facts,
+        and ``mtf`` being ``None`` says the first.
+
+        The alignment is filled in per detection by ``_with_context``, because it depends on
+        the detection's DIRECTION and the reads do not. Computing the reads once and the
+        alignment N times is the cheap half of the split.
+        """
+        from aureon.engine.mtf import SOURCE, frames_from
+        from aureon.models.mtf import MtfContext, TimeframeRead
+
+        self._frames_cache = []
+        if not self.mtf_bars or self.mtf_periods is None:
+            return None
+        symbol, timeframe = key
+        if timeframe is not SOURCE:
+            # Only the M5 stream aggregates upward. An H1 stream asked for its own higher
+            # timeframes would need H1 bars it does not keep, and silently reporting M5's
+            # answer for it would be worse than reporting none.
+            return None
+        tail = self._mtf_tail.get(key)
+        if not tail:
+            return None
+        fast, slow = self.mtf_periods
+        frames = frames_from(list(tail), fast=fast, slow=slow, market_tz=self.market_tz)
+        if not frames:
+            return None
+        self._frames_cache = frames
+        return MtfContext(
+            reads=tuple(
+                TimeframeRead(
+                    timeframe=frame.timeframe,
+                    at=frame.at,
+                    ema_fast=frame.ema_fast,
+                    ema_slow=frame.ema_slow,
+                    close=frame.close,
+                    bias=frame.bias,
+                )
+                for frame in frames
+            ),
+            ema_fast_period=fast,
+            ema_slow_period=slow,
         )
 
     def _number(self, detection: Detection, key: tuple[str, Timeframe]) -> Detection:

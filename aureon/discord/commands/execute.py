@@ -92,6 +92,12 @@ class ExecuteCommands:
         settings = await context.execution_settings()
         spec = await context.run(context.symbols.get, symbol)
 
+        # This symbol's own state document, in one read (9A). Read BEFORE planning, because
+        # the plan now refuses a closed market and the published sleep phase is where that
+        # answer lives (11B).
+        state = await context.run(
+            context.system_state.read_symbol, symbol, context.config.timeframes[0]
+        )
         plan = plan_market_order(
             symbol=symbol,
             side=side,
@@ -101,6 +107,7 @@ class ExecuteCommands:
             info=spec,
             observed_symbols=context.config.symbols,
             detection=linked,
+            system_state=state,
         )
         if not plan.ok or plan.draft is None:
             # Every refusal happens here, before a trade_requests document exists: a
@@ -108,10 +115,6 @@ class ExecuteCommands:
             await self._fail(interaction, plan.message or "cannot place this trade")
             return
 
-        # This symbol's own state document, in one read (9A).
-        state = await context.run(
-            context.system_state.read_symbol, symbol, context.config.timeframes[0]
-        )
         quote = quote_of(state, symbol)
         if quote is None:
             await self._fail(

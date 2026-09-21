@@ -121,7 +121,7 @@ def build_profile(
         index: bin_price(index, point=point, bin_points=bin_points) for index in volumes
     }
     bins = tuple(
-        ProfileBin(price=edge[index], volume=volume)
+        ProfileBin(price=edge[index], tick_volume=volume)
         for index, volume in sorted(volumes.items())
     )
     poc_index = max(volumes, key=lambda i: (volumes[i], -i)) if volumes else None
@@ -145,7 +145,7 @@ def build_profile(
         value_area_high=va_high,
         hvn=_nodes(volumes, above=True, point=point, bin_points=bin_points),
         lvn=_nodes(volumes, above=False, point=point, bin_points=bin_points),
-        total_volume=total,
+        total_tick_volume=total,
         bins=_capped(bins),
     )
     return profile
@@ -265,12 +265,12 @@ def _capped(bins: tuple[ProfileBin, ...]) -> tuple[ProfileBin, ...]:
 
     A truncation would be worse than a sample: dropping the tail would move the reported
     shape's edges, so the cap keeps the largest bins and says nothing about the rest. The
-    totals above are computed before this, so ``total_volume`` still describes the whole
+    totals above are computed before this, so ``total_tick_volume`` still describes the whole
     scope even when the bin list does not.
     """
     if len(bins) <= MAX_PROFILE_BINS:
         return bins
-    busiest = sorted(bins, key=lambda b: b.volume, reverse=True)[:MAX_PROFILE_BINS]
+    busiest = sorted(bins, key=lambda b: b.tick_volume, reverse=True)[:MAX_PROFILE_BINS]
     log.info("profile had %d bins; kept the %d busiest", len(bins), MAX_PROFILE_BINS)
     return tuple(sorted(busiest, key=lambda b: b.price))
 

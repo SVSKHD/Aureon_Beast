@@ -374,3 +374,30 @@ def test_one_symbols_archive_is_not_the_others(
     # Different instruments, so different prices: an archive serving one file for both
     # would make these equal.
     assert gold[0].close != silver[0].close
+
+
+# ── 11D: what the comparison deliberately does not compare ───────────────────
+
+
+def test_the_multi_day_context_is_ignored_for_a_stated_reason() -> None:
+    """Pinned so nobody removes the entry without reading why it is there.
+
+    ``mtf`` is aggregated from a rolling multi-day buffer and this tool replays one archived
+    day: a live detection at 09:00 carries an H1 read built from the preceding week, and the
+    same detection replayed from that day alone has an hour of history and no H4 at all.
+    Comparing them would report every detection as mismatched and blame the engine for a
+    difference that is entirely the buffer's depth.
+
+    The cost is real and is stated in the module: this tool does not verify the MTF context.
+    ``tests/unit/test_mtf.py`` checks the aggregation against buckets known by construction,
+    which is the part that could be wrong.
+    """
+    from scripts.compare_live_vs_replay import IGNORED_FIELDS
+
+    assert "mtf" in IGNORED_FIELDS
+    assert "schema_version" in IGNORED_FIELDS
+    # Everything else IS compared, including the 9B context, which is day-scoped and so a
+    # one-day replay reproduces it exactly.
+    assert "volume_profile_ref" not in IGNORED_FIELDS
+    assert "volatility" not in IGNORED_FIELDS
+    assert "price" not in IGNORED_FIELDS and "indicators" not in IGNORED_FIELDS

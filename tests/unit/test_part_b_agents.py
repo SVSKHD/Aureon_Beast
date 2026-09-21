@@ -82,15 +82,21 @@ def one_candle(
 
 @pytest.mark.parametrize("agent_class", PART_B)
 def test_every_agent_is_versioned_and_named(agent_class: type[BaseAgent]) -> None:
-    """9B bumped every Part B agent to 1.1.0.
+    """Every Part B agent sits at 1.2.0: 9B moved them to 1.1.0, 11D to 1.2.0.
 
-    Not only the four the phase named: the reason to bump is that the two populations must
-    be **separable**, and every agent's documents changed shape identically when the engine
-    began attaching volume-profile and volatility context. An agent left at 1.0.0 would have
-    pre-9B and post-9B detections sharing ids with nothing to tell them apart (§12).
+    Not only the ones each phase named: the reason to bump is that the populations must be
+    **separable**, and every agent's documents changed shape identically when the engine began
+    attaching volume-profile and volatility context (9B) and then the higher-timeframe context
+    (11D). An agent left behind would have detections of two shapes sharing ids with nothing to
+    tell them apart (§12).
+
+    The literal is deliberate rather than derived from the class. A test that read the version
+    off the agent it is checking would pass for an agent nobody remembered to bump, which is the
+    single failure this test exists to catch; the cost is that a phase changing the detection
+    shape must come here, and that is the reminder.
     """
     agent = agent_class()
-    assert agent.agent_version == "1.1.0"
+    assert agent.agent_version == "1.2.0"
     assert agent.agent_name not in {"", "base"}
 
 

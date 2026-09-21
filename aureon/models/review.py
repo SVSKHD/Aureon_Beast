@@ -150,6 +150,12 @@ class ReviewBase(AureonDocument):
     #: cohort key -> "hit/resolved". A cohort that had to drop the volatility regime is a
     #: weaker claim than an exact one, and a single blended rate would hide which is which.
     assessment_hit_by_cohort: dict[str, str] = Field(default_factory=dict)
+    #: history source -> "hit/resolved" (11C, F-9). The merged ``assessment_hit_rate`` above
+    #: is an average over incomparable populations until this is read: a readout measured on
+    #: replayed fixture bars and one measured on bars a broker served are the same arithmetic
+    #: over different worlds. Kept beside the merged rate rather than replacing it, because
+    #: the merged one is what a reader will quote and this is what tells them whether to.
+    assessment_hit_by_source: dict[str, str] = Field(default_factory=dict)
 
     #: trade_id -> what the human wrote about it, oldest first (9D). Copied into the review
     #: rather than linked, so the document a person reads next year still says what they
@@ -158,6 +164,20 @@ class ReviewBase(AureonDocument):
     #: `#tag` -> the trades carrying it, for grouping a week by the trader's own vocabulary
     #: rather than by anything Aureon invented.
     trades_by_tag: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+
+    @property
+    def assessment_history_is_synthetic(self) -> bool:
+        """True when every resolved readout this period came from generated bars.
+
+        The state this repository is in, and the one a reader most needs told: a hit rate
+        printed without it reads as a measurement of the market.
+        """
+        resolved = {
+            source: row
+            for source, row in self.assessment_hit_by_source.items()
+            if not row.endswith("/0")
+        }
+        return set(resolved) == {"synthetic"}
 
     @property
     def assessment_hit_rate(self) -> float | None:

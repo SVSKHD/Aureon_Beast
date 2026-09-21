@@ -37,7 +37,12 @@ from aureon.execution.execution_guard import BrokerSnapshot, GuardResult, check
 from aureon.execution.idempotency import AlreadySent, SendGuard, comment_token
 from aureon.execution.lease_manager import LeaseManager
 from aureon.models.base import utc_now
-from aureon.models.enums import FailureCode, MarketState, TradeRequestStatus
+from aureon.models.enums import (
+    AccountMode,
+    FailureCode,
+    MarketState,
+    TradeRequestStatus,
+)
 from aureon.models.settings import ExecutionSettings
 from aureon.models.trade import BrokerOrderRequest, BrokerOrderResult, TradeRequest
 from aureon.storage.trade_request_repository import (
@@ -65,6 +70,10 @@ class ExecutionWorker:
         executor_id: str | None = None,
         lease_seconds: float = 60.0,
         poll_seconds: float = DEFAULT_POLL_SECONDS,
+        allow_live_execution: bool = False,
+        on_ops_event: object | None = None,
+        before_poll: object | None = None,
+        pace: object | None = None,
     ) -> None:
         self.repository = repository
         self.broker = broker
@@ -76,6 +85,26 @@ class ExecutionWorker:
         self.executor_id = executor_id or f"exec-{uuid.uuid4().hex[:10]}"
         self.lease_seconds = lease_seconds
         self.poll_seconds = poll_seconds
+        #: 11A F-3. From the environment, never from Firestore, and defaulting to False so a
+        #: caller that forgets it refuses a live account rather than permitting one.
+        self.allow_live_execution = allow_live_execution
+        #: Optional ``callable(name, detail)`` for the ops channel (11A F-15).
+        self.on_ops_event = on_ops_event
+        #: Called first in every loop iteration (11B). The executor's sleep decision lives
+        #: here, and note what is NOT here: there is no ``parked``. A closed market slows
+        #: this loop down; it does not stop it. A human who confirms a trade on a Saturday
+        #: is owed a refusal that says "market closed", not silence until Sunday night --
+        #: and the refusal is the guard's, on this process's own broker, already.
+        self.before_poll = before_poll
+        #: Given the awake cadence, the wait before the next iteration (11B). Safe to slow
+        #: right down because the snapshot listener, not the poll, is what makes a CONFIRMED
+        #: request prompt; the poll is the fallback for a listener that could not start.
+        self.pace = pace
+        #: Set by ``announce_account_mode`` when the terminal turns out to be real money
+        #: and nobody said that was intended. Reconcile-only: startup reconciliation runs
+        #: as usual, and every request is refused before the broker is touched.
+        self.reconcile_only = False
+        self.account_mode = AccountMode.UNKNOWN
 
         self.send_guard = SendGuard()
         self.leases = LeaseManager(repository, self.executor_id, lease_seconds=lease_seconds)
@@ -328,8 +357,68 @@ class ExecutionWorker:
             settings,
             market_state=self._market_state(request.symbol),
             broker=snapshot,
+            allow_live_execution=self.allow_live_execution,
             now=now,
         )
+
+    # ── 11A F-3: which account is this ────────────────────────────────────────
+
+    def announce_account_mode(self) -> AccountMode:
+        """Read the terminal's account mode once at startup and act on it.
+
+        Called by ``main_executor`` before the listener starts. Three outcomes:
+
+        * a demo or contest account, or the flag set: normal operation;
+        * real money without the flag: ``reconcile_only``, one ops message, and every
+          request refused by the guard's first rule -- startup reconciliation still runs,
+          because a position that is already open needs watching whoever opened it;
+        * the terminal will not say: treated as real money, for the reason
+          ``AccountMode.is_real_money`` gives.
+
+        The ops message is posted ONCE, here, rather than per refused request: an operator
+        needs to know which terminal is open, and they need to know it before they send a
+        request rather than a hundred times after.
+        """
+        try:
+            self.account_mode = self.broker.account_info().mode
+        except Exception:  # noqa: BLE001 - a broker that cannot say has not said "demo"
+            log.exception("could not read the account mode; assuming real money")
+            self.account_mode = AccountMode.UNKNOWN
+
+        self.reconcile_only = (
+            self.account_mode.is_real_money and not self.allow_live_execution
+        )
+        if self.reconcile_only:
+            log.error(
+                "executor on a %s account and AUREON_ALLOW_LIVE_EXECUTION is not 'true': "
+                "execution disabled, reconciliation only",
+                self.account_mode.value,
+            )
+            self._ops(
+                "live_account_detected",
+                f"executor on {self.account_mode.value.upper()} account — execution "
+                "disabled. Set AUREON_ALLOW_LIVE_EXECUTION=true on the box if that is "
+                "intended.",
+            )
+        elif self.account_mode.is_real_money:
+            log.warning(
+                "executor on a %s account with live execution ALLOWED",
+                self.account_mode.value,
+            )
+            self._ops(
+                "live_account_detected",
+                f"executor on {self.account_mode.value.upper()} account with live "
+                "execution ALLOWED — orders will use real money.",
+            )
+        return self.account_mode
+
+    def _ops(self, name: str, detail: str) -> None:
+        if self.on_ops_event is None:
+            return
+        try:
+            self.on_ops_event(name, detail)  # type: ignore[operator]
+        except Exception:  # noqa: BLE001 - an ops post must not stop the executor
+            log.exception("ops event %s could not be posted", name)
 
     # ── Serving ───────────────────────────────────────────────────────────────
 
@@ -364,11 +453,26 @@ class ExecutionWorker:
 
     def run(self) -> None:
         while not self._stop.is_set():
+            if self.before_poll is not None:
+                try:
+                    self.before_poll()  # type: ignore[operator]
+                except Exception:  # noqa: BLE001 - a side errand must not stop executing
+                    log.exception("executor before_poll failed")
             try:
                 self.poll_once()
             except Exception:  # noqa: BLE001 - a poll failure must not kill the executor
                 log.exception("executor poll failed")
-            self._stop.wait(self.poll_seconds)
+            self._stop.wait(self._wait())
+
+    def _wait(self) -> float:
+        """This iteration's cadence, asked for each time round (11B)."""
+        if self.pace is None:
+            return self.poll_seconds
+        try:
+            return float(self.pace(self.poll_seconds))  # type: ignore[operator]
+        except Exception:  # noqa: BLE001
+            log.exception("executor pace hook failed; using the awake cadence")
+            return self.poll_seconds
 
     def start(self) -> None:
         self.start_listener()

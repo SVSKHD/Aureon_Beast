@@ -41,7 +41,7 @@ from __future__ import annotations
 from pydantic import ConfigDict, Field, model_validator
 
 from aureon.models.base import AureonDocument, AureonModel, UtcDatetime
-from aureon.models.enums import Direction, SessionName, TrendBias
+from aureon.models.enums import Direction, HistorySource, SessionName, TrendBias
 
 #: Cohort dimensions, in the order they are given up when there is not enough history.
 #:
@@ -58,6 +58,18 @@ WIDENING_ORDER: tuple[str, ...] = ("wick_tag", "price_vs_va", "volatility_regime
 #: that printing the point estimate beside it invites reading the estimate and ignoring the
 #: interval.
 MIN_COHORT = 30
+
+#: How many VERIFIED broker days a cohort has to span before its numbers describe the
+#: instrument rather than the sample (11C, F-9).
+#:
+#: Ten, because it is the smallest stretch holding two of every weekday and both ends of a
+#: week. Below it a single quiet Tuesday moves every quantile, and a Monday-open gap that
+#: happened once is a third of the Mondays in the sample.
+#:
+#: Separate from ``MIN_COHORT``, which is about n: two hundred detections from one Tuesday
+#: are not two hundred independent observations, and a readout can clear the cohort floor
+#: while still resting on a single day.
+MATURE_REAL_DAYS = 10
 
 
 class TrendRead(AureonModel):
@@ -214,7 +226,29 @@ class Assessment(AureonDocument):
     #: True when the trend read and the detection's own direction disagree. Stored rather
     #: than derived at render time so a review can count how often the two parted company.
     disagrees_with_detection: bool = False
+    #: Where this cohort's history came from (11C, F-9), and how many VERIFIED broker days
+    #: it spans.
+    #:
+    #: Stored on the document rather than worked out later, because the answer depends on
+    #: which sessions had been verified at the moment the readout was published and that is
+    #: not recoverable afterwards. ``real_days`` counts distinct verified broker dates the
+    #: cohort actually drew on -- not the number of days verified in total, which would say
+    #: nothing about this readout.
+    history_source: HistorySource = HistorySource.UNKNOWN
+    real_days: int = Field(default=0, ge=0)
     created_at: UtcDatetime | None = None
+
+    @property
+    def immature(self) -> bool:
+        """Under ``MATURE_REAL_DAYS`` verified days, whatever the cohort size.
+
+        A cohort of two hundred detections from one Tuesday is not two hundred independent
+        observations: they share a session, a volatility regime and one day's news. The
+        floor is on DAYS for that reason, and it is separate from ``insufficient``, which is
+        about n. A readout can clear the cohort floor and still be immature, and that is the
+        common case early on.
+        """
+        return self.real_days < MATURE_REAL_DAYS
 
 
 class TradeNote(AureonDocument):

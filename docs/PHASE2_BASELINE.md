@@ -29,7 +29,7 @@ Gaps (weekend discontinuity):
 
 | property | value |
 |---|---|
-| agent | `ema_cross` v2.1.0 |
+| agent | `ema_cross` v2.2.0 |
 | fast / slow EMA | 20 / 50 |
 | RSI period | 14 (context only, never a gate) |
 | warm-up bars | 150 (slow × 3) |
@@ -75,12 +75,12 @@ alone -- adding an agent never changes another's output.
 
 | agent | version | window | detections |
 |---|---|---|---|
-| `ema_cross` | 2.1.0 | 151 | 29 |
-| `rsi` | 1.1.0 | 44 | 110 |
-| `session_trend` | 1.1.0 | 98 | 19 |
-| `wick` | 1.1.0 | 1 | 235 |
-| `liquidity` | 1.1.0 | 583 | 528 |
-| `breakout` | 1.1.0 | 583 | 251 |
+| `ema_cross` | 2.2.0 | 151 | 29 |
+| `rsi` | 1.2.0 | 44 | 110 |
+| `session_trend` | 1.2.0 | 98 | 19 |
+| `wick` | 1.2.0 | 1 | 235 |
+| `liquidity` | 1.2.0 | 583 | 528 |
+| `breakout` | 1.2.0 | 583 | 251 |
 
 ### Crosses, sweeps and breakouts per session
 
@@ -379,7 +379,7 @@ Read the columns literally:
 
 235 detections, none evaluable: this agent emits `direction=None`, so there is no favourable side to measure (§16, decision 48).
 
-### Outcomes by volume and volatility context — XAUUSD
+### Outcomes by tick-volume and volatility context — XAUUSD
 
 Horizon `c5`, threshold `3`, COMPLETE horizons only. Every row
 gives both sides, because a `with` rate means nothing until the `without` rate is
@@ -691,7 +691,7 @@ rescaling them (decision 121). Until then, read silver's top thresholds as
 "not measured here" rather than as "silver does not move" — and remember the
 fixture is a random walk, so none of this is evidence about the metal.
 
-### Outcomes by volume and volatility context — XAGUSD
+### Outcomes by tick-volume and volatility context — XAGUSD
 
 Horizon `c5`, threshold `0.1`, COMPLETE horizons only. Every row
 gives both sides, because a `with` rate means nothing until the `without` rate is

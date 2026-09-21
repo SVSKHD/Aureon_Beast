@@ -18,6 +18,7 @@ import pytest
 
 from scripts.update_phases import (
     CATALOGUE,
+    OBSERVED_SYMBOLS,
     Artefact,
     PhaseEvidence,
     main,
@@ -43,6 +44,8 @@ TABLE = """# Phases
 | 8 | Vue | dashboard | not started |
 | 9A | Two symbols | both run in one observer | partial |
 | 9B | Volume profile | profile-tagged detections | partial |
+| 11A | Flaw register | each item green | partial |
+| 11B | Sleep and wake | 48 simulated hours | partial |
 | — | **Corrections slice** (identity, EMA) | suite green | partial |
 | — | **Defect register D-1…D-15** | each item green | closed |
 
@@ -66,9 +69,19 @@ def fake_repo(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     (docs / "PHASE1_DECISIONS.md").write_text("| 120 | x | y |\n", encoding="utf-8")
-    (docs / "evidence" / "session_2026-09-16.md").write_text(
-        "SESSION VERIFIED — 6 pass\n", encoding="utf-8"
+    (docs / "ARCHITECTURE.md").write_text("# the frozen spec\n", encoding="utf-8")
+    (tmp_path / "aureon" / "services").mkdir(parents=True)
+    (tmp_path / "aureon" / "services" / "ops_events.py").write_text(
+        "live_account_detected = 1\n", encoding="utf-8"
     )
+    (tmp_path / "tests" / "failure_injection").mkdir(parents=True)
+    (tmp_path / "tests" / "failure_injection" / "test_weekend_cycle.py").write_text(
+        "def test_one():\n    pass\n", encoding="utf-8"
+    )
+    for symbol in OBSERVED_SYMBOLS:
+        (docs / "evidence" / f"session_2026-09-16_{symbol}.md").write_text(
+            "SESSION VERIFIED — 6 pass\n", encoding="utf-8"
+        )
     (docs / "evidence" / "demo_drills_2026-09-16.md").write_text(
         "| broker | `mt5` |\n", encoding="utf-8"
     )
@@ -104,7 +117,7 @@ def test_every_phase_reports_its_artefact(fake_repo) -> None:
     cells = evidence_cells(rewrite(TABLE, root=fake_repo, docs=fake_repo / "docs"))
     assert cells["0"] == "✅ 2 boundary guards", "the COUNT, not just the file"
     assert cells["1"] == "✅ [CONTRACTS.md](CONTRACTS.md)"
-    assert "session_2026-09-16.md" in cells["2"]
+    assert "session_2026-09-16_XAUUSD.md" in cells["2"]
     assert cells["3"] == "✅ [XAU_OUTCOME_V2 outcomes](PHASE2_BASELINE.md)"
     assert "demo_drills_2026-09-16.md" in cells["4"]
     assert cells["7"] == "✅ [review reconciliation](PHASE2_BASELINE.md)"
@@ -121,7 +134,7 @@ def test_the_label_is_the_link_text_not_the_filename(fake_repo) -> None:
 
 def test_the_two_unnumbered_rows_are_told_apart_by_scope(fake_repo) -> None:
     cells = evidence_cells(rewrite(TABLE, root=fake_repo, docs=fake_repo / "docs"))
-    assert "session_2026-09-16.md" in cells["**Corrections slice*"]
+    assert "session_2026-09-16_XAUUSD.md" in cells["**Corrections slice*"]
     assert "PHASE1_DECISIONS.md" in cells["**Defect register D-"]
 
 
@@ -136,7 +149,8 @@ def test_rewriting_twice_changes_nothing(fake_repo) -> None:
 
 def test_a_removed_artefact_goes_back_to_missing(fake_repo) -> None:
     """The direction that matters: a phase whose evidence is gone must not stay green."""
-    (fake_repo / "docs" / "evidence" / "session_2026-09-16.md").unlink()
+    for symbol in OBSERVED_SYMBOLS:
+        (fake_repo / "docs" / "evidence" / f"session_2026-09-16_{symbol}.md").unlink()
     cells = evidence_cells(rewrite(TABLE, root=fake_repo, docs=fake_repo / "docs"))
     assert "⬜ missing: verified real session" in cells["2"]
     assert "session_run.py" in cells["2"], "and it names what would produce it"
@@ -231,8 +245,70 @@ def test_the_committed_table_reports_what_is_genuinely_missing() -> None:
     terminal or a demo account in this repository, and the table must keep saying so."""
     cells = evidence_cells(PHASES.read_text(encoding="utf-8"))
     assert cells["2"].count("⬜") == 1, cells["2"]
+    assert all(symbol in cells["2"] for symbol in OBSERVED_SYMBOLS), cells["2"]
     assert cells["4"].startswith("⬜"), cells["4"]
     assert cells["6"].startswith("⬜"), cells["6"]
     # 9A's own real-session leg: nothing has run against a terminal for silver either.
     assert "⬜" in cells["9A"], cells["9A"]
-    assert len(CATALOGUE) == 13
+    # 11A still owes the frozen spec, which has to be SUPPLIED and cannot be written here.
+    assert "missing: the frozen spec" in cells["11A"], cells["11A"]
+    assert len(CATALOGUE) == 15
+
+
+# ── 11C F-1: both symbols, or neither counts ─────────────────────────────────
+
+
+def test_the_project_symbols_come_from_the_tuning_table_not_the_environment(
+    monkeypatch,
+) -> None:
+    """The flaw the first version of this had.
+
+    Reading ``AureonConfig.from_env().symbols`` looked right and was not: ``AUREON_SYMBOLS``
+    defaults to gold alone, so running the tool on a box that had not exported it produced a
+    Phase 2 gate demanding one verified session. The evidence bar would have relaxed itself
+    to match whoever happened to run it, which is the opposite of what a derived column is
+    for. It reads ``known_symbols()`` -- a committed table -- so the environment cannot move
+    it either way.
+    """
+    from aureon.config.symbol_tuning import known_symbols
+    from scripts.update_phases import _observed_symbols
+
+    monkeypatch.delenv("AUREON_SYMBOLS", raising=False)
+    assert _observed_symbols() == known_symbols()
+    assert len(_observed_symbols()) > 1, "the whole point is more than one instrument"
+
+    monkeypatch.setenv("AUREON_SYMBOLS", "XAUUSD")
+    assert _observed_symbols() == known_symbols(), "unmoved by a narrower environment"
+
+
+def test_one_symbols_verified_session_does_not_close_phase_two(fake_repo) -> None:
+    """A gold session says nothing about silver.
+
+    Thresholds are in points and points are different money per instrument (decision 141),
+    so there is no partial credit here: the cell stays ⬜ and names the symbol still owed.
+    """
+    (fake_repo / "docs" / "evidence" / "session_2026-09-16_XAGUSD.md").unlink()
+    cells = evidence_cells(rewrite(TABLE, root=fake_repo, docs=fake_repo / "docs"))
+    assert cells["2"].count("⬜") == 1, cells["2"]
+    assert "missing: verified real session for XAGUSD" in cells["2"], cells["2"]
+    assert "XAUUSD" not in cells["2"].split("⬜")[1], (
+        "the one that IS verified must not be listed as missing"
+    )
+
+
+def test_a_session_file_without_the_marker_does_not_count_for_its_symbol(
+    fake_repo,
+) -> None:
+    """The same rot-in-the-safe-direction rule, per symbol: a file that exists because a
+    session was STARTED is not a file that says it was verified."""
+    path = fake_repo / "docs" / "evidence" / "session_2026-09-16_XAGUSD.md"
+    path.write_text("# session 2026-09-16 XAGUSD\n\nstarted, never closed\n", encoding="utf-8")
+    cells = evidence_cells(rewrite(TABLE, root=fake_repo, docs=fake_repo / "docs"))
+    assert "for XAGUSD" in cells["2"], cells["2"]
+
+
+def test_every_symbol_verified_closes_it(fake_repo) -> None:
+    cells = evidence_cells(rewrite(TABLE, root=fake_repo, docs=fake_repo / "docs"))
+    assert "⬜" not in cells["2"], cells["2"]
+    for symbol in OBSERVED_SYMBOLS:
+        assert f"session_2026-09-16_{symbol}.md" in cells["2"], cells["2"]

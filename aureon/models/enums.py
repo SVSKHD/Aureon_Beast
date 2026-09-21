@@ -129,6 +129,66 @@ class MarketState(StrEnum):
     UNKNOWN = "unknown"
 
 
+class HistorySource(StrEnum):
+    """Where a measured cohort's history came from (11C, F-9).
+
+    A readout built on replayed fixture bars and one built on bars a broker served are the
+    same arithmetic over incomparable data, and until 11C nothing on the stored assessment
+    said which. A generated random walk has the distribution its generator was given, so a
+    hit rate measured over one is a statement about ``scripts/gen_fixtures.py``.
+
+    ``UNKNOWN`` exists for an assessment written before this field did, and is not the same
+    as SYNTHETIC: "nobody recorded it" and "we know it was generated" are different, and
+    collapsing them would quietly relabel old readouts.
+    """
+
+    SYNTHETIC = "synthetic"
+    REAL = "real"
+    MIXED = "mixed"
+    UNKNOWN = "unknown"
+
+    @property
+    def is_evidence(self) -> bool:
+        """Only a wholly real cohort is evidence about the instrument."""
+        return self is HistorySource.REAL
+
+
+class MtfAlignment(StrEnum):
+    """Whether the higher timeframes agree with a detection's direction (11D).
+
+    Three answers and no fourth. ``MIXED`` covers both "some agree and some do not" and
+    "nobody has a view", deliberately: a timeframe with too few bars to seed an EMA is an
+    absence of evidence, and giving that its own value would invite treating it as a weak
+    ALIGNED. The reasoning lives in ``aureon/engine/mtf.py``.
+
+    Recorded, never gated on. Whether alignment predicts anything is a question for the
+    evaluation rules; building a filter on the assumption that it does would be a threshold
+    nobody researched.
+    """
+
+    ALIGNED = "aligned"
+    MIXED = "mixed"
+    AGAINST = "against"
+
+
+class SleepPhase(StrEnum):
+    """Where a service is in the weekly sleep cycle (11B).
+
+    Lives here rather than beside the state machine in ``aureon.services.sleep_cycle``
+    because ``SystemState`` publishes it and models may not import services. The machine
+    that produces it, and the reasoning behind each value, are in that module.
+    """
+
+    #: Normal operation.
+    AWAKE = "awake"
+    #: Every symbol reads CLOSED, but the confirmation window has not elapsed.
+    CLOSING = "closing"
+    #: Confirmed closed. Loops parked, heartbeat slow, process alive.
+    ASLEEP = "asleep"
+    #: Still closed, but the open is imminent: loops run again so the open finds us ready.
+    WAKING = "waking"
+
+
 class SessionName(StrEnum):
     """Trading sessions (§18). Boundaries live in aureon/config/sessions.py."""
 
@@ -198,6 +258,48 @@ class LinkType(StrEnum):
     INFERRED = "inferred"
 
 
+class AccountMode(StrEnum):
+    """Which kind of money the terminal is logged into (11A, F-3).
+
+    MT5 reports this as ``account_info().trade_mode``: 0 demo, 1 contest, 2 real. It is
+    read and carried as a NAME rather than compared as an integer at the call sites, because
+    "2" appearing in a conditional is the least reviewable possible way to express "this is
+    somebody's savings".
+
+    ``UNKNOWN`` is a real answer and the one the guards must treat as dangerous: a terminal
+    that will not say what it is logged into has not said it is a demo.
+    """
+
+    DEMO = "demo"
+    CONTEST = "contest"
+    REAL = "real"
+    UNKNOWN = "unknown"
+
+    @classmethod
+    def from_trade_mode(cls, value: object) -> AccountMode:
+        """Map MT5's integer, treating anything unrecognised as UNKNOWN.
+
+        Deliberately not ``cls(value)`` with a default of DEMO: a broker that starts
+        reporting 3 for something new would otherwise be read as a demo account, which is
+        the one direction this mapping must never fail in.
+        """
+        mapping = {0: cls.DEMO, 1: cls.CONTEST, 2: cls.REAL}
+        try:
+            return mapping.get(int(value), cls.UNKNOWN)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return cls.UNKNOWN
+
+    @property
+    def is_real_money(self) -> bool:
+        """True for anything that is not demonstrably a practice account.
+
+        UNKNOWN counts as real money. The cost of being wrong in this direction is a
+        refused order; the cost of being wrong in the other is an order on somebody's
+        savings placed by a system whose own tests have never run against real fills.
+        """
+        return self in {AccountMode.REAL, AccountMode.UNKNOWN}
+
+
 class FailureCode(StrEnum):
     """Why a request failed (§56, §57, §41, §78).
 
@@ -208,6 +310,12 @@ class FailureCode(StrEnum):
     # Operator / settings gates (§57)
     TRADING_DISABLED = "trading_disabled"
     NOT_AUTHORIZED = "not_authorized"
+    #: The terminal is logged into a real-money account and nobody has said that is
+    #: intended (11A, F-3). Separate from TRADING_DISABLED because the two need different
+    #: remedies: one is a switch a human flips in Discord, the other is an environment
+    #: variable on the box, and telling an operator to flip the wrong one wastes the
+    #: minutes in which they could have noticed which terminal is open.
+    LIVE_EXECUTION_NOT_ALLOWED = "live_execution_not_allowed"
 
     # Market condition gates (§41, §56)
     MARKET_CLOSED = "market_closed"

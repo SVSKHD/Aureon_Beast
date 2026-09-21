@@ -21,6 +21,20 @@ packages from importing ``aureon.execution`` at all.
 
 Shutdown flushes the outbox again, so a clean stop leaves nothing queued. An unclean
 stop is safe too: the queue is durable and step 3 will drain it next boot.
+
+## The weekend (11B)
+
+The process does not exit at the close and is not restarted at the open. Exiting would
+turn a predictable weekly event into a restart, and a restart is the one moment this
+service can lose its cursor or leave its outbox undrained. So at a confirmed close it
+parks the candle loop, flushes everything durable, slows the heartbeat and keeps
+polling -- once a minute -- for the market to come back. It wakes itself before the
+open, so the backfill is done by the time the first real candle closes.
+
+What stays running matters as much as what stops: the heartbeat (a heartbeat that
+stopped would be indistinguishable from a process that died over the weekend), the
+provider connection (reconnecting at 22:00 Sunday is the worst moment to discover the
+terminal is logged out), and the ops register.
 """
 
 from __future__ import annotations
@@ -49,6 +63,7 @@ from aureon.engine.market_engine import MarketEngine
 from aureon.engine.symbol_engines import SymbolEngines
 from aureon.evaluation.outcome_tracker import OutcomeTracker
 from aureon.evaluation.rules import get_rule
+from aureon.models.base import to_utc
 from aureon.models.detection import Detection
 from aureon.models.enums import MarketState, Timeframe
 from aureon.models.market import Candle
@@ -58,9 +73,12 @@ from aureon.outbox.outbox_worker import OutboxWorker
 from aureon.services.alert_watcher import AlertWatcher, build_snapshot, minutes_since
 from aureon.services.heartbeat_service import HeartbeatService
 from aureon.services.market_snapshot import MarketSnapshot
-from aureon.services.market_state_service import MarketStateService
+from aureon.services.market_state_service import MarketStateService, WeeklySchedule
 from aureon.services.observer_state import ObserverState
+from aureon.services.ops_events import OpsRegister
+from aureon.services.sleep_cycle import SleepCycle, SleepGate
 from aureon.storage import paths
+from aureon.storage.market_day_repository import MarketDayRepository
 
 log = logging.getLogger("aureon.observer")
 
@@ -120,6 +138,38 @@ class Observer:
             AlertWatcher(alert_repository) if alert_repository is not None else None
         )
 
+        #: 11B. The schedule comes from the market-state service when there is one, so the
+        #: two cannot disagree about when the open is -- a second WeeklySchedule would be a
+        #: second place for the weekly boundary to be wrong.
+        self.sleep = SleepCycle(
+            schedule=(
+                market_state.schedule if market_state is not None else WeeklySchedule()
+            ),
+            close_confirm_seconds=config.close_confirm_seconds,
+            preopen_seconds=config.preopen_seconds,
+            sleep_heartbeat_seconds=config.sleep_heartbeat_seconds,
+            sleep_poll_seconds=config.sleep_poll_seconds,
+        )
+        #: This poll's market states, read once and shared by the sleep decision and the
+        #: ops report. Two independent reads per poll would cost two provider round trips
+        #: per symbol and could disagree with each other.
+        self._states: dict[str, MarketState] = {}
+        #: 11D. Optional: an observer without one still observes and still attaches the MTF
+        #: context from its own buffer; it just does not cache the day for anybody else.
+        self.market_days: object | None = None
+        #: This broker day's M5 bars per stream, and which day that is, so a rollover is
+        #: visible without a clock: the arrival of a bar on a later date IS the rollover.
+        self._day_bars: dict[tuple[str, Timeframe], list[Candle]] = {}
+        self._day_of: dict[tuple[str, Timeframe], str] = {}
+        #: Whether this day's buffer began at its ROLLOVER rather than at process start.
+        #:
+        #: A process that starts at 14:00 has the afternoon's bars and none of the morning's,
+        #: and writing that as a complete day would be worse than writing nothing: a D1 bar
+        #: aggregated from it would have the wrong open, the wrong low and a plausible shape.
+        #: So the first day a process sees is written with ``complete=False``, and only a day
+        #: whose first bar arrived as a rollover is complete.
+        self._day_clean: dict[tuple[str, Timeframe], bool] = {}
+
         # One engine, one roster and one LevelTracker per symbol. See SymbolEngines for
         # why a single shared engine cannot do this: it would keep the right history and
         # the wrong thresholds.
@@ -128,8 +178,24 @@ class Observer:
                 roster,
                 account_scope=config.account_scope,
                 market_tz=config.market_tz,
+                # 11B: a bar straddling the weekly close is not a bar -- its range IS the
+                # weekend gap. The engine refuses to analyse one and records why.
+                gap_guard=self.sleep.schedule.close_spanned_by,
+                # 11D: a longer M5 tail than the analysis window, for the higher timeframes.
+                mtf_bars=config.mtf_m5_bars,
+                mtf_periods=(config.ema_fast, config.ema_slow),
             )
                 for symbol, roster in _rosters(config, agents).items()}
+        )
+        #: 11B. The three steps of a sleep decision, shared with the other services so
+        #: "what counts as closed" has one implementation rather than four.
+        self.gate = SleepGate(
+            cycle=self.sleep,
+            states=self._market_states,
+            clock=self._now_or_none,
+            on_sleep=self._on_market_close,
+            on_wake=self._on_market_open,
+            service=paths.SERVICE_OBSERVER,
         )
         self.market_engine = MarketEngine(
             provider,
@@ -138,9 +204,17 @@ class Observer:
             timeframes=config.timeframes,
             on_detections=self._on_detections,
             on_candle_close=self._on_candle_close,
-            on_poll=self._check_alerts,
+            on_poll=self._on_poll,
+            before_poll=self.gate.tick,
+            parked=lambda: self.gate.parked,
+            pace=self.gate.pace,
         )
         self._last_candles: dict[tuple[str, Timeframe], Candle] = {}
+        #: 11A F-3. Read once per connection; see ``_account_mode``.
+        self._cached_account_mode: object | None = None
+        #: 11A F-15. Optional: an observer without one still observes, it just says nothing
+        #: about its own health. Set by ``main`` when a Firestore client exists.
+        self.ops: object | None = None
         # One snapshot per symbol/timeframe, fed by every detection and candle so
         # /status reports the SAME indicator values that were stored, never a
         # recomputation that could disagree with them (§59, §66).
@@ -250,6 +324,9 @@ class Observer:
 
     def _on_candle_close(self, candle: Candle) -> None:
         """Advance the cursor, evaluations and state on every candle close."""
+        if self._spans_a_close(candle):
+            self._skip_candle(candle)
+            return
         key = (candle.symbol, candle.timeframe)
         self._last_candles[key] = candle
         # Session extremes come from candles, not detections: a session has a high
@@ -266,6 +343,7 @@ class Observer:
                 self.candle_archive.add(candle)
             except Exception:  # noqa: BLE001 - archiving must never stop observing
                 log.exception("could not archive %s", candle.open_time.utc)
+        self._cache_market_day(candle)
         self._advance_evaluations(candle)
         # Saved per candle, not per poll: a crash between two candles must not
         # re-process the earlier one.
@@ -275,6 +353,342 @@ class Observer:
             # observer records and needs no second scheduler (9C).
             self.alerts.expire()
         self._write_system_state(force=True)
+
+    # ── The broker-day cache (11D) ────────────────────────────────────────────
+
+    def _cache_market_day(self, candle: Candle) -> None:
+        """Buffer this bar into its broker day, and write the day when it rolls over.
+
+        The rollover is the moment a day will never grow again -- the same moment the parquet
+        archive is flushed, and for the same reason. Writing on every candle instead would be
+        288 writes a day per symbol for a document nothing reads until the day is done.
+
+        The day in progress is not written at all, which is a deliberate narrowing of what 11D
+        asked for: a partial day is only useful to a chart, and a chart reading a document
+        flagged ``complete=False`` is one mistake away from an aggregation reading it as
+        finished -- which produces a daily bar whose close is not the close. The M1 parquet
+        archive already serves the live view, and it is the thing that has the bars anyway.
+        """
+        if self.market_days is None or candle.timeframe is not Timeframe.M5:
+            return
+        key = (candle.symbol, candle.timeframe)
+        day = candle.open_time.market_date
+        pending = self._day_bars.setdefault(key, [])
+        previous = self._day_of.get(key)
+        if previous is None:
+            # The first bar this process has seen. Its day may already be half over.
+            self._day_clean[key] = False
+        elif previous != day:
+            self._write_market_day(
+                candle.symbol, previous, pending, complete=self._day_clean.get(key, False)
+            )
+            pending = []
+            self._day_bars[key] = pending
+            self._day_clean[key] = True
+        self._day_of[key] = day
+        pending.append(candle)
+
+    def _write_market_day(
+        self,
+        symbol: str,
+        market_date: str,
+        candles: list[Candle],
+        *,
+        complete: bool,
+    ) -> None:
+        """One broker day: its shape, and its bars at each cached timeframe.
+
+        ``complete`` is the caller's claim that this day was seen from its first bar. A day a
+        process joined halfway through is written with it False -- and a False day is skipped
+        by ``recent_frames``, so a D1 bar is never aggregated from an afternoon.
+        """
+        if not candles or self.market_days is None:
+            return
+        from aureon.models.market_day import CACHED
+        from aureon.services.market_day_builder import build_day, build_frame
+
+        try:
+            for timeframe in CACHED:
+                self.market_days.write_frame(  # type: ignore[union-attr]
+                    build_frame(
+                        symbol,
+                        market_date,
+                        timeframe,
+                        candles,
+                        market_tz=self.config.market_tz,
+                        complete=complete,
+                    )
+                )
+            self.market_days.write_day(  # type: ignore[union-attr]
+                build_day(
+                    symbol,
+                    market_date,
+                    candles,
+                    market_tz=self.config.market_tz,
+                    complete=complete,
+                )
+            )
+            log.info(
+                "cached %s %s: %d M5 bars across %d timeframes (%s)",
+                symbol,
+                market_date,
+                len(candles),
+                len(CACHED),
+                "complete" if complete else "PARTIAL — seen from mid-day",
+            )
+        except Exception:  # noqa: BLE001 - a cache write must never stop observing
+            log.exception("could not cache %s %s", symbol, market_date)
+
+    # ── The weekend (11B) ─────────────────────────────────────────────────────
+
+    def _market_states(self) -> dict[str, MarketState]:
+        """Every configured symbol's state, read once per poll.
+
+        An observer with no market-state service returns ``{}`` and therefore never
+        sleeps: it has no way to tell a closed market from a dead one, and staying awake is
+        the answer that cannot turn an outage into silence. A symbol the service raises on
+        becomes UNKNOWN for the same reason -- UNKNOWN is a fault, and faults stay awake.
+        """
+        if self.market_state is None:
+            self._states = {}
+            return self._states
+        states: dict[str, MarketState] = {}
+        for symbol in self.config.symbols:
+            try:
+                states[symbol] = self.market_state.state_for(symbol).state
+            except Exception:  # noqa: BLE001
+                states[symbol] = MarketState.UNKNOWN
+        self._states = states
+        return states
+
+    def _on_market_close(self, crossing: object) -> None:
+        """Park the loops and leave nothing in flight over the weekend.
+
+        Everything here is work that a two-day pause makes urgent rather than optional. The
+        outbox is drained because a detection sitting in it is a detection nobody has seen;
+        the candle archive is flushed because its unflushed tail is lost on a crash and the
+        weekend is a long time to hold one; the cursor is saved because that is the only
+        record of where to resume.
+        """
+        log.info(
+            "market closed; parking until %s",
+            getattr(crossing, "next_open", None),
+        )
+        delivered = self.worker.flush()
+        if delivered:
+            log.info("delivered %d detection(s) before the close", delivered)
+        remaining = self.outbox.pending_count()
+        if remaining:
+            log.warning(
+                "%d detection(s) still queued at the close; the next open drains them",
+                remaining,
+            )
+        if self.candle_archive is not None:
+            try:
+                for path in self.candle_archive.flush_all():
+                    log.info("flushed live candles to %s", path)
+            except Exception:  # noqa: BLE001 - archiving must never stop observing
+                log.exception("could not flush the live-candle archive at the close")
+        self.state.save()
+        # 11D: the week's last broker day ends HERE. Waiting for the next bar to announce the
+        # rollover would mean waiting until Sunday night -- and a restart over the weekend
+        # would lose the buffer and the day with it. A midweek closure is left alone: the
+        # market reopens the same day and the buffer is still the same day's.
+        if getattr(crossing, "weekly", False):
+            self._flush_market_days()
+        self._set_heartbeat_cadence()
+        # Forced, so /status says CLOSED at once rather than at the next candle -- and
+        # there will not BE a next candle for two days.
+        self._write_system_state(force=True)
+
+    def _flush_market_days(self) -> None:
+        """Write every buffered broker day, because the trading week has ended (11D)."""
+        for (symbol, timeframe), candles in list(self._day_bars.items()):
+            market_date = self._day_of.get((symbol, timeframe))
+            if market_date is None or not candles:
+                continue
+            self._write_market_day(
+                symbol,
+                market_date,
+                candles,
+                complete=self._day_clean.get((symbol, timeframe), False),
+            )
+            self._day_bars[(symbol, timeframe)] = []
+            # Cleared, so the next bar starts a fresh day rather than appending Monday's bars
+            # to Friday's -- and NOT marked clean, because the next day this process sees
+            # begins wherever the market reopens rather than at a rollover it watched.
+            self._day_of.pop((symbol, timeframe), None)
+            self._day_clean[(symbol, timeframe)] = False
+
+    def _on_market_open(self, crossing: object) -> None:
+        """Come back up, early enough that the first real candle finds us ready."""
+        log.info("market opening; resuming observation (%s)", self.sleep.phase.value)
+        self._set_heartbeat_cadence()
+        self._write_system_state(force=True)
+
+    def _set_heartbeat_cadence(self) -> None:
+        """Slow the heartbeat while parked, and restore it on waking.
+
+        Slowed, never stopped: a heartbeat that stopped over the weekend would be
+        indistinguishable from a process that died at the close, which is precisely the
+        thing the heartbeat exists to tell apart.
+        """
+        if self.heartbeat is None:
+            return
+        cadence = self.sleep.heartbeat_seconds(self.config.state_heartbeat_seconds)
+        try:
+            self.heartbeat.set_interval(cadence)
+        except Exception:  # noqa: BLE001 - a cadence change must not stop observing
+            log.exception("could not change the heartbeat cadence")
+
+    def _spans_a_close(self, candle: Candle) -> bool:
+        """Whether this bar straddles a weekly close (11B).
+
+        The same predicate the analysis engine is given, asked again here rather than
+        inferred from "the engine returned no detections" -- a quiet candle and a refused
+        one are different things, and a check that could not tell them apart would archive
+        and measure the gap bar on every week where nothing happened to cross.
+        """
+        return (
+            self.sleep.schedule.close_spanned_by(candle.open_time.utc, candle.close_time)
+            is not None
+        )
+
+    def _skip_candle(self, candle: Candle) -> None:
+        """Archive a gap-spanning bar, advance past it, and measure nothing from it.
+
+        Archived, because §82 says the archive records what the broker actually SERVED, and
+        replay reaching the same guard on the same bytes is the whole point of there being
+        one engine. Everything else is skipped: its high and low are the weekend gap, so a
+        session extreme taken from it would be a two-day move recorded as five minutes, and
+        an outcome measured through it would be an excursion nobody could have traded.
+
+        The cursor still advances -- both the engine's and the durable one -- or the same
+        bar would be refetched and refused on every poll for ever.
+        """
+        log.warning(
+            "%s %s bar %s spans the weekly close; not analysed",
+            candle.symbol,
+            candle.timeframe.value,
+            candle.open_time.utc.isoformat(),
+        )
+        if self.candle_archive is not None:
+            try:
+                self.candle_archive.add(candle)
+            except Exception:  # noqa: BLE001 - archiving must never stop observing
+                log.exception("could not archive %s", candle.open_time.utc)
+        self.state.set_and_save(candle.symbol, candle.timeframe, candle.open_time.utc)
+
+    def _now_or_none(self) -> datetime:
+        """The provider's clock, falling back to the process clock.
+
+        Only ever used for a DISPLAY field. Nothing that is stored as a measurement reads
+        it, which is what makes the fallback acceptable: the alternative is a status embed
+        that cannot say when the market opens because the terminal was busy.
+        """
+        try:
+            return self.provider.now_utc()
+        except Exception:  # noqa: BLE001
+            from aureon.models.base import utc_now
+
+            return utc_now()
+
+    def _on_poll(self) -> None:
+        """Everything that runs on the ~1s poll clock, in the order that matters.
+
+        Alerts first: a level crossed is a thing a human asked to be told and is worth a
+        moment's head start over the system talking about itself.
+
+        Parked, alerts are skipped: there are no new quotes, and firing a level off a
+        two-day-old quote would answer a question nobody asked. The ops report still runs,
+        because "the outbox is backing up" is true on a Saturday too.
+        """
+        if not self.sleep.parked:
+            self._check_alerts()
+        self._report_ops()
+
+    def _report_ops(self) -> None:
+        """The conditions only the observer can see (11A, F-15).
+
+        Called on the poll clock, which is also where it belongs: "no candle has closed for two
+        intervals" and "this symbol has not ticked for thirty seconds" are both questions about
+        elapsed time, and a check that only ran on candle close could not notice that candle
+        closes had stopped.
+
+        Every threshold comes from config; the register owns only the once-and-once rule.
+        """
+        if self.ops is None:
+            return
+        try:
+            now = self.provider.now_utc()
+        except Exception:  # noqa: BLE001 - a provider that cannot say the time is stale anyway
+            return
+
+        for symbol in self.config.symbols:
+            for timeframe in self.config.timeframes:
+                open_now = self._market_is_open(symbol)
+                candle = self._last_candles.get((symbol, timeframe))
+                interval = timeframe.seconds * self.config.ops_observer_stale_intervals
+                overdue = (
+                    open_now
+                    and candle is not None
+                    and (now - candle.close_time).total_seconds() > interval
+                )
+                self._observe_ops(
+                    "observer_stale",
+                    active=bool(overdue),
+                    detail=(
+                        f"{symbol} {timeframe.value}: last close "
+                        f"{candle.close_time.isoformat()}"
+                        if candle is not None
+                        else ""
+                    ),
+                )
+
+            # Per symbol, because silver's feed going quiet says nothing about gold's.
+            dark = False
+            try:
+                last_tick = self.provider.last_tick_time(symbol)
+                if open_now and last_tick is not None:
+                    quiet = (now - to_utc(last_tick)).total_seconds()
+                    dark = quiet > self.config.ops_feed_stale_seconds
+            except Exception:  # noqa: BLE001 - a provider that will not answer IS the symptom
+                dark = open_now
+            self._observe_ops(
+                "symbol_feed_stale", active=dark, scope=symbol, detail=f"{symbol}"
+            )
+
+        try:
+            pending = self.outbox.pending_count()
+        except Exception:  # noqa: BLE001
+            pending = 0
+        self._observe_ops(
+            "outbox_backlog",
+            active=pending > self.config.ops_outbox_backlog,
+            detail=f"{pending} undelivered",
+        )
+
+    def _state_of(self, symbol: str) -> MarketState:
+        """One symbol's state from this poll's cache, filling it if nothing has yet (11B).
+
+        The cache is filled by ``_before_poll``, which runs first in every live poll; the
+        fallback covers ``startup`` and any caller that reaches a report directly. Going
+        through here rather than calling the service is what keeps a market-state service
+        that RAISES from taking the observer down: it used to be called uncaught from the
+        state write, so a terminal that went away mid-candle propagated out of the poll.
+        """
+        if symbol not in self._states:
+            self._market_states()
+        return self._states.get(symbol, MarketState.UNKNOWN)
+
+    def _market_is_open(self, symbol: str) -> bool:
+        return self._state_of(symbol) is MarketState.OPEN
+
+    def _observe_ops(self, name: str, **kwargs: object) -> None:
+        try:
+            self.ops.observe(name, **kwargs)  # type: ignore[union-attr]
+        except Exception:  # noqa: BLE001 - reporting must never stop observation
+            log.debug("could not record ops event %s", name, exc_info=True)
 
     def _check_alerts(self) -> None:
         """Answer every armed alert the current quotes have crossed (9C).
@@ -343,16 +757,11 @@ class Observer:
         for symbol in self.config.symbols:
             for timeframe in self.config.timeframes:
                 candle = self._last_candles.get((symbol, timeframe))
-                result = (
-                    self.market_state.state_for(symbol)
-                    if self.market_state is not None
-                    else None
-                )
                 symbols.append(
                     SymbolState(
                         symbol=symbol,
                         timeframe=timeframe,
-                        market_state=result.state if result else MarketState.UNKNOWN,
+                        market_state=self._state_of(symbol),
                         last_closed_candle_time=candle.open_time.utc if candle else None,
                         # Published so Discord can show bid/ask and judge staleness without
                         # calling the broker (decision 80). One snapshot, overwritten in
@@ -367,14 +776,67 @@ class Observer:
                         **self._snapshot(symbol, timeframe).as_state(),
                         **self._market_context(symbol, timeframe),
                         trend_read=self._trend_read(symbol, timeframe),
+                        mtf=self._mtf_read(symbol, timeframe),
                     )
                 )
         try:
             self.state_repository.write(  # type: ignore[attr-defined]
-                SystemState(symbols=tuple(symbols)), force=force
+                SystemState(
+                    symbols=tuple(symbols),
+                    account_mode=self._account_mode(),
+                    # 11B: so Discord can say "closed until Sunday 22:00" without
+                    # computing the weekly boundary itself.
+                    sleep_phase=self.sleep.phase,
+                    next_market_open=(
+                        self.sleep.next_open(self._now_or_none())
+                        if self.sleep.asleep
+                        else None
+                    ),
+                ),
+                force=force,
             )
         except Exception:  # noqa: BLE001 - state reporting must not stop observation
             log.exception("system_state write failed")
+
+    def _account_mode(self) -> object:
+        """Which account this terminal is logged into (11A, F-3).
+
+        Read once and cached: it cannot change without a reconnect, and asking the terminal
+        on every throttled state write would be a round trip per candle for a value that is
+        fixed for the life of the connection.
+
+        A provider that cannot answer leaves it unset rather than guessing DEMO. The field
+        is for display and for evidence; nothing gates on it, because the executor reads its
+        own broker rather than trusting a document another process wrote.
+        """
+        if self._cached_account_mode is not None:
+            return self._cached_account_mode
+        reader = getattr(self.provider, "account_info", None)
+        if reader is None:
+            return None
+        try:
+            from aureon.models.enums import AccountMode
+
+            info = reader()
+            raw = info.get("account_mode") if isinstance(info, dict) else None
+            mode = (
+                AccountMode(raw)
+                if raw in {m.value for m in AccountMode}
+                else AccountMode.from_trade_mode(
+                    info.get("trade_mode") if isinstance(info, dict) else None
+                )
+            )
+        except Exception:  # noqa: BLE001 - state reporting must not stop observation
+            log.debug("could not read the account mode", exc_info=True)
+            return None
+        self._cached_account_mode = mode
+        if mode.is_real_money:
+            log.warning(
+                "observing on a %s account — observation is read-only; the executor "
+                "refuses execution unless AUREON_ALLOW_LIVE_EXECUTION=true",
+                mode.value,
+            )
+        return mode
 
     def _trend_read(self, symbol: str, timeframe) -> object:
         """What the last N closed candles did, computed HERE and published (9D).
@@ -447,6 +909,19 @@ class Observer:
             return None
         value = series.iloc[period]
         return None if pd.isna(value) else float(value)
+
+    def _mtf_read(self, symbol: str, timeframe) -> object:
+        """This stream's higher-timeframe reads, for ``system_state`` (11D).
+
+        Read from the engine rather than recomputed, for the same reason the cross counters
+        are: a second computation would eventually disagree with the one the detections carry,
+        and then two documents written in the same second would describe different markets.
+        """
+        try:
+            return self.engines.for_symbol(symbol).mtf_context(symbol, timeframe)
+        except Exception:  # noqa: BLE001 - state reporting must not stop observation
+            log.debug("could not read the mtf context for %s", symbol, exc_info=True)
+            return None
 
     def _market_context(self, symbol: str, timeframe) -> dict[str, object]:
         """This symbol's profile summaries and volatility, for the state document (9B).
@@ -665,6 +1140,9 @@ class Observer:
         """Stop cleanly, leaving nothing queued if Firestore is reachable."""
         log.info("observer shutting down")
         self.market_engine.stop()
+        # The day in progress is deliberately NOT written here (11D). It is incomplete by
+        # definition, and a document flagged complete=False is one mistake away from an
+        # aggregation reading it as finished. The parquet archive below keeps the bars.
         if self.candle_archive is not None:
             # Flushed here, not per candle: rewriting a parquet file every five minutes
             # would cost more than the archive is worth. A crash therefore loses the
@@ -677,7 +1155,9 @@ class Observer:
         if self.heartbeat is not None:
             self.heartbeat.stop()
         self.worker.stop()
-        remaining = self.worker.flush()
+        # final=True: the thread is stopped, and a flush that honoured the stop flag would
+        # deliver nothing at all -- which is what it did until 11B.
+        remaining = self.worker.flush(final=True)
         if remaining:
             log.info("delivered %d detection(s) during shutdown", remaining)
         still = self.outbox.pending_count()
@@ -794,6 +1274,7 @@ def build_observer(config: AureonConfig) -> Observer:
     from aureon.storage.detection_repository import DetectionRepository
     from aureon.storage.evaluation_repository import EvaluationRepository
     from aureon.storage.firebase_service import get_client
+    from aureon.storage.ops_repository import OpsEventRepository
     from aureon.storage.session_repository import SessionRepository
     from aureon.storage.symbol_repository import SymbolRepository
     from aureon.storage.system_state_repository import (
@@ -818,7 +1299,7 @@ def build_observer(config: AureonConfig) -> Observer:
         client, min_interval_seconds=config.state_heartbeat_seconds
     )
 
-    return Observer(
+    observer = Observer(
         config,
         provider,
         outbox=outbox,
@@ -849,6 +1330,15 @@ def build_observer(config: AureonConfig) -> Observer:
         # already reading.
         alert_repository=PriceAlertRepository(client),
     )
+    # 11A F-15. Assigned after construction rather than passed in, so an Observer built by a
+    # test has no register and reports nothing -- which is what a test of observation wants.
+    observer.ops = OpsRegister(
+        OpsEventRepository(client), service=paths.SERVICE_OBSERVER
+    )
+    # 11D, and assigned the same way for the same reason: a test of observation should not
+    # have to stand up a day cache to watch a candle close.
+    observer.market_days = MarketDayRepository(client)
+    return observer
 
 
 def main(argv: list[str] | None = None) -> int:

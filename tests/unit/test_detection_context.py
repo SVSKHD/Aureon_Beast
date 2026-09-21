@@ -162,20 +162,23 @@ def test_the_reference_says_where_THIS_detections_price_stood(candles) -> None:
 
 
 def test_every_agents_version_moved_so_the_populations_are_separable() -> None:
-    """9B changed what a detection document contains, for every agent.
+    """9B and then 11D changed what a detection document contains, for every agent.
 
-    The id is a hash over the agent_version (§12), so bumping it means a pre-9B detection
-    and a post-9B one over the same candle have different ids. Without that, two documents
-    of different shapes would share an id and nothing would distinguish them.
+    The id is a hash over the agent_version (§12), so bumping it means a detection from before
+    the change and one from after it over the same candle have different ids. Without that, two
+    documents of different shapes would share an id and nothing would distinguish them.
+
+    9B took ema_cross to 2.1.0 and the rest to 1.1.0; 11D added ``mtf`` to every detection and
+    took them to 2.2.0 and 1.2.0 (decision 238).
     """
     versions = {a.agent_name: a.agent_version for a in default_agents(CONFIG)}
-    assert versions["ema_cross"] == "2.1.0"
-    assert versions["liquidity"] == "1.1.0"
-    assert versions["breakout"] == "1.1.0"
-    assert versions["wick"] == "1.1.0"
-    # Not only the four the phase listed: these gained the same fields.
-    assert versions["rsi"] == "1.1.0"
-    assert versions["session_trend"] == "1.1.0"
+    assert versions["ema_cross"] == "2.2.0"
+    assert versions["liquidity"] == "1.2.0"
+    assert versions["breakout"] == "1.2.0"
+    assert versions["wick"] == "1.2.0"
+    # Not only the four 9B listed: these gained the same fields, in both phases.
+    assert versions["rsi"] == "1.2.0"
+    assert versions["session_trend"] == "1.2.0"
 
 
 def test_the_id_changes_with_the_version(candles) -> None:

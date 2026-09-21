@@ -81,24 +81,38 @@ NOTIFICATIONS = collection("notifications")
 ALERTS = collection("alerts")
 ASSESSMENTS = collection("assessments")
 TRADE_NOTES = collection("trade_notes")
+# 11A F-15: named operational conditions, and whether each is currently true.
+OPS_EVENTS = collection("ops_events")
+# 11D: one broker day's shape, and the bars it was made of. M1 is NOT here -- it lives in
+# parquet, because tick-scale data never goes to Firestore (CLAUDE.md).
+MARKET_DAYS = collection("market_days")
+MARKET_DAY_FRAMES = collection("market_day_frames")
 
-ALL_COLLECTIONS: tuple[str, ...] = (
-    DETECTIONS,
-    DETECTION_EVALUATIONS,
-    SESSIONS,
-    TRADE_REQUESTS,
-    TRADES,
-    CONTROL_REQUESTS,
-    AUDIT_LOGS,
-    HEARTBEATS,
-    SYSTEM_STATE,
-    SETTINGS,
-    SYMBOL_SPECS,
-    DAILY_REVIEWS,
-    WEEKLY_REVIEWS,
-    NOTIFICATIONS,
-    ALERTS,
-)
+def _all_collections() -> tuple[str, ...]:
+    """Every prefixed collection constant in this module, found rather than listed (11A, F-10).
+
+    The hand-maintained tuple this replaces had drifted twice within one phase:
+    ``assessments`` and ``trade_notes`` were added in 9D and never listed, so every consumer
+    of the registry -- the contracts table, the emulator's cleanup, the docs check -- silently
+    did not know about two collections that were being written to in production shape.
+
+    A registry that has to be updated by hand will drift, and the drift is invisible: nothing
+    fails, the missing collection simply is not considered. So it is derived from the module's
+    own namespace, discriminating on the PREFIX rather than on naming convention -- doc-id
+    constants like ``LEGACY_SYSTEM_STATE_DOC`` are upper-case strings too, and they are not
+    collections.
+
+    Sorted, so the contracts file and every table built from this are stable across runs.
+    ``tests/unit/test_paths.py`` re-derives the same set by parsing the SOURCE for
+    ``= collection(...)``, which is an independent derivation: a constant defined AFTER this
+    function is called would be missed here and caught there.
+    """
+    found = {
+        value
+        for name, value in globals().items()
+        if name.isupper() and isinstance(value, str) and value.startswith(f"{PREFIX}_")
+    }
+    return tuple(sorted(found))
 
 # ── Fixed document ids ────────────────────────────────────────────────────────
 #: The whole-system document id, used until Phase 9A split ``system_state`` per symbol.
@@ -191,6 +205,30 @@ def system_state_doc_id(symbol: str, timeframe: object) -> str:
     return f"{_require(symbol, 'symbol')}_{_require(str(frame), 'timeframe')}"
 
 
+def market_day_doc_id(symbol: str, market_date: str) -> str:
+    """``{SYMBOL}_{market_date}`` -- the BROKER date (11D).
+
+    Symbol first so a prefix scan reads as one instrument's history rather than as one day's
+    instruments: "every day of gold" is the question a tuning report and a review both ask,
+    and "every instrument on Tuesday" is not a question anything asks.
+    """
+    return f"{symbol.upper()}_{market_date}"
+
+
+def market_day_path(symbol: str, market_date: str) -> str:
+    return f"{MARKET_DAYS}/{market_day_doc_id(symbol, market_date)}"
+
+
+def market_day_frame_doc_id(symbol: str, market_date: str, timeframe: object) -> str:
+    """``{SYMBOL}_{market_date}_{TIMEFRAME}`` (11D)."""
+    name = getattr(timeframe, "value", timeframe)
+    return f"{market_day_doc_id(symbol, market_date)}_{name}"
+
+
+def market_day_frame_path(symbol: str, market_date: str, timeframe: object) -> str:
+    return f"{MARKET_DAY_FRAMES}/{market_day_frame_doc_id(symbol, market_date, timeframe)}"
+
+
 def system_state_path(symbol: str, timeframe: object) -> str:
     return f"{SYSTEM_STATE}/{system_state_doc_id(symbol, timeframe)}"
 
@@ -231,6 +269,21 @@ def notification_path(kind: str, ref_id: str) -> str:
 
 def alert_path(alert_id: str) -> str:
     return f"{ALERTS}/{_require(alert_id, 'alert_id')}"
+
+
+def ops_event_id(name: str, scope: str | None = None) -> str:
+    """``{name}`` or ``{name}__{scope}`` (11A, F-15).
+
+    Derived from what the condition is ABOUT rather than auto-generated, so a service that
+    restarts mid-condition finds the existing document and does not re-announce. The double
+    underscore matches the convention `notification_id` and `evaluation_doc_id` already use.
+    """
+    base = _require(name, "name")
+    return f"{base}__{scope.upper()}" if scope else base
+
+
+def ops_event_path(name: str, scope: str | None = None) -> str:
+    return f"{OPS_EVENTS}/{ops_event_id(name, scope)}"
 
 
 def assessment_path(assessment_id: str) -> str:
@@ -275,3 +328,10 @@ def weekly_review_path(
     iso_year: int, iso_week: int, symbol: str | None = None
 ) -> str:
     return f"{WEEKLY_REVIEWS}/{weekly_review_doc_id(iso_year, iso_week, symbol)}"
+
+
+
+#: Every collection this deployment writes (11A, F-10). Assigned at the END of the module so
+#: the scan in ``_all_collections`` sees every constant above it; anything added below this
+#: line would be missed, which is what the source-parsing test exists to catch.
+ALL_COLLECTIONS: tuple[str, ...] = _all_collections()

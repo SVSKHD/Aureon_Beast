@@ -107,6 +107,54 @@ VALUE_MODELS: tuple[type[BaseModel], ...] = (
 )
 
 
+#: What each collection's document id looks like, and which model it holds. Keyed by the
+#: UNPREFIXED name, so the table survives a prefix change (11A, F-10).
+#:
+#: This is a description, not a registry: the REGISTRY is ``paths.ALL_COLLECTIONS``, and
+#: ``_collection_rows`` iterates that. A collection added to ``paths.py`` and forgotten here
+#: renders with a "not documented" marker, which makes the contracts diff fail -- the file is
+#: checked in and ``--check`` runs in CI. That is the mechanism: the drift stops being
+#: invisible.
+COLLECTION_DOCS: dict[str, tuple[str, str]] = {
+    "detections": ("detection_id", "Detection"),
+    "detection_evaluations": ("{detection_id}__{rule_id}", "DetectionEvaluation"),
+    "sessions": ("{market_date}__{session}", "SessionSummary"),
+    "trade_requests": ("request_id", "TradeRequest"),
+    "trades": ("trade_id", "Trade"),
+    "control_requests": ("control_id", "ControlRequest"),
+    "audit_logs": ("audit_id", "AuditRecord"),
+    "heartbeats": ("{service}", "Heartbeat"),
+    "system_state": ("{symbol}_{timeframe}", "SystemState"),
+    "settings": ("execution / notifications", "ExecutionSettings, NotificationSettings"),
+    "symbol_specs": ("{symbol}", "SymbolInfo"),
+    "daily_reviews": ("{market_date}[_{symbol}]", "DailyReview"),
+    "weekly_reviews": ("{iso_year}-W{iso_week}[_{symbol}]", "WeeklyReview"),
+    "alerts": ("alert_id", "PriceAlert"),
+    "notifications": ("{kind}__{ref_id}", "Notification"),
+    "assessments": ("assessment_id", "Assessment"),
+    "trade_notes": ("note_id", "TradeNote"),
+    "ops_events": ("{name}[__{scope}]", "OpsEvent"),
+}
+
+
+def _collection_rows() -> list[str]:
+    """One row per collection in ``paths.ALL_COLLECTIONS``, in the registry's order.
+
+    Driven by the registry rather than written out, so the two cannot disagree (11A, F-10).
+    A collection with no entry in ``COLLECTION_DOCS`` still gets a row, marked, rather than
+    being omitted: a missing row is invisible in a rendered table, and a marked one fails the
+    committed diff.
+    """
+    rows = []
+    for name in paths.ALL_COLLECTIONS:
+        short = name[len(f"{paths.PREFIX}_") :]
+        doc_id, model = COLLECTION_DOCS.get(
+            short, ("**not documented — add it to COLLECTION_DOCS**", "?")
+        )
+        rows.append(f"| `{name}` | `{doc_id}` | `{model}` |")
+    return rows
+
+
 def type_name(annotation: object) -> str:
     """Render a type annotation compactly and deterministically."""
     if annotation is type(None):
@@ -212,23 +260,7 @@ def build() -> str:
         "",
         "| collection | document id | model |",
         "|---|---|---|",
-        f"| `{paths.DETECTIONS}` | `detection_id` | `Detection` |",
-        f"| `{paths.DETECTION_EVALUATIONS}` | `{{detection_id}}__{{rule_id}}` "
-        "| `DetectionEvaluation` |",
-        f"| `{paths.SESSIONS}` | `{{market_date}}__{{session}}` | _(Phase 2)_ |",
-        f"| `{paths.TRADE_REQUESTS}` | `request_id` | `TradeRequest` |",
-        f"| `{paths.TRADES}` | `trade_id` | `Trade` |",
-        f"| `{paths.CONTROL_REQUESTS}` | `control_id` | `ControlRequest` |",
-        f"| `{paths.AUDIT_LOGS}` | `audit_id` | `AuditRecord` |",
-        f"| `{paths.HEARTBEATS}` | `{{service}}` | `Heartbeat` |",
-        f"| `{paths.SYSTEM_STATE}` | `{{symbol}}_{{timeframe}}` | `SystemState` |",
-        f"| `{paths.SETTINGS}` | `{paths.EXECUTION_SETTINGS_DOC}` | `ExecutionSettings` |",
-        f"| `{paths.DAILY_REVIEWS}` | `{{market_date}}` | `DailyReview` |",
-        f"| `{paths.WEEKLY_REVIEWS}` | `{{iso_year}}-W{{iso_week}}` | `WeeklyReview` |",
-        f"| `{paths.ALERTS}` | `alert_id` | `PriceAlert` |",
-        f"| `{paths.NOTIFICATIONS}` | `{{kind}}__{{ref_id}}` | `Notification` |",
-        f"| `{paths.ASSESSMENTS}` | `assessment_id` | `Assessment` |",
-        f"| `{paths.TRADE_NOTES}` | `note_id` | `TradeNote` |",
+        *_collection_rows(),
         "",
         "Tick data is never stored in Firestore. There is no `pending_orders`",
         "collection (decision 9): a pending order *is* the `PENDING` trade request.",

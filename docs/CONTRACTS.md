@@ -17,22 +17,26 @@ test run and production and could never be checked in.
 
 | collection | document id | model |
 |---|---|---|
-| `aureon_beast_detections` | `detection_id` | `Detection` |
+| `aureon_beast_alerts` | `alert_id` | `PriceAlert` |
+| `aureon_beast_assessments` | `assessment_id` | `Assessment` |
+| `aureon_beast_audit_logs` | `audit_id` | `AuditRecord` |
+| `aureon_beast_control_requests` | `control_id` | `ControlRequest` |
+| `aureon_beast_daily_reviews` | `{market_date}[_{symbol}]` | `DailyReview` |
 | `aureon_beast_detection_evaluations` | `{detection_id}__{rule_id}` | `DetectionEvaluation` |
-| `aureon_beast_sessions` | `{market_date}__{session}` | _(Phase 2)_ |
+| `aureon_beast_detections` | `detection_id` | `Detection` |
+| `aureon_beast_heartbeats` | `{service}` | `Heartbeat` |
+| `aureon_beast_market_day_frames` | `**not documented — add it to COLLECTION_DOCS**` | `?` |
+| `aureon_beast_market_days` | `**not documented — add it to COLLECTION_DOCS**` | `?` |
+| `aureon_beast_notifications` | `{kind}__{ref_id}` | `Notification` |
+| `aureon_beast_ops_events` | `{name}[__{scope}]` | `OpsEvent` |
+| `aureon_beast_sessions` | `{market_date}__{session}` | `SessionSummary` |
+| `aureon_beast_settings` | `execution / notifications` | `ExecutionSettings, NotificationSettings` |
+| `aureon_beast_symbol_specs` | `{symbol}` | `SymbolInfo` |
+| `aureon_beast_system_state` | `{symbol}_{timeframe}` | `SystemState` |
+| `aureon_beast_trade_notes` | `note_id` | `TradeNote` |
 | `aureon_beast_trade_requests` | `request_id` | `TradeRequest` |
 | `aureon_beast_trades` | `trade_id` | `Trade` |
-| `aureon_beast_control_requests` | `control_id` | `ControlRequest` |
-| `aureon_beast_audit_logs` | `audit_id` | `AuditRecord` |
-| `aureon_beast_heartbeats` | `{service}` | `Heartbeat` |
-| `aureon_beast_system_state` | `{symbol}_{timeframe}` | `SystemState` |
-| `aureon_beast_settings` | `execution` | `ExecutionSettings` |
-| `aureon_beast_daily_reviews` | `{market_date}` | `DailyReview` |
-| `aureon_beast_weekly_reviews` | `{iso_year}-W{iso_week}` | `WeeklyReview` |
-| `aureon_beast_alerts` | `alert_id` | `PriceAlert` |
-| `aureon_beast_notifications` | `{kind}__{ref_id}` | `Notification` |
-| `aureon_beast_assessments` | `assessment_id` | `Assessment` |
-| `aureon_beast_trade_notes` | `note_id` | `TradeNote` |
+| `aureon_beast_weekly_reviews` | `{iso_year}-W{iso_week}[_{symbol}]` | `WeeklyReview` |
 
 Tick data is never stored in Firestore. There is no `pending_orders`
 collection (decision 9): a pending order *is* the `PENDING` trade request.
@@ -67,6 +71,7 @@ An immutable observation. Never an instruction to trade.
 | `sequence_session` | `int` | yes | — |  |
 | `volume_profile_ref` | `VolumeProfileRef \| null` | no | `None` | Asia's value area and nodes as they stood at this close (9B). |
 | `volatility` | `VolatilityContext \| null` | no | `None` | ATR and session range vs median at this close (9B). |
+| `mtf` | `MtfContext \| null` | no | `None` | Higher-timeframe reads and alignment at this close (11D). |
 
 ### DetectionEvaluation
 
@@ -224,6 +229,9 @@ One document describing the whole system's health (§59, §61-§63).
 | `symbols` | `tuple[SymbolState]` | no | `()` |  |
 | `heartbeats` | `dict[str, AwareDatetime]` | no | `dict()` |  |
 | `trading_enabled` | `bool \| null` | no | `None` | Mirror of settings/execution, for display only. |
+| `account_mode` | `AccountMode \| null` | no | `None` |  |
+| `sleep_phase` | `SleepPhase \| null` | no | `None` |  |
+| `next_market_open` | `AwareDatetime \| null` | no | `None` |  |
 | `notes` | `str \| null` | no | `None` |  |
 
 ### ExecutionSettings
@@ -309,6 +317,7 @@ One broker trading day (§61).
 | `assessments_unresolved` | `int` | no | `0` |  |
 | `assessments_not_scored` | `int` | no | `0` |  |
 | `assessment_hit_by_cohort` | `dict[str, str]` | no | `dict()` |  |
+| `assessment_hit_by_source` | `dict[str, str]` | no | `dict()` |  |
 | `trade_notes` | `dict[str, tuple[str]]` | no | `dict()` |  |
 | `trades_by_tag` | `dict[str, tuple[str]]` | no | `dict()` |  |
 | `market_date` | `str` | yes | — | Broker-local date, YYYY-MM-DD. |
@@ -347,6 +356,7 @@ One trading week, generated after Friday's close (§63).
 | `assessments_unresolved` | `int` | no | `0` |  |
 | `assessments_not_scored` | `int` | no | `0` |  |
 | `assessment_hit_by_cohort` | `dict[str, str]` | no | `dict()` |  |
+| `assessment_hit_by_source` | `dict[str, str]` | no | `dict()` |  |
 | `trade_notes` | `dict[str, tuple[str]]` | no | `dict()` |  |
 | `trades_by_tag` | `dict[str, tuple[str]]` | no | `dict()` |  |
 | `iso_year` | `int` | yes | — |  |
@@ -410,6 +420,8 @@ One measured readout for one detection (§62-§64, 9D).
 | `paired` | `PairedOutcome \| null` | no | `None` |  |
 | `insufficient` | `bool` | no | `False` |  |
 | `disagrees_with_detection` | `bool` | no | `False` |  |
+| `history_source` | `HistorySource` | no | `'unknown'` |  |
+| `real_days` | `int` | no | `0` |  |
 | `created_at` | `AwareDatetime \| null` | no | `None` |  |
 
 ### TradeNote
@@ -424,6 +436,23 @@ A human sentence about one trade, kept out of the trade (§45, 9D).
 | `author` | `str` | yes | — |  |
 | `text` | `str` | yes | — |  |
 | `at` | `AwareDatetime \| null` | no | `None` |  |
+
+### OpsEvent
+
+One named condition, and whether it is currently true.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
+| `event_id` | `str` | yes | — | {name} or {name}__{scope}; see paths.ops_event_id. |
+| `name` | `str` | yes | — |  |
+| `scope` | `str \| null` | no | `None` |  |
+| `active` | `bool` | no | `False` |  |
+| `since` | `AwareDatetime \| null` | no | `None` |  |
+| `detail` | `str` | no | `''` |  |
+| `service` | `str` | no | `''` |  |
+| `onsets` | `int` | no | `0` |  |
+| `updated_at` | `AwareDatetime \| null` | no | `None` |  |
 
 ---
 
@@ -569,6 +598,7 @@ Account state, for the margin and exposure guards (§56).
 | `margin_level` | `float \| null` | no | `None` |  |
 | `leverage` | `int \| null` | no | `None` |  |
 | `server` | `str \| null` | no | `None` |  |
+| `mode` | `AccountMode` | no | `'unknown'` |  |
 | `raw` | `dict[str, object]` | no | `dict()` |  |
 
 ### BrokerPosition
@@ -774,6 +804,7 @@ Per symbol/timeframe observation state (§59).
 | `volume_profile` | `dict[str, ProfileSummary]` | no | `dict()` | current_session \| asia \| day -> that scope's summary (9B). |
 | `volatility` | `VolatilityContext \| null` | no | `None` | ATR(14) and the session range vs its median (9B). |
 | `trend_read` | `TrendRead \| null` | no | `None` | What the last N closed candles did, as facts and a summary (9D). |
+| `mtf` | `MtfContext \| null` | no | `None` | Higher-timeframe reads at the last closed candle (11D). |
 | `session` | `SessionName \| null` | no | `None` |  |
 | `session_trend` | `str \| null` | no | `None` |  |
 | `session_high` | `float \| null` | no | `None` |  |
@@ -825,7 +856,7 @@ One price bin and the volume estimated to have traded in it.
 | field | type | required | default | notes |
 |---|---|---|---|---|
 | `price` | `float` | yes | — | The bin's LOWER edge, in price. |
-| `volume` | `float` | yes | — | Estimated tick volume in this bin. |
+| `tick_volume` | `float` | yes | — | Estimated MT5 TICK volume in this bin -- the number of price changes, not contracts traded (11A, F-5). |
 
 ### ProfileSummary
 
@@ -839,7 +870,7 @@ A profile without its bins, for ``SystemState`` and ``/status`` (9B).
 | `value_area_low` | `float \| null` | no | `None` |  |
 | `hvn` | `tuple[float]` | no | `()` |  |
 | `lvn` | `tuple[float]` | no | `()` |  |
-| `total_volume` | `float` | no | `0.0` |  |
+| `total_tick_volume` | `float` | no | `0.0` |  |
 
 ### VolumeProfile
 
@@ -858,7 +889,7 @@ Estimated volume by price over one scope (9B, §19).
 | `value_area_low` | `float \| null` | no | `None` | The band around the POC holding 70% of estimated volume (§19). |
 | `hvn` | `tuple[float]` | no | `()` |  |
 | `lvn` | `tuple[float]` | no | `()` |  |
-| `total_volume` | `float` | no | `0.0` |  |
+| `total_tick_volume` | `float` | no | `0.0` |  |
 | `bins` | `tuple[ProfileBin]` | no | `()` | At most 200, coarsest-first. |
 
 ### VolumeProfileRef
@@ -1101,6 +1132,7 @@ Why a request failed (§56, §57, §41, §78).
 |---|---|
 | `TRADING_DISABLED` | `trading_disabled` |
 | `NOT_AUTHORIZED` | `not_authorized` |
+| `LIVE_EXECUTION_NOT_ALLOWED` | `live_execution_not_allowed` |
 | `MARKET_CLOSED` | `market_closed` |
 | `SPREAD_LIMIT` | `spread_limit` |
 | `STALE_QUOTE` | `stale_quote` |

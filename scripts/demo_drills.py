@@ -40,6 +40,7 @@ from aureon.execution.drills import (  # noqa: E402
     catalogue_markdown,
     run_drills,
 )
+from aureon.models.enums import AccountMode  # noqa: E402
 from aureon.models.settings import ExecutionSettings  # noqa: E402
 
 
@@ -87,12 +88,19 @@ def build_broker_factory(kind: str, *, config, allow_real: bool):
     )
     broker.connect()
     account = broker.account_info()
-    demo = bool(getattr(account, "is_demo", True))
-    if not demo and not allow_real:
+    # 11A F-3. This read used to be `getattr(account, "is_demo", True)` -- and `AccountInfo`
+    # has never had an `is_demo` field, so the expression was always True and this refusal
+    # has never once been able to fire. A guard whose whole purpose is to stop four
+    # order-placing drills reaching a real account, dead since the day it was written.
+    #
+    # DEMO only, not `is_real_money`: a contest account is somebody's competition entry and
+    # a drill that loses a connection mid-send has no business in one.
+    if account.mode is not AccountMode.DEMO and not allow_real:
         raise SystemExit(
-            "this terminal reports a REAL account. Four of these drills place real "
-            "orders and one loses a connection mid-send. Use a demo account, or pass "
-            "--i-know-this-is-real-money."
+            f"this terminal reports a {account.mode.value.upper()} account "
+            f"(login {account.login}, server {account.server or '?'}). Four of these "
+            "drills place real orders and one loses a connection mid-send. Use a demo "
+            "account, or pass --i-know-this-is-real-money."
         )
     # One terminal, handed to every drill: there is no second one, and the drills that
     # would need it to misbehave skip rather than weaken what they assert.

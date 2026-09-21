@@ -24,7 +24,14 @@ from typing import Any
 from aureon.data.mt5_provider import server_epoch_to_utc, utc_to_server_epoch
 from aureon.execution.broker_interface import BrokerError, BrokerInterface
 from aureon.models.broker import AccountInfo, BrokerDeal, BrokerOrder, BrokerPosition
-from aureon.models.enums import DealEntry, Direction, FailureCode, FillingMode, OrderType
+from aureon.models.enums import (
+    AccountMode,
+    DealEntry,
+    Direction,
+    FailureCode,
+    FillingMode,
+    OrderType,
+)
 from aureon.models.market import QuoteSnapshot, SymbolInfo
 from aureon.models.trade import BrokerOrderRequest, BrokerOrderResult
 
@@ -145,6 +152,10 @@ class MT5Broker(BrokerInterface):
             margin_level=float(info.margin_level) or None,
             leverage=int(info.leverage),
             server=str(info.server),
+            # 11A F-3. Read here, once, at the only place the terminal will tell us. A
+            # missing or unrecognised trade_mode maps to UNKNOWN, which every guard treats
+            # as real money.
+            mode=AccountMode.from_trade_mode(getattr(info, "trade_mode", None)),
         )
 
     def symbol_info(self, symbol: str) -> SymbolInfo:

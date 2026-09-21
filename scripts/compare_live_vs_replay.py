@@ -46,10 +46,23 @@ from aureon.engine.analysis_engine import AnalysisEngine  # noqa: E402
 from aureon.models.detection import Detection  # noqa: E402
 from aureon.models.enums import Timeframe  # noqa: E402
 
-#: Fields excluded from the content comparison. ``schema_version`` is metadata about the
-#: document rather than about the observation, so a schema bump must not read as thousands
-#: of mismatched detections.
-IGNORED_FIELDS = frozenset({"schema_version"})
+#: Fields excluded from the content comparison, each for a stated reason.
+#:
+#: ``schema_version`` is metadata about the document rather than about the observation, so a
+#: schema bump must not read as thousands of mismatched detections.
+#:
+#: ``mtf`` (11D) is higher-timeframe context aggregated from a ROLLING MULTI-DAY buffer, and
+#: this tool replays exactly one archived day. A live detection at 09:00 on Tuesday carries an
+#: H1 read built from the preceding week; the same detection replayed from Tuesday's archive
+#: alone has an hour of history and no H4 at all. Comparing them would report every detection
+#: as mismatched and blame the engine for a difference that is entirely the buffer's depth --
+#: which is a deployment choice (``AUREON_MTF_M5_BARS``), not a correctness parameter.
+#:
+#: What that costs, said plainly: this tool does NOT verify the MTF context. The aggregation
+#: itself is deterministic and covered by ``tests/unit/test_mtf.py``, which checks it against
+#: bars whose buckets are known by construction; what is untested by THIS tool is whether a
+#: live observer and a replay agree about it, and they cannot be made to over one day.
+IGNORED_FIELDS = frozenset({"schema_version", "mtf"})
 
 
 @dataclass
