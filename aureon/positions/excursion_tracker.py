@@ -20,11 +20,21 @@ and a SELL are directly comparable -- the same convention the detection evaluato
 
 ``mfe`` can be negative: it means the best price ever offered was still worse than the
 entry. That is informative, so it is stored raw rather than clamped to zero.
+
+## The tick is the position's own, not the process's (9A)
+
+Excursions are in POINTS, so the divisor decides what the number means. Gold's tick is 0.01
+and silver's is 0.001, which makes one shared ``point`` a tenfold error on the second
+instrument -- and a silent one, because 300 and 30 are both plausible excursions. So the
+tracker resolves the tick per SYMBOL, and when it cannot resolve one it declines to track
+rather than measuring with somebody else's: an absent excursion is a gap in a diagnostic,
+a wrong one is a figure a review would report.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -78,9 +88,32 @@ class _Running:
 class ExcursionTracker:
     """Maintains excursions for open positions (§45)."""
 
-    def __init__(self, *, point: float = 0.01) -> None:
+    def __init__(
+        self,
+        *,
+        point: float = 0.01,
+        point_for: Callable[[str], float | None] | None = None,
+    ) -> None:
+        #: The fallback tick, used only when no resolver is given. Kept so a single-symbol
+        #: deployment reads exactly as it did before 9A.
         self.point = point
+        self._point_for = point_for
         self._running: dict[str, _Running] = {}
+        #: Symbols declined for want of a tick, so the caller can see the gap is known.
+        self.untracked_symbols: set[str] = set()
+
+    def point_of(self, symbol: str) -> float | None:
+        """This symbol's tick, or ``None`` when it cannot be established."""
+        if self._point_for is None:
+            return self.point
+        try:
+            resolved = self._point_for(symbol)
+        except Exception:  # noqa: BLE001 - a broker read failing is not a crash here
+            log.exception("could not resolve the tick for %s", symbol)
+            return None
+        if not resolved or resolved <= 0:
+            return None
+        return resolved
 
     # ── Live tracking ─────────────────────────────────────────────────────────
 
@@ -94,6 +127,20 @@ class ExcursionTracker:
         """
         if trade.trade_id in self._running:
             return
+        point = self.point_of(trade.symbol)
+        if point is None:
+            # Declined, not defaulted. Tracking this with another symbol's tick would put a
+            # wrong number where a review reads one (9A). ``track`` is called on every poll,
+            # so this resolves itself as soon as the symbol's spec is readable.
+            if trade.symbol not in self.untracked_symbols:
+                log.error(
+                    "no tick for %s; excursions for %s are not being measured",
+                    trade.symbol,
+                    trade.trade_id,
+                )
+                self.untracked_symbols.add(trade.symbol)
+            return
+        self.untracked_symbols.discard(trade.symbol)
         stored = trade.excursion
         carried_source = (
             ExcursionSource.RECONSTRUCTED
@@ -103,7 +150,7 @@ class ExcursionTracker:
         self._running[trade.trade_id] = _Running(
             direction=trade.direction,
             open_price=trade.open_price,
-            point=self.point,
+            point=point,
             source=carried_source,
             mfe=stored.mfe,
             mfe_at=stored.mfe_at,

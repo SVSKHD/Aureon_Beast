@@ -15,6 +15,18 @@ cannot miss one.
 Reviews never write to ``detections``, ``trades`` or ``trade_requests``. They read those
 and write only their own document (§50): an inferred link is analysis, and analysis must
 not edit the record it analyses.
+
+## One review per symbol (9A)
+
+A service is constructed for **one** symbol and one rule, and filters the period to that
+symbol. Aggregating both would produce a document whose ``evaluation_rule_id`` is a false
+statement about half its numbers -- each symbol has its own frozen rule (decision 141) -- and
+whose horizon table would add reached-counts measured against thresholds denominated in
+different instruments' money. The shape is identical, so a reader compares two documents
+rather than reading one that quietly mixes two things.
+
+``symbol=None`` keeps the pre-9A behaviour: everything in the period, one document, no symbol
+on it. That is what a single-symbol deployment has always produced.
 """
 
 from __future__ import annotations
@@ -53,9 +65,12 @@ class ReviewService:
         market_tz: str,
         infer_window_minutes: int,
         account_scope: str = "primary",
+        symbol: str | None = None,
     ) -> None:
         self._client = client
         self.rule = rule
+        #: Which symbol this service reviews, or ``None`` for everything in the period.
+        self.symbol = symbol.upper() if symbol else None
         self.market_tz = market_tz
         self.infer_window_minutes = infer_window_minutes
         self.account_scope = account_scope
@@ -68,17 +83,22 @@ class ReviewService:
     # ── Loading ───────────────────────────────────────────────────────────────
 
     def load(self, period: Period) -> PeriodData:
-        """Everything the review needs for one period."""
-        detections = self._load_detections(period)
+        """Everything the review needs for one period, for this symbol."""
+        detections = self._for_symbol(self._load_detections(period))
         data = PeriodData(
             detections=detections,
             evaluations=self._load_evaluations(detections),
-            trades=self._load_trades(period),
-            sessions=self._load_sessions(period),
+            trades=self._for_symbol(self._load_trades(period)),
+            sessions=self._for_symbol(self._load_sessions(period)),
+            # 9D. Assessments are narrowed by symbol like everything else; notes are keyed
+            # by the trades already narrowed above, so they need no second filter.
+            assessments=self._for_symbol(self._load_assessments(period)),
+            notes=self._load_notes(self._for_symbol(self._load_trades(period))),
         )
         log.info(
-            "period %s: %d detections, %d evaluations, %d trades, %d sessions (%s)",
+            "period %s (%s): %d detections, %d evaluations, %d trades, %d sessions (%s)",
             period.market_date,
+            self.symbol or "all symbols",
             len(data.detections),
             len(data.evaluations),
             len(data.trades),
@@ -86,6 +106,18 @@ class ReviewService:
             excluded_summary(data),
         )
         return data
+
+    def _for_symbol(self, records: list[Any]) -> list[Any]:
+        """Narrow a period's records to this service's symbol.
+
+        In Python rather than in the query, for the reason the module docstring gives about
+        composite indexes: these are single-field range reads over at most a few thousand
+        documents, and a second filter would need an index declared and deployed for a batch
+        job that runs a few times a day.
+        """
+        if self.symbol is None:
+            return records
+        return [r for r in records if str(getattr(r, "symbol", "")).upper() == self.symbol]
 
     def _load_detections(self, period: Period) -> list[Detection]:
         return self.source.detections_in(period.start, period.end)
@@ -107,6 +139,12 @@ class ReviewService:
     def _load_sessions(self, period: Period) -> list[SessionSummary]:
         return self.source.sessions_in(period.start, period.end)
 
+    def _load_assessments(self, period: Period) -> list[Any]:
+        return self.source.assessments_in(period.start, period.end)
+
+    def _load_notes(self, trades: list[Trade]) -> dict[str, list[Any]]:
+        return self.source.notes_for(trades)
+
     # ── Generating ────────────────────────────────────────────────────────────
 
     def generate_daily(
@@ -123,11 +161,12 @@ class ReviewService:
             period_end=period.end,
             market_tz=self.market_tz,
             infer_window_minutes=self.infer_window_minutes,
+            symbol=self.symbol,
             generated_at=to_utc(generated_at) if generated_at else None,
         )
         if store:
             self.reviews.upsert_daily(review)
-            log.info("wrote daily review %s", review.market_date)
+            log.info("wrote daily review %s %s", review.market_date, self.symbol or "")
         return review
 
     def generate_weekly(
@@ -151,7 +190,7 @@ class ReviewService:
                 sorted(
                     d
                     for d in _dates_in(period)
-                    if self.reviews.get_daily(d) is not None
+                    if self.reviews.get_daily(d, self.symbol) is not None
                 )
             )
 
@@ -165,11 +204,14 @@ class ReviewService:
             market_tz=self.market_tz,
             infer_window_minutes=self.infer_window_minutes,
             daily_review_ids=daily_ids,
+            symbol=self.symbol,
             generated_at=to_utc(generated_at) if generated_at else None,
         )
         if store:
             self.reviews.upsert_weekly(review)
-            log.info("wrote weekly review %s-W%02d", iso_year, iso_week)
+            log.info(
+                "wrote weekly review %s-W%02d %s", iso_year, iso_week, self.symbol or ""
+            )
         return review
 
     def generate_week_with_dailies(

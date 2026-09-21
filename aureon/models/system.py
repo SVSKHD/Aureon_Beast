@@ -12,9 +12,11 @@ from datetime import datetime
 
 from pydantic import Field, model_validator
 
+from aureon.models.assessment import TrendRead
 from aureon.models.base import AureonDocument, AureonModel, UtcDatetime, to_utc, utc_now
 from aureon.models.enums import Freshness, MarketState, SessionName, Timeframe
 from aureon.models.market import QuoteSnapshot
+from aureon.models.profile import ProfileSummary, VolatilityContext
 
 # §84 defaults; overridable via config. 46s old must read STALE at 45s.
 DEFAULT_STALE_AFTER_SECONDS = 45.0
@@ -117,6 +119,29 @@ class SymbolState(AureonModel):
     rsi: float | None = None
     rsi_zone: str | None = Field(
         default=None, description="overbought | oversold | neutral, derived from rsi."
+    )
+
+    # ── Volume profile and volatility (9B, §19) ───────────────────────────────
+    # On SymbolState rather than on SystemState because after 9A-2 the state document is
+    # per symbol, and a profile is a fact about one instrument. Summaries rather than
+    # profiles: the panel needs the POC, the value area and the nodes, and two hundred
+    # bins per scope would be a payload nobody reads on a phone.
+    volume_profile: dict[str, ProfileSummary] = Field(
+        default_factory=dict,
+        description="current_session | asia | day -> that scope's summary (9B).",
+    )
+    volatility: VolatilityContext | None = Field(
+        default=None, description="ATR(14) and the session range vs its median (9B)."
+    )
+
+    # ── The trend read (9D, §62) ──────────────────────────────────────────────
+    #: Computed by the OBSERVER, which has the candles, and published here for Discord to
+    #: read. `/monitor` renders it without recomputing anything: the Discord process holds
+    #: no data provider at all, and a boundary test enforces that by inspecting BotContext's
+    #: own annotations (decision 194).
+    trend_read: TrendRead | None = Field(
+        default=None,
+        description="What the last N closed candles did, as facts and a summary (9D).",
     )
 
     # ── Session context (§18) ─────────────────────────────────────────────────

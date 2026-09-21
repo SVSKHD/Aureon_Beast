@@ -55,6 +55,7 @@ class MarketEngine:
         timeframes: Sequence[Timeframe],
         on_detections: Callable[[list[Detection]], None] | None = None,
         on_candle_close: Callable[[Candle], None] | None = None,
+        on_poll: Callable[[], None] | None = None,
         grace_seconds: float = DEFAULT_GRACE_SECONDS,
         lookback_bars: int = DEFAULT_LOOKBACK_BARS,
     ) -> None:
@@ -64,6 +65,12 @@ class MarketEngine:
         self.timeframes = list(timeframes)
         self.on_detections = on_detections
         self.on_candle_close = on_candle_close
+        #: Called once per poll, after any candles were processed (9C). The observer uses
+        #: it to answer price alerts from the quotes it is already reading -- on the poll
+        #: clock rather than the candle clock, because "the first quote across the level"
+        #: is the thing a human asked about and a five-minute granularity would answer a
+        #: different question.
+        self.on_poll = on_poll
         self.grace_seconds = grace_seconds
         self.lookback_bars = lookback_bars
 
@@ -93,6 +100,11 @@ class MarketEngine:
         for symbol in self.symbols:
             for timeframe in self.timeframes:
                 produced.extend(self._poll_stream(symbol, timeframe))
+        if self.on_poll is not None:
+            try:
+                self.on_poll()
+            except Exception:  # noqa: BLE001 - a side errand must not stop observation
+                log.exception("on_poll hook failed")
         return produced
 
     def _poll_stream(self, symbol: str, timeframe: Timeframe) -> list[Detection]:

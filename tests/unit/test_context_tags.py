@@ -47,6 +47,9 @@ def detection(
     direction: Direction | None = None,
     symbol: str = "XAUUSD",
     timeframe: Timeframe = Timeframe.M5,
+    price: float = 2400.0,
+    volume_profile_ref=None,
+    volatility=None,
 ) -> Detection:
     """A detection ``candles`` candles after BASE. Negative is earlier."""
     close = BASE + CANDLE * candles
@@ -69,10 +72,12 @@ def detection(
         direction=direction,
         detected_at=MarketTime.from_utc(close, TZ),
         candle_open_time=MarketTime.from_utc(close - CANDLE, TZ),
-        price=2400.0,
+        price=price,
         session=SessionContext(session=SessionName.LONDON, session_config_version=1),
         sequence_today=1,
         sequence_session=1,
+        volume_profile_ref=volume_profile_ref,
+        volatility=volatility,
     )
 
 
@@ -296,3 +301,145 @@ def test_tags_are_deterministic_and_order_independent() -> None:
     first = derive(cross, [cross, *context])
     second = derive(cross, [*reversed(context), cross])
     assert first == second
+
+
+# ── 9B: tags from the detection's own stored context ──────────────────────────
+
+
+def profile_ref(**overrides):
+    from aureon.models.profile import VolumeProfileRef
+
+    base = dict(
+        scope="asia",
+        poc_price=2400.00,
+        va_high=2401.00,
+        va_low=2399.00,
+        price_vs_va="inside",
+        nearest_lvn=2402.00,
+        nearest_hvn=2400.00,
+    )
+    return VolumeProfileRef(**(base | overrides))
+
+
+def volatility(regime: str | None = "high"):
+    from aureon.config.symbol_tuning import VOLATILITY_BANDS_VERSION
+    from aureon.models.profile import VolatilityContext
+
+    return VolatilityContext(
+        atr_14=1.0,
+        atr_points=100.0,
+        regime=regime,
+        bands_version=None if regime is None else VOLATILITY_BANDS_VERSION,
+    )
+
+
+def tagged(**kwargs) -> dict[str, bool]:
+    subject = detection(
+        agent="ema_cross", event_key="bullish", direction=Direction.BUY, **kwargs
+    )
+    return derive(subject, [subject])
+
+
+def test_the_new_tags_read_the_detections_own_reference() -> None:
+    """No hindsight by construction: there is no later data to reach for."""
+    from aureon.evaluation.context_tags import (
+        TAG_PRICE_ABOVE_ASIA_VA,
+        TAG_PRICE_BELOW_ASIA_VA,
+    )
+
+    above = tagged(price=2405.0, volume_profile_ref=profile_ref(price_vs_va="above"))
+    assert above[TAG_PRICE_ABOVE_ASIA_VA] is True
+    assert above[TAG_PRICE_BELOW_ASIA_VA] is False
+
+    below = tagged(price=2395.0, volume_profile_ref=profile_ref(price_vs_va="below"))
+    assert below[TAG_PRICE_BELOW_ASIA_VA] is True
+    assert below[TAG_PRICE_ABOVE_ASIA_VA] is False
+
+    inside = tagged(volume_profile_ref=profile_ref())
+    assert inside[TAG_PRICE_ABOVE_ASIA_VA] is False
+    assert inside[TAG_PRICE_BELOW_ASIA_VA] is False
+
+
+def test_at_the_poc_means_inside_the_pocs_own_bin() -> None:
+    """The tolerance is the bin width, so "at the POC" means the same on either symbol.
+
+    A fixed $0.05 would be half a gold bin and fifty silver ones.
+    """
+    from aureon.evaluation.context_tags import TAG_AT_POC
+
+    assert tagged(price=2400.04, volume_profile_ref=profile_ref())[TAG_AT_POC] is True
+    assert tagged(price=2400.20, volume_profile_ref=profile_ref())[TAG_AT_POC] is False
+    # Silver's bin is 2 points at a 0.001 tick: 0.002, so half a bin is 0.001.
+    silver = detection(
+        agent="ema_cross",
+        event_key="bullish",
+        direction=Direction.BUY,
+        symbol="XAGUSD",
+        price=30.0005,
+        volume_profile_ref=profile_ref(poc_price=30.000, va_low=29.9, va_high=30.1),
+    )
+    assert derive(silver, [silver])[TAG_AT_POC] is True
+
+
+def test_at_an_lvn_reads_the_nearest_low_volume_node() -> None:
+    from aureon.evaluation.context_tags import TAG_AT_LVN
+
+    assert tagged(price=2402.02, volume_profile_ref=profile_ref())[TAG_AT_LVN] is True
+    assert tagged(price=2400.00, volume_profile_ref=profile_ref())[TAG_AT_LVN] is False
+
+
+def test_a_detection_with_no_reference_is_false_everywhere_not_inside() -> None:
+    """The first candles of a broker day are a real group, and not "inside the value area"."""
+    from aureon.evaluation.context_tags import (
+        TAG_AT_LVN,
+        TAG_AT_POC,
+        TAG_PRICE_ABOVE_ASIA_VA,
+        TAG_PRICE_BELOW_ASIA_VA,
+    )
+
+    tags = tagged(volume_profile_ref=None)
+    for tag in (TAG_PRICE_ABOVE_ASIA_VA, TAG_PRICE_BELOW_ASIA_VA, TAG_AT_LVN, TAG_AT_POC):
+        assert tags[tag] is False
+
+
+def test_exactly_one_regime_tag_is_true_when_the_regime_is_known() -> None:
+    """Three booleans rather than a string: the tag map is dict[str, bool] by contract."""
+    from aureon.evaluation.context_tags import REGIME_TAGS
+
+    for regime, tag in REGIME_TAGS.items():
+        tags = tagged(volatility=volatility(regime))
+        assert tags[tag] is True
+        assert sum(tags[t] for t in REGIME_TAGS.values()) == 1
+
+
+def test_no_regime_means_no_regime_tag_rather_than_normal() -> None:
+    """An unwarmed context is not a normal session, and must not be counted as one."""
+    from aureon.evaluation.context_tags import REGIME_TAGS
+
+    tags = tagged(volatility=volatility(None))
+    assert sum(tags[t] for t in REGIME_TAGS.values()) == 0
+    assert sum(tagged(volatility=None)[t] for t in REGIME_TAGS.values()) == 0
+
+
+def test_every_tag_is_present_on_every_detection() -> None:
+    """A missing key and a False value are different claims (§23)."""
+    assert set(tagged(volume_profile_ref=profile_ref(), volatility=volatility()))\
+        == set(CONTEXT_TAGS)
+    assert set(tagged()) == set(CONTEXT_TAGS)
+
+
+def test_the_weekly_review_groups_by_the_new_tags_too() -> None:
+    """The review's comparison defaults to CONTEXT_TAGS, so adding one is enough (§23)."""
+    from aureon.evaluation.context_tags import TAG_AT_POC, TAG_REGIME_HIGH
+    from aureon.reviews.aggregate import PeriodData, compare_by_tag
+
+    comparisons = compare_by_tag(PeriodData(), _rule())
+    named = {c.tag for c in comparisons}
+    assert TAG_AT_POC in named
+    assert TAG_REGIME_HIGH in named
+
+
+def _rule():
+    from aureon.evaluation.rules import XAU_OUTCOME_V2
+
+    return XAU_OUTCOME_V2

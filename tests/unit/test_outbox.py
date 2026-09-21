@@ -246,3 +246,90 @@ def test_a_mid_batch_failure_stops_the_batch(
     assert calls[0] == 4  # three succeeded, the fourth failed and stopped the batch
     assert outbox.pending_count() == 7
     assert worker.backoff > 0
+
+
+# ── 9A: the §83 guarantee on either symbol ────────────────────────────────────
+
+
+def roster_for(symbol: str) -> list:
+    """The observer's own roster for one symbol, with that symbol's tuning (9A)."""
+    from aureon.config import AureonConfig
+    from main_observer import default_agents
+
+    config = AureonConfig(
+        symbols=("XAUUSD", "XAGUSD"),
+        evaluation_rules={"XAUUSD": "XAU_OUTCOME_V2", "XAGUSD": "XAG_OUTCOME_V1"},
+    )
+    return default_agents(config, symbol=symbol)
+
+
+@pytest.mark.parametrize("symbol", ["XAUUSD", "XAGUSD"])
+def test_exactly_once_delivery_holds_for_either_symbol(
+    tmp_path: Path, request: pytest.FixtureRequest, symbol: str
+) -> None:
+    """§83 on both instruments (9A).
+
+    The outbox keys rows by ``detection_id``, which is salted with the symbol -- so this is
+    also the test that two symbols' detections cannot collide in the queue. Fifty of one
+    symbol's detections, an outage, a recovery: fifty deliveries, no duplicates.
+    """
+    candles = request.getfixturevalue(
+        "candles" if symbol == "XAUUSD" else "silver_candles"
+    )
+    # Half the week: the whole roster produces far more than fifty detections in it, and
+    # feeding the full fixture twice per symbol costs minutes for no extra proof.
+    engine = AnalysisEngine(
+        roster_for(symbol), account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ
+    )
+    produced = engine.feed(candles[:900])[:50]
+    assert len(produced) == 50, f"{symbol} produced only {len(produced)} detections"
+    assert {d.symbol for d in produced} == {symbol}
+
+    outbox = LocalOutbox(tmp_path / f"{symbol}.db")
+    assert outbox.enqueue_many(produced) == 50
+
+    deliveries: list[str] = []
+    down = [True]
+
+    def deliver(payload: dict[str, object]) -> None:
+        if down[0]:
+            raise ConnectionError("firestore unreachable")
+        deliveries.append(str(payload["detection_id"]))
+
+    worker = OutboxWorker(outbox, deliver, initial_backoff=0.001)
+    assert worker.drain_once() == 0
+    assert outbox.pending_count() == 50
+
+    down[0] = False
+    assert worker.flush() == 50
+    assert outbox.pending_count() == 0
+    assert sorted(deliveries) == sorted(d.detection_id for d in produced)
+    assert len(set(deliveries)) == 50
+
+
+def test_both_symbols_share_one_queue_without_colliding(
+    tmp_path: Path, candles: list[Candle], silver_candles: list[Candle]
+) -> None:
+    """One observer, one outbox, two symbols (9A).
+
+    The queue is a single file, so the thing to prove is that the id salt keeps the two
+    symbols' rows distinct: a collision would silently drop one symbol's detection as an
+    already-queued duplicate.
+    """
+    gold = AnalysisEngine(
+        roster_for("XAUUSD"), account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ
+    ).feed(candles[:900])[:30]
+    silver = AnalysisEngine(
+        roster_for("XAGUSD"), account_scope=ACCOUNT_SCOPE, market_tz=MARKET_TZ
+    ).feed(silver_candles[:900])[:30]
+
+    outbox = LocalOutbox(tmp_path / "shared.db")
+    assert outbox.enqueue_many(gold + silver) == 60
+
+    delivered: list[dict[str, object]] = []
+    worker = OutboxWorker(outbox, delivered.append, initial_backoff=0.001)
+    assert worker.flush() == 60
+
+    symbols = [str(row["symbol"]) for row in delivered]
+    assert symbols.count("XAUUSD") == 30
+    assert symbols.count("XAGUSD") == 30

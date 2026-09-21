@@ -24,6 +24,8 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Iterator
+from dataclasses import dataclass, field
+from typing import Any
 
 import pytest
 
@@ -200,3 +202,85 @@ def audit_actions(firestore_client, request_id: str) -> list[str]:
 def iter_all(firestore_client, collection: str) -> Iterator[dict]:
     for doc in firestore_client.collection(collection).stream():
         yield doc.to_dict()
+
+
+# ── A Discord interaction, reduced to what the handlers actually use ───────────
+#
+# Shared because more than one suite drives a real handler: ``/execute`` (9A) and the
+# [Execute] button under an announcement (9C) must reach the SAME confirmation, and two
+# copies of the double would eventually diverge in exactly the place that matters -- a
+# modal recorded by one and ignored by the other would hide a button that skipped the lot.
+
+
+@dataclass
+class FakeResponse:
+    deferred: bool = False
+    messages: list[Any] = field(default_factory=list)
+    edits: list[Any] = field(default_factory=list)
+    modals: list[Any] = field(default_factory=list)
+
+    async def defer(self, **kwargs: Any) -> None:
+        self.deferred = True
+
+    def is_done(self) -> bool:
+        return self.deferred
+
+    async def send_message(self, **kwargs: Any) -> None:
+        self.messages.append(kwargs)
+
+    async def edit_message(self, **kwargs: Any) -> None:
+        self.edits.append(kwargs)
+
+    async def send_modal(self, modal: Any) -> None:
+        self.modals.append(modal)
+
+
+@dataclass
+class FakeFollowup:
+    sends: list[Any] = field(default_factory=list)
+
+    async def send(self, **kwargs: Any) -> None:
+        self.sends.append(kwargs)
+
+
+@dataclass
+class FakeUser:
+    id: str
+
+
+class FakeInteraction:
+    def __init__(self, user_id: str = USER) -> None:
+        self.user = FakeUser(user_id)
+        self.response = FakeResponse()
+        self.followup = FakeFollowup()
+
+    # What the assertions read: the embeds this interaction was shown.
+    @property
+    def embeds(self) -> list[Any]:
+        return [
+            call["embed"]
+            for call in [*self.followup.sends, *self.response.messages, *self.response.edits]
+            if "embed" in call
+        ]
+
+    @property
+    def views(self) -> list[Any]:
+        return [call["view"] for call in self.followup.sends if call.get("view")]
+
+    @property
+    def modals(self) -> list[Any]:
+        return list(self.response.modals)
+
+
+def embed_text(embed: Any) -> str:
+    """Everything a human would read on the embed, footer included.
+
+    The footer matters and was missing: "research only · not a recommendation" (9C) and
+    "measured from n=... · not advice" (9D) live there and nowhere else, so every assertion
+    about them was reading a string that could not contain them.
+    """
+    parts = [str(embed.title or ""), str(embed.description or "")]
+    parts += [f"{f.name} {f.value}" for f in embed.fields]
+    footer = getattr(embed, "footer", None)
+    parts.append(str(getattr(footer, "text", "") or ""))
+    return "\n".join(parts)

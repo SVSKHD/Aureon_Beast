@@ -25,13 +25,17 @@ from aureon.discord.context import BotContext
 from aureon.discord.embeds import confirmation_embed, notice_embed
 from aureon.discord.service import (
     DraftRequest,
+    attach_assessment,
     build_confirmation,
     linkable_detections,
+    market_state_of,
+    quote_of,
+    unobserved_symbol_notice,
     unsupported_mode_notice,
     validate_lot,
 )
 from aureon.discord.views import ConfirmTradeView
-from aureon.models.enums import FillingMode, MarketState, OrderType
+from aureon.models.enums import FillingMode, OrderType
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +60,14 @@ class ExecuteTradeCommands:
         await interaction.response.defer(thinking=True, ephemeral=True)
         context = self.context
         actor = str(interaction.user.id)
+        symbol = symbol.upper()
+
+        # 9A: the same gate as /execute. Without an observer for this symbol there is no
+        # published quote and no spec, so the wizard could only show blanks.
+        unobserved = unobserved_symbol_notice(symbol, context.config.symbols)
+        if unobserved:
+            await self._fail(interaction, unobserved)
+            return
 
         try:
             kind = OrderType(order_type)
@@ -110,7 +122,7 @@ class ExecuteTradeCommands:
         )
 
         state = await context.run(context.system_state.read)
-        quote = _quote_from_state(state, symbol)
+        quote = quote_of(state, symbol)
         if quote is None:
             await self._fail(
                 interaction,
@@ -119,11 +131,12 @@ class ExecuteTradeCommands:
             )
             return
 
-        market_state = _market_state_from_state(state, symbol)
+        market_state = market_state_of(state, symbol)
         request = await context.run(context.requests.create, draft.to_request())
         screen = build_confirmation(
             draft, quote, spec, settings, market_state=market_state, detection=detection
         )
+        await attach_assessment(context, screen, draft.symbol)
         view = ConfirmTradeView(context, request, draft)
         await interaction.followup.send(
             embed=confirmation_embed(screen), view=view, ephemeral=True
@@ -137,7 +150,7 @@ class ExecuteTradeCommands:
         """
         context = self.context
         recent = await context.run(
-            context.detections.recent_for_symbol, symbol, None, 25
+            context.detections.recent_for_symbol, symbol.upper(), None, 25
         )
         candidates = linkable_detections(
             recent,
@@ -152,30 +165,17 @@ class ExecuteTradeCommands:
         )
 
 
-def _quote_from_state(state: Any, symbol: str):
-    if state is None:
-        return None
-    for symbol_state in state.symbols:
-        if symbol_state.symbol == symbol and symbol_state.last_quote is not None:
-            return symbol_state.last_quote
-    return None
-
-
-def _market_state_from_state(state: Any, symbol: str) -> MarketState:
-    if state is None:
-        return MarketState.UNKNOWN
-    for symbol_state in state.symbols:
-        if symbol_state.symbol == symbol:
-            return symbol_state.market_state
-    return MarketState.UNKNOWN
-
-
 def register(tree: Any, context: BotContext) -> None:
     commands = ExecuteTradeCommands(context)
 
     @tree.command(name="execute-trade", description="Place a trade (requires confirmation)")
+    @app_commands.choices(
+        symbol=[
+            app_commands.Choice(name=name, value=name) for name in context.config.symbols
+        ]
+    )
     @app_commands.describe(
-        symbol="Symbol, e.g. XAUUSD",
+        symbol="Which symbol",
         order_type="market_buy, market_sell, buy_stop, sell_stop, buy_limit, sell_limit",
         lot="Lot size, e.g. 0.10",
         stop_loss="Stop loss price",

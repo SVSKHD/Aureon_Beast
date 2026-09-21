@@ -28,24 +28,30 @@ from main_observer import Observer
 from tests.conftest import MARKET_TZ, FakeLiveProvider, InMemoryFirestore, cross_agent
 
 
-def make_config(tmp_path: Path) -> AureonConfig:
-    return AureonConfig.from_env(
-        env={
-            "AUREON_ACCOUNT_SCOPE": "primary",
-            "AUREON_MARKET_TZ": MARKET_TZ,
-            "AUREON_SYMBOLS": "XAUUSD",
-            "AUREON_TIMEFRAMES": "M5",
-            "AUREON_OUTBOX_PATH": str(tmp_path / "outbox.db"),
-            "AUREON_OBSERVER_STATE_PATH": str(tmp_path / "observer_state.json"),
-        }
-    )
+def make_config(tmp_path: Path, symbol: str = "XAUUSD") -> AureonConfig:
+    env = {
+        "AUREON_ACCOUNT_SCOPE": "primary",
+        "AUREON_MARKET_TZ": MARKET_TZ,
+        "AUREON_SYMBOLS": symbol,
+        "AUREON_TIMEFRAMES": "M5",
+        "AUREON_OUTBOX_PATH": str(tmp_path / "outbox.db"),
+        "AUREON_OBSERVER_STATE_PATH": str(tmp_path / "observer_state.json"),
+    }
+    if symbol == "XAGUSD":
+        # One symbol, so AUREON_EVAL_RULE is still the way to name its rule (9A,
+        # decision 141): the per-symbol map is what a MULTI-symbol config must provide.
+        env["AUREON_EVAL_RULE"] = "XAG_OUTCOME_V1"
+    return AureonConfig.from_env(env=env)
 
 
 def build(
-    tmp_path: Path, candles: list[Candle], firestore: InMemoryFirestore
+    tmp_path: Path,
+    candles: list[Candle],
+    firestore: InMemoryFirestore,
+    symbol: str = "XAUUSD",
 ) -> tuple[Observer, LocalOutbox, FakeLiveProvider]:
     """An observer wired to a fake feed and an in-memory Firestore."""
-    config = make_config(tmp_path)
+    config = make_config(tmp_path, symbol)
     provider = FakeLiveProvider(candles)
     outbox = LocalOutbox(config.outbox_path)
     worker = OutboxWorker(outbox, DetectionRepository(firestore).upsert_payload)
@@ -225,3 +231,57 @@ def test_re_polling_without_new_candles_is_a_no_op(
     observer.worker.flush()
     assert len(stored_ids(firestore)) == baseline
     outbox.close()
+
+
+# ── 9A: the same recovery claim, on either symbol ─────────────────────────────
+
+
+@pytest.mark.parametrize("symbol", ["XAUUSD", "XAGUSD"])
+def test_restart_recovery_holds_for_either_symbol(
+    tmp_path: Path, request: pytest.FixtureRequest, symbol: str
+) -> None:
+    """§75 on both instruments (9A).
+
+    Not a formality: the cursor is keyed by ``(symbol, timeframe)``, the reach-back is
+    measured in candles of that symbol's own feed, and the detection ids are salted with the
+    symbol. A recovery path that worked only for the symbol it was written against would fail
+    silently -- as a gap, which is invisible without a clean run to compare against.
+    """
+    candles = request.getfixturevalue(
+        "candles" if symbol == "XAUUSD" else "silver_candles"
+    )
+    kill_at = 900
+    firestore = InMemoryFirestore()
+
+    first, outbox_a, provider_a = build(tmp_path, candles, firestore, symbol)
+    first.startup()
+    run_through(first, provider_a, candles[:kill_at])
+    first.worker.flush()
+    delivered_first = set(stored_ids(firestore))
+    kill(first, outbox_a)
+
+    cursor = ObserverState(first.config.observer_state_path).get(symbol, Timeframe.M5)
+    assert cursor == candles[kill_at - 1].open_time.utc
+
+    second, outbox_b, provider_b = build(tmp_path, candles, firestore, symbol)
+    provider_b.set_clock(candles[kill_at - 1].close_time)
+    second.startup()
+    run_through(second, provider_b, candles[kill_at:])
+    second.worker.flush()
+    delivered_all = stored_ids(firestore)
+
+    clean_store = InMemoryFirestore()
+    clean, clean_outbox, clean_provider = build(
+        tmp_path / "clean", candles, clean_store, symbol
+    )
+    clean.startup()
+    run_through(clean, clean_provider, candles)
+    clean.worker.flush()
+    expected = stored_ids(clean_store)
+
+    assert delivered_all == expected
+    assert len(delivered_all) == len(set(delivered_all))
+    assert delivered_first <= set(delivered_all)
+    assert expected, f"{symbol} produced no detections, so nothing was proven"
+    kill(clean, clean_outbox)
+    kill(second, outbox_b)

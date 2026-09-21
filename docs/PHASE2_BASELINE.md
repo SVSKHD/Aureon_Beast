@@ -29,7 +29,7 @@ Gaps (weekend discontinuity):
 
 | property | value |
 |---|---|
-| agent | `ema_cross` v2.0.0 |
+| agent | `ema_cross` v2.1.0 |
 | fast / slow EMA | 20 / 50 |
 | RSI period | 14 (context only, never a gate) |
 | warm-up bars | 150 (slow × 3) |
@@ -75,12 +75,12 @@ alone -- adding an agent never changes another's output.
 
 | agent | version | window | detections |
 |---|---|---|---|
-| `ema_cross` | 2.0.0 | 151 | 29 |
-| `rsi` | 1.0.0 | 44 | 110 |
-| `session_trend` | 1.0.0 | 98 | 19 |
-| `wick` | 1.0.0 | 1 | 235 |
-| `liquidity` | 1.0.0 | 583 | 528 |
-| `breakout` | 1.0.0 | 583 | 251 |
+| `ema_cross` | 2.1.0 | 151 | 29 |
+| `rsi` | 1.1.0 | 44 | 110 |
+| `session_trend` | 1.1.0 | 98 | 19 |
+| `wick` | 1.1.0 | 1 | 235 |
+| `liquidity` | 1.1.0 | 583 | 528 |
+| `breakout` | 1.1.0 | 583 | 251 |
 
 ### Crosses, sweeps and breakouts per session
 
@@ -379,6 +379,24 @@ Read the columns literally:
 
 235 detections, none evaluable: this agent emits `direction=None`, so there is no favourable side to measure (§16, decision 48).
 
+### Outcomes by volume and volatility context — XAUUSD
+
+Horizon `c5`, threshold `3`, COMPLETE horizons only. Every row
+gives both sides, because a `with` rate means nothing until the `without` rate is
+beside it — and most rows here are far too small to read as anything but anecdote.
+
+| tag | with | without |
+|---|---|---|
+| `cross_at_lvn` | 13% (12/93) | 10% (73/711) |
+| `cross_at_poc` | 18% (2/11) | 10% (83/793) |
+| `price_above_asia_va` | 11% (27/244) | 10% (58/560) |
+| `price_below_asia_va` | 13% (36/277) | 9% (49/527) |
+| `volatility_regime_high` | 12% (4/32) | 10% (81/772) |
+| `volatility_regime_low` | 7% (29/410) | 14% (56/394) |
+| `volatility_regime_normal` | 15% (39/262) | 8% (46/542) |
+
+⚠︎ marks a split with too few COMPLETE horizons on one side to compare at all.
+
 ---
 
 ## Historical: `ema_cross` v1.0.0 at 9/21
@@ -444,6 +462,255 @@ Reconciled: every figure above agrees.
 
 ---
 
+# XAGUSD
+
+The same pipeline, the same week's trading hours, a different instrument. Read this
+section **beside** gold's rather than against it: `XAG_OUTCOME_V1`'s thresholds are
+gold's scaled by the ratio of prices, so $0.10 of silver is not $3 of gold in any
+sense a study would recognise (decision 142). What is comparable is the shape --
+how much each roster selects, and how often each rule's own thresholds were reached.
+
+## Input
+
+| property | value |
+|---|---|
+| fixture | `aureon/data/fixtures/XAGUSD_M5.csv` (synthetic, decision 148) |
+| candles | 1884 |
+| symbol / timeframe | XAGUSD M5 |
+| tick (`point`) | 0.001 |
+| outcome rule | `XAG_OUTCOME_V1` |
+| thresholds | $0.1 / $0.2 / $0.3 / $0.5 / $1 in **price** |
+
+## Detections
+
+1063 detections from the whole roster.
+
+| agent | detections |
+|---|---|
+| `breakout` | 237 |
+| `ema_cross` | 28 |
+| `liquidity` | 435 |
+| `rsi` | 101 |
+| `session_trend` | 19 |
+| `wick` | 243 |
+
+### By session
+
+| session | detections |
+|---|---|
+| asia | 270 |
+| london | 456 |
+| new_york | 221 |
+| off | 116 |
+
+### By broker trading day
+
+| market date | detections |
+|---|---|
+| 2026-09-14 | 150 |
+| 2026-09-15 | 161 |
+| 2026-09-16 | 204 |
+| 2026-09-17 | 156 |
+| 2026-09-18 | 160 |
+| 2026-09-21 | 151 |
+| 2026-09-22 | 81 |
+
+## Detection outcomes — `XAG_OUTCOME_V1`
+
+1063 detections, 700 evaluated, 697 with at least
+one COMPLETE horizon. 363 carry `direction=None` and have no
+favourable side to measure (§16, decision 48).
+
+Every column is read exactly as gold's is: horizon counts rather than detection
+counts, reached figures from COMPLETE horizons only, and `invalid` dominated by the
+fixture's weekend gap.
+
+### `breakout` — XAG_OUTCOME_V1
+
+237 detections, 237 evaluated, 235 with at least one COMPLETE horizon
+
+| session | horizon | complete | pending | invalid | reach $0.1 | reach $0.2 | reach $0.3 | reach $0.5 | reach $1 | median MFE (price) | median MAE (price) | median t→$0.1 | MFE_FIRST | MAE_FIRST | ambiguous |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `asia` | `c5` | 59 | 0 | 0 | 0/59 (0%) | 0/59 (0%) | 0/59 (0%) | 0/59 (0%) | 0/59 (0%) | +0.02 | -0.02 | — (n=0) | 0 | 0 | 0 |
+| `asia` | `c10` | 59 | 0 | 0 | 1/59 (2%) | 0/59 (0%) | 0/59 (0%) | 0/59 (0%) | 0/59 (0%) | +0.03 | -0.02 | 40m (n=1) | 1 | 0 | 0 |
+| `asia` | `c20` | 59 | 0 | 0 | 3/59 (5%) | 0/59 (0%) | 0/59 (0%) | 0/59 (0%) | 0/59 (0%) | +0.03 | -0.03 | 70m (n=3) | 3 | 2 | 0 |
+| `asia` | `m60` | 59 | 0 | 0 | 1/59 (2%) | 0/59 (0%) | 0/59 (0%) | 0/59 (0%) | 0/59 (0%) | +0.03 | -0.03 | 40m (n=1) | 1 | 0 | 0 |
+| `asia` | `session_close` | 59 | 0 | 0 | 7/59 (12%) | 0/59 (0%) | 0/59 (0%) | 0/59 (0%) | 0/59 (0%) | +0.04 | -0.04 | 120m (n=7) | 7 | 8 | 0 |
+| `asia` | `day_close` | 47 | 5 | 7 | 41/47 (87%) | 25/47 (53%) | 9/47 (19%) | 0/47 (0%) | 0/47 (0%) | +0.22 | -0.18 | 445m (n=41) | 28 | 19 | 0 |
+| `asia` | `opposite_cross` | 59 | 0 | 0 | 11/59 (19%) | 2/59 (3%) | 1/59 (2%) | 0/59 (0%) | 0/59 (0%) | +0.04 | -0.03 | 135m (n=11) | 10 | 1 | 0 |
+| `london` | `c5` | 107 | 1 | 0 | 6/107 (6%) | 0/107 (0%) | 0/107 (0%) | 0/107 (0%) | 0/107 (0%) | +0.04 | -0.03 | 20m (n=6) | 6 | 1 | 0 |
+| `london` | `c10` | 107 | 1 | 0 | 18/107 (17%) | 0/107 (0%) | 0/107 (0%) | 0/107 (0%) | 0/107 (0%) | +0.05 | -0.04 | 32m (n=18) | 18 | 8 | 0 |
+| `london` | `c20` | 107 | 1 | 0 | 39/107 (36%) | 11/107 (10%) | 4/107 (4%) | 0/107 (0%) | 0/107 (0%) | +0.08 | -0.05 | 55m (n=39) | 38 | 14 | 0 |
+| `london` | `m60` | 107 | 1 | 0 | 22/107 (21%) | 4/107 (4%) | 0/107 (0%) | 0/107 (0%) | 0/107 (0%) | +0.06 | -0.04 | 35m (n=22) | 22 | 8 | 0 |
+| `london` | `session_close` | 99 | 9 | 0 | 57/99 (58%) | 38/99 (38%) | 18/99 (18%) | 0/99 (0%) | 0/99 (0%) | +0.15 | -0.09 | 110m (n=57) | 52 | 31 | 0 |
+| `london` | `day_close` | 78 | 9 | 21 | 65/78 (83%) | 44/78 (56%) | 21/78 (27%) | 1/78 (1%) | 0/78 (0%) | +0.22 | -0.10 | 130m (n=65) | 51 | 27 | 0 |
+| `london` | `opposite_cross` | 107 | 1 | 0 | 58/107 (54%) | 37/107 (35%) | 11/107 (10%) | 0/107 (0%) | 0/107 (0%) | +0.13 | -0.05 | 82m (n=58) | 58 | 5 | 0 |
+| `new_york` | `c5` | 46 | 0 | 0 | 3/46 (7%) | 0/46 (0%) | 0/46 (0%) | 0/46 (0%) | 0/46 (0%) | +0.03 | -0.03 | 25m (n=3) | 3 | 0 | 0 |
+| `new_york` | `c10` | 46 | 0 | 0 | 8/46 (17%) | 0/46 (0%) | 0/46 (0%) | 0/46 (0%) | 0/46 (0%) | +0.05 | -0.03 | 35m (n=8) | 8 | 0 | 0 |
+| `new_york` | `c20` | 46 | 0 | 0 | 19/46 (41%) | 0/46 (0%) | 0/46 (0%) | 0/46 (0%) | 0/46 (0%) | +0.09 | -0.04 | 60m (n=19) | 19 | 4 | 0 |
+| `new_york` | `m60` | 46 | 0 | 0 | 11/46 (24%) | 0/46 (0%) | 0/46 (0%) | 0/46 (0%) | 0/46 (0%) | +0.05 | -0.03 | 40m (n=11) | 11 | 1 | 0 |
+| `new_york` | `session_close` | 46 | 0 | 0 | 24/46 (52%) | 5/46 (11%) | 2/46 (4%) | 0/46 (0%) | 0/46 (0%) | +0.11 | -0.04 | 68m (n=24) | 23 | 7 | 0 |
+| `new_york` | `day_close` | 38 | 0 | 8 | 18/38 (47%) | 0/38 (0%) | 0/38 (0%) | 0/38 (0%) | 0/38 (0%) | +0.09 | -0.05 | 60m (n=18) | 17 | 7 | 0 |
+| `new_york` | `opposite_cross` | 46 | 0 | 0 | 25/46 (54%) | 5/46 (11%) | 2/46 (4%) | 0/46 (0%) | 0/46 (0%) | +0.12 | -0.04 | 65m (n=25) | 25 | 0 | 0 |
+| `off` | `c5` | 23 | 0 | 1 | 0/23 (0%) | 0/23 (0%) | 0/23 (0%) | 0/23 (0%) | 0/23 (0%) | +0.03 | -0.02 | — (n=0) | 0 | 0 | 0 |
+| `off` | `c10` | 23 | 0 | 1 | 1/23 (4%) | 0/23 (0%) | 0/23 (0%) | 0/23 (0%) | 0/23 (0%) | +0.03 | -0.02 | 40m (n=1) | 1 | 1 | 0 |
+| `off` | `c20` | 23 | 0 | 1 | 5/23 (22%) | 0/23 (0%) | 0/23 (0%) | 0/23 (0%) | 0/23 (0%) | +0.04 | -0.04 | 65m (n=5) | 5 | 2 | 0 |
+| `off` | `m60` | 23 | 0 | 1 | 1/23 (4%) | 0/23 (0%) | 0/23 (0%) | 0/23 (0%) | 0/23 (0%) | +0.03 | -0.03 | 40m (n=1) | 1 | 2 | 0 |
+| `off` | `session_close` | 23 | 0 | 1 | 5/23 (22%) | 0/23 (0%) | 0/23 (0%) | 0/23 (0%) | 0/23 (0%) | +0.03 | -0.04 | 65m (n=5) | 5 | 2 | 0 |
+| `off` | `day_close` | 19 | 1 | 4 | 16/19 (84%) | 15/19 (79%) | 1/19 (5%) | 0/19 (0%) | 0/19 (0%) | +0.24 | -0.16 | 228m (n=16) | 10 | 6 | 0 |
+| `off` | `opposite_cross` | 23 | 0 | 1 | 9/23 (39%) | 0/23 (0%) | 0/23 (0%) | 0/23 (0%) | 0/23 (0%) | +0.04 | -0.03 | 70m (n=9) | 9 | 0 | 0 |
+| **all** | `c5` | 235 | 1 | 1 | 9/235 (4%) | 0/235 (0%) | 0/235 (0%) | 0/235 (0%) | 0/235 (0%) | +0.03 | -0.02 | 25m (n=9) | 9 | 1 | 0 |
+| **all** | `c10` | 235 | 1 | 1 | 28/235 (12%) | 0/235 (0%) | 0/235 (0%) | 0/235 (0%) | 0/235 (0%) | +0.04 | -0.03 | 35m (n=28) | 28 | 9 | 0 |
+| **all** | `c20` | 235 | 1 | 1 | 66/235 (28%) | 11/235 (5%) | 4/235 (2%) | 0/235 (0%) | 0/235 (0%) | +0.06 | -0.04 | 60m (n=66) | 65 | 22 | 0 |
+| **all** | `m60` | 235 | 1 | 1 | 35/235 (15%) | 4/235 (2%) | 0/235 (0%) | 0/235 (0%) | 0/235 (0%) | +0.05 | -0.03 | 35m (n=35) | 35 | 11 | 0 |
+| **all** | `session_close` | 227 | 9 | 1 | 93/227 (41%) | 43/227 (19%) | 20/227 (9%) | 0/227 (0%) | 0/227 (0%) | +0.08 | -0.06 | 85m (n=93) | 87 | 48 | 0 |
+| **all** | `day_close` | 182 | 15 | 40 | 140/182 (77%) | 84/182 (46%) | 31/182 (17%) | 1/182 (1%) | 0/182 (0%) | +0.19 | -0.13 | 208m (n=140) | 106 | 59 | 0 |
+| **all** | `opposite_cross` | 235 | 1 | 1 | 103/235 (44%) | 44/235 (19%) | 14/235 (6%) | 0/235 (0%) | 0/235 (0%) | +0.07 | -0.04 | 80m (n=103) | 102 | 6 | 0 |
+
+### `ema_cross` — XAG_OUTCOME_V1
+
+28 detections, 28 evaluated, 28 with at least one COMPLETE horizon
+
+| session | horizon | complete | pending | invalid | reach $0.1 | reach $0.2 | reach $0.3 | reach $0.5 | reach $1 | median MFE (price) | median MAE (price) | median t→$0.1 | MFE_FIRST | MAE_FIRST | ambiguous |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `asia` | `c5` | 12 | 0 | 0 | 0/12 (0%) | 0/12 (0%) | 0/12 (0%) | 0/12 (0%) | 0/12 (0%) | +0.01 | -0.02 | — (n=0) | 0 | 0 | 0 |
+| `asia` | `c10` | 12 | 0 | 0 | 0/12 (0%) | 0/12 (0%) | 0/12 (0%) | 0/12 (0%) | 0/12 (0%) | +0.01 | -0.04 | — (n=0) | 0 | 0 | 0 |
+| `asia` | `c20` | 12 | 0 | 0 | 1/12 (8%) | 0/12 (0%) | 0/12 (0%) | 0/12 (0%) | 0/12 (0%) | +0.02 | -0.04 | 100m (n=1) | 1 | 0 | 0 |
+| `asia` | `m60` | 12 | 0 | 0 | 0/12 (0%) | 0/12 (0%) | 0/12 (0%) | 0/12 (0%) | 0/12 (0%) | +0.01 | -0.04 | — (n=0) | 0 | 0 | 0 |
+| `asia` | `session_close` | 12 | 0 | 0 | 0/12 (0%) | 0/12 (0%) | 0/12 (0%) | 0/12 (0%) | 0/12 (0%) | +0.03 | -0.05 | — (n=0) | 0 | 0 | 0 |
+| `asia` | `day_close` | 8 | 4 | 0 | 7/8 (88%) | 4/8 (50%) | 2/8 (25%) | 0/8 (0%) | 0/8 (0%) | +0.19 | -0.19 | 225m (n=7) | 6 | 2 | 0 |
+| `asia` | `opposite_cross` | 12 | 0 | 0 | 3/12 (25%) | 1/12 (8%) | 0/12 (0%) | 0/12 (0%) | 0/12 (0%) | +0.03 | -0.04 | 155m (n=3) | 3 | 0 | 0 |
+| `london` | `c5` | 11 | 0 | 0 | 1/11 (9%) | 0/11 (0%) | 0/11 (0%) | 0/11 (0%) | 0/11 (0%) | +0.03 | -0.03 | 25m (n=1) | 1 | 0 | 0 |
+| `london` | `c10` | 11 | 0 | 0 | 3/11 (27%) | 0/11 (0%) | 0/11 (0%) | 0/11 (0%) | 0/11 (0%) | +0.05 | -0.03 | 35m (n=3) | 3 | 1 | 0 |
+| `london` | `c20` | 11 | 0 | 0 | 5/11 (45%) | 3/11 (27%) | 2/11 (18%) | 0/11 (0%) | 0/11 (0%) | +0.09 | -0.03 | 40m (n=5) | 5 | 2 | 0 |
+| `london` | `m60` | 11 | 0 | 0 | 3/11 (27%) | 2/11 (18%) | 0/11 (0%) | 0/11 (0%) | 0/11 (0%) | +0.06 | -0.03 | 35m (n=3) | 3 | 2 | 0 |
+| `london` | `session_close` | 10 | 1 | 0 | 7/10 (70%) | 5/10 (50%) | 2/10 (20%) | 0/10 (0%) | 0/10 (0%) | +0.17 | -0.08 | 80m (n=7) | 6 | 3 | 0 |
+| `london` | `day_close` | 9 | 1 | 1 | 7/9 (78%) | 5/9 (56%) | 3/9 (33%) | 0/9 (0%) | 0/9 (0%) | +0.20 | -0.19 | 80m (n=7) | 6 | 3 | 0 |
+| `london` | `opposite_cross` | 9 | 1 | 1 | 5/9 (56%) | 4/9 (44%) | 2/9 (22%) | 0/9 (0%) | 0/9 (0%) | +0.12 | -0.06 | 40m (n=5) | 5 | 1 | 0 |
+| `new_york` | `c5` | 2 | 0 | 0 | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | +0.01 | -0.03 | — (n=0) | 0 | 0 | 0 |
+| `new_york` | `c10` | 2 | 0 | 0 | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | +0.04 | -0.03 | — (n=0) | 0 | 0 | 0 |
+| `new_york` | `c20` | 2 | 0 | 0 | 1/2 (50%) | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | +0.10 | -0.03 | 80m (n=1) | 1 | 0 | 0 |
+| `new_york` | `m60` | 2 | 0 | 0 | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | +0.04 | -0.03 | — (n=0) | 0 | 0 | 0 |
+| `new_york` | `session_close` | 2 | 0 | 0 | 1/2 (50%) | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | +0.12 | -0.03 | 80m (n=1) | 1 | 0 | 0 |
+| `new_york` | `day_close` | 2 | 0 | 0 | 1/2 (50%) | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | 0/2 (0%) | +0.12 | -0.04 | 80m (n=1) | 1 | 0 | 0 |
+| `new_york` | `opposite_cross` | 2 | 0 | 0 | 2/2 (100%) | 2/2 (100%) | 1/2 (50%) | 0/2 (0%) | 0/2 (0%) | +0.29 | -0.04 | 145m (n=2) | 2 | 0 | 0 |
+| `off` | `c5` | 3 | 0 | 0 | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | +0.02 | -0.02 | — (n=0) | 0 | 0 | 0 |
+| `off` | `c10` | 3 | 0 | 0 | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | +0.05 | -0.02 | — (n=0) | 0 | 0 | 0 |
+| `off` | `c20` | 3 | 0 | 0 | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | +0.06 | -0.02 | — (n=0) | 0 | 1 | 0 |
+| `off` | `m60` | 3 | 0 | 0 | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | +0.06 | -0.02 | — (n=0) | 0 | 0 | 0 |
+| `off` | `session_close` | 3 | 0 | 0 | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | +0.06 | -0.02 | — (n=0) | 0 | 1 | 0 |
+| `off` | `day_close` | 3 | 0 | 0 | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | +0.05 | -0.02 | — (n=0) | 0 | 0 | 0 |
+| `off` | `opposite_cross` | 3 | 0 | 0 | 1/3 (33%) | 1/3 (33%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | +0.09 | -0.02 | 365m (n=1) | 1 | 0 | 0 |
+| **all** | `c5` | 28 | 0 | 0 | 1/28 (4%) | 0/28 (0%) | 0/28 (0%) | 0/28 (0%) | 0/28 (0%) | +0.01 | -0.03 | 25m (n=1) | 1 | 0 | 0 |
+| **all** | `c10` | 28 | 0 | 0 | 3/28 (11%) | 0/28 (0%) | 0/28 (0%) | 0/28 (0%) | 0/28 (0%) | +0.03 | -0.03 | 35m (n=3) | 3 | 1 | 0 |
+| **all** | `c20` | 28 | 0 | 0 | 7/28 (25%) | 3/28 (11%) | 2/28 (7%) | 0/28 (0%) | 0/28 (0%) | +0.05 | -0.04 | 80m (n=7) | 7 | 3 | 0 |
+| **all** | `m60` | 28 | 0 | 0 | 3/28 (11%) | 2/28 (7%) | 0/28 (0%) | 0/28 (0%) | 0/28 (0%) | +0.03 | -0.03 | 35m (n=3) | 3 | 2 | 0 |
+| **all** | `session_close` | 27 | 1 | 0 | 8/27 (30%) | 5/27 (19%) | 2/27 (7%) | 0/27 (0%) | 0/27 (0%) | +0.06 | -0.05 | 80m (n=8) | 7 | 4 | 0 |
+| **all** | `day_close` | 22 | 5 | 1 | 15/22 (68%) | 9/22 (41%) | 5/22 (23%) | 0/22 (0%) | 0/22 (0%) | +0.18 | -0.13 | 195m (n=15) | 13 | 5 | 0 |
+| **all** | `opposite_cross` | 26 | 1 | 1 | 11/26 (42%) | 8/26 (31%) | 3/26 (12%) | 0/26 (0%) | 0/26 (0%) | +0.06 | -0.04 | 100m (n=11) | 11 | 1 | 0 |
+
+### `liquidity` — XAG_OUTCOME_V1
+
+435 detections, 435 evaluated, 434 with at least one COMPLETE horizon
+
+| session | horizon | complete | pending | invalid | reach $0.1 | reach $0.2 | reach $0.3 | reach $0.5 | reach $1 | median MFE (price) | median MAE (price) | median t→$0.1 | MFE_FIRST | MAE_FIRST | ambiguous |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `asia` | `c5` | 106 | 0 | 0 | 0/106 (0%) | 0/106 (0%) | 0/106 (0%) | 0/106 (0%) | 0/106 (0%) | +0.02 | -0.02 | — (n=0) | 0 | 0 | 0 |
+| `asia` | `c10` | 106 | 0 | 0 | 0/106 (0%) | 0/106 (0%) | 0/106 (0%) | 0/106 (0%) | 0/106 (0%) | +0.02 | -0.02 | — (n=0) | 0 | 0 | 0 |
+| `asia` | `c20` | 106 | 0 | 0 | 2/106 (2%) | 0/106 (0%) | 0/106 (0%) | 0/106 (0%) | 0/106 (0%) | +0.04 | -0.03 | 92m (n=2) | 2 | 2 | 0 |
+| `asia` | `m60` | 106 | 0 | 0 | 0/106 (0%) | 0/106 (0%) | 0/106 (0%) | 0/106 (0%) | 0/106 (0%) | +0.03 | -0.03 | — (n=0) | 0 | 0 | 0 |
+| `asia` | `session_close` | 106 | 0 | 0 | 10/106 (9%) | 0/106 (0%) | 0/106 (0%) | 0/106 (0%) | 0/106 (0%) | +0.06 | -0.04 | 180m (n=10) | 10 | 6 | 0 |
+| `asia` | `day_close` | 80 | 20 | 6 | 70/80 (88%) | 40/80 (50%) | 34/80 (42%) | 0/80 (0%) | 0/80 (0%) | +0.21 | -0.27 | 445m (n=70) | 43 | 37 | 0 |
+| `asia` | `opposite_cross` | 106 | 0 | 0 | 0/106 (0%) | 0/106 (0%) | 0/106 (0%) | 0/106 (0%) | 0/106 (0%) | +0.03 | -0.02 | — (n=0) | 0 | 10 | 0 |
+| `london` | `c5` | 201 | 1 | 0 | 0/201 (0%) | 0/201 (0%) | 0/201 (0%) | 0/201 (0%) | 0/201 (0%) | +0.03 | -0.03 | — (n=0) | 0 | 8 | 0 |
+| `london` | `c10` | 199 | 3 | 0 | 29/199 (15%) | 2/199 (1%) | 0/199 (0%) | 0/199 (0%) | 0/199 (0%) | +0.04 | -0.05 | 40m (n=29) | 29 | 38 | 0 |
+| `london` | `c20` | 199 | 3 | 0 | 50/199 (25%) | 5/199 (3%) | 2/199 (1%) | 0/199 (0%) | 0/199 (0%) | +0.05 | -0.07 | 45m (n=50) | 50 | 76 | 0 |
+| `london` | `m60` | 199 | 3 | 0 | 35/199 (18%) | 2/199 (1%) | 0/199 (0%) | 0/199 (0%) | 0/199 (0%) | +0.04 | -0.06 | 40m (n=35) | 35 | 53 | 0 |
+| `london` | `session_close` | 187 | 15 | 0 | 79/187 (42%) | 34/187 (18%) | 11/187 (6%) | 0/187 (0%) | 0/187 (0%) | +0.08 | -0.13 | 95m (n=79) | 58 | 117 | 0 |
+| `london` | `day_close` | 151 | 15 | 36 | 81/151 (54%) | 61/151 (40%) | 22/151 (15%) | 1/151 (1%) | 0/151 (0%) | +0.18 | -0.21 | 110m (n=81) | 55 | 96 | 0 |
+| `london` | `opposite_cross` | 195 | 3 | 4 | 22/195 (11%) | 3/195 (2%) | 3/195 (2%) | 1/195 (1%) | 0/195 (0%) | +0.05 | -0.04 | 40m (n=22) | 22 | 60 | 0 |
+| `new_york` | `c5` | 88 | 0 | 0 | 3/88 (3%) | 0/88 (0%) | 0/88 (0%) | 0/88 (0%) | 0/88 (0%) | +0.02 | -0.03 | 20m (n=3) | 3 | 0 | 0 |
+| `new_york` | `c10` | 88 | 0 | 0 | 5/88 (6%) | 0/88 (0%) | 0/88 (0%) | 0/88 (0%) | 0/88 (0%) | +0.03 | -0.03 | 20m (n=5) | 5 | 9 | 0 |
+| `new_york` | `c20` | 88 | 0 | 0 | 13/88 (15%) | 0/88 (0%) | 0/88 (0%) | 0/88 (0%) | 0/88 (0%) | +0.04 | -0.06 | 85m (n=13) | 13 | 29 | 0 |
+| `new_york` | `m60` | 88 | 0 | 0 | 5/88 (6%) | 0/88 (0%) | 0/88 (0%) | 0/88 (0%) | 0/88 (0%) | +0.03 | -0.05 | 20m (n=5) | 5 | 16 | 0 |
+| `new_york` | `session_close` | 88 | 0 | 0 | 23/88 (26%) | 6/88 (7%) | 0/88 (0%) | 0/88 (0%) | 0/88 (0%) | +0.03 | -0.08 | 95m (n=23) | 23 | 34 | 0 |
+| `new_york` | `day_close` | 77 | 0 | 11 | 23/77 (30%) | 7/77 (9%) | 0/77 (0%) | 0/77 (0%) | 0/77 (0%) | +0.06 | -0.06 | 95m (n=23) | 23 | 25 | 0 |
+| `new_york` | `opposite_cross` | 77 | 0 | 11 | 4/77 (5%) | 0/77 (0%) | 0/77 (0%) | 0/77 (0%) | 0/77 (0%) | +0.03 | -0.03 | 20m (n=4) | 4 | 4 | 0 |
+| `off` | `c5` | 39 | 0 | 0 | 0/39 (0%) | 0/39 (0%) | 0/39 (0%) | 0/39 (0%) | 0/39 (0%) | +0.02 | -0.03 | — (n=0) | 0 | 0 | 0 |
+| `off` | `c10` | 39 | 0 | 0 | 0/39 (0%) | 0/39 (0%) | 0/39 (0%) | 0/39 (0%) | 0/39 (0%) | +0.03 | -0.03 | — (n=0) | 0 | 3 | 0 |
+| `off` | `c20` | 39 | 0 | 0 | 3/39 (8%) | 0/39 (0%) | 0/39 (0%) | 0/39 (0%) | 0/39 (0%) | +0.04 | -0.03 | 75m (n=3) | 3 | 3 | 0 |
+| `off` | `m60` | 39 | 0 | 0 | 0/39 (0%) | 0/39 (0%) | 0/39 (0%) | 0/39 (0%) | 0/39 (0%) | +0.04 | -0.03 | — (n=0) | 0 | 3 | 0 |
+| `off` | `session_close` | 39 | 0 | 0 | 5/39 (13%) | 3/39 (8%) | 0/39 (0%) | 0/39 (0%) | 0/39 (0%) | +0.04 | -0.03 | 90m (n=5) | 5 | 3 | 0 |
+| `off` | `day_close` | 33 | 0 | 6 | 21/33 (64%) | 14/33 (42%) | 10/33 (30%) | 0/33 (0%) | 0/33 (0%) | +0.14 | -0.26 | 775m (n=21) | 11 | 11 | 0 |
+| `off` | `opposite_cross` | 39 | 0 | 0 | 0/39 (0%) | 0/39 (0%) | 0/39 (0%) | 0/39 (0%) | 0/39 (0%) | +0.03 | -0.03 | — (n=0) | 0 | 4 | 0 |
+| **all** | `c5` | 434 | 1 | 0 | 3/434 (1%) | 0/434 (0%) | 0/434 (0%) | 0/434 (0%) | 0/434 (0%) | +0.02 | -0.03 | 20m (n=3) | 3 | 8 | 0 |
+| **all** | `c10` | 432 | 3 | 0 | 34/432 (8%) | 2/432 (0%) | 0/432 (0%) | 0/432 (0%) | 0/432 (0%) | +0.03 | -0.03 | 40m (n=34) | 34 | 50 | 0 |
+| **all** | `c20` | 432 | 3 | 0 | 68/432 (16%) | 5/432 (1%) | 2/432 (0%) | 0/432 (0%) | 0/432 (0%) | +0.04 | -0.05 | 52m (n=68) | 68 | 110 | 0 |
+| **all** | `m60` | 432 | 3 | 0 | 40/432 (9%) | 2/432 (0%) | 0/432 (0%) | 0/432 (0%) | 0/432 (0%) | +0.03 | -0.04 | 40m (n=40) | 40 | 72 | 0 |
+| **all** | `session_close` | 420 | 15 | 0 | 117/420 (28%) | 43/420 (10%) | 11/420 (3%) | 0/420 (0%) | 0/420 (0%) | +0.06 | -0.06 | 100m (n=117) | 96 | 160 | 0 |
+| **all** | `day_close` | 341 | 35 | 59 | 195/341 (57%) | 122/341 (36%) | 66/341 (19%) | 1/341 (0%) | 0/341 (0%) | +0.16 | -0.20 | 295m (n=195) | 132 | 169 | 0 |
+| **all** | `opposite_cross` | 417 | 3 | 15 | 26/417 (6%) | 3/417 (1%) | 3/417 (1%) | 1/417 (0%) | 0/417 (0%) | +0.03 | -0.03 | 40m (n=26) | 26 | 78 | 0 |
+
+### `rsi` — no outcomes
+
+101 detections, none evaluable: this agent emits `direction=None`, so there is no favourable side to measure (§16, decision 48).
+
+### `session_trend` — no outcomes
+
+19 detections, none evaluable: this agent emits `direction=None`, so there is no favourable side to measure (§16, decision 48).
+
+### `wick` — no outcomes
+
+243 detections, none evaluable: this agent emits `direction=None`, so there is no favourable side to measure (§16, decision 48).
+
+### Diagnostics — read before using these numbers
+
+Each threshold as a fraction of price, beside gold's, because that is the only
+sense in which the two rules' distances can be compared:
+
+| rung | XAGUSD | % of price | reached | XAUUSD | % of price | reached |
+|---|---|---|---|---|---|---|
+| 1 | $0.1 | 0.33% | 1005/4679 (21.5%) | $3 | 0.13% | 1905/5313 (35.9%) |
+| 2 | $0.2 | 0.67% | 390/4679 (8.3%) | $5 | 0.21% | 996/5313 (18.7%) |
+| 3 | $0.3 | 1.00% | 163/4679 (3.5%) | $10 | 0.42% | 250/5313 (4.7%) |
+| 4 | $0.5 | 1.67% | 3/4679 (0.1%) | $15 | 0.63% | 134/5313 (2.5%) |
+| 5 | $1 | 3.33% | 0/4679 (0.0%) | $20 | 0.83% | 80/5313 (1.5%) |
+
+Both `reached` columns are COMPLETE horizons only, whole roster, whole fixture week.
+
+**A finding, not a defect to patch.** $0.5 and $1 are reached in under 1% of COMPLETE horizons here, where
+gold's fourth and fifth rungs still catch a few per cent. The reason is arithmetic:
+`XAG_OUTCOME_V1`'s distances are gold's scaled by the ratio of prices and then
+**rounded to numbers a silver trader would name** (decision 142),and every rung ended up a larger fraction of price than gold's — the table above
+gives the multiple, rung by rung, beside what each one actually caught.
+
+The rule is **frozen** (§21). It is not edited to fix this: a better ladder is a
+new `rule_id` evaluated alongside, which is the same discipline that kept
+`EMA_OUTCOME_V1`'s saturated columns in this document rather than quietly
+rescaling them (decision 121). Until then, read silver's top thresholds as
+"not measured here" rather than as "silver does not move" — and remember the
+fixture is a random walk, so none of this is evidence about the metal.
+
+### Outcomes by volume and volatility context — XAGUSD
+
+Horizon `c5`, threshold `0.1`, COMPLETE horizons only. Every row
+gives both sides, because a `with` rate means nothing until the `without` rate is
+beside it — and most rows here are far too small to read as anything but anecdote.
+
+| tag | with | without |
+|---|---|---|
+| `cross_at_lvn` | — (0/0) ⚠︎ | 2% (13/697) |
+| `cross_at_poc` | 1% (1/154) | 2% (12/543) |
+| `price_above_asia_va` | 3% (5/174) | 2% (8/523) |
+| `price_below_asia_va` | 3% (2/67) | 2% (11/630) |
+| `volatility_regime_high` | 0% (0/4) ⚠︎ | 2% (13/693) |
+| `volatility_regime_low` | 2% (8/419) | 2% (5/278) |
+| `volatility_regime_normal` | 1% (2/180) | 2% (11/517) |
+
+⚠︎ marks a split with too few COMPLETE horizons on one side to compare at all.
+
+---
+
 ## Not yet measured
 
 * **Anything from a real session.** Every number in this document is a replay of
@@ -456,3 +723,7 @@ Reconciled: every figure above agrees.
   v1.0.0 placeholders researched on nothing (decision 120), so every `liquidity`,
   `breakout`, `wick` and `session_trend` count here is a count of what those
   arbitrary numbers happened to select.
+* **Anything about silver specifically.** XAGUSD's tuning is gold's thresholds
+  scaled by the ratio of prices and `XAG_OUTCOME_V1` is gold's distances scaled the
+  same way (decisions 142, 143). Both are arithmetic, not research, and its fixture
+  is a second random walk rather than a second market.

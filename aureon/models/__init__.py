@@ -6,6 +6,25 @@ result alongside the change, so the documented contract and the code cannot drif
 apart -- and so the Vue types generated from it in Phase 8 stay truthful.
 """
 
+from aureon.models.alerts import (
+    ALERT_SIDES,
+    DEFAULT_ALERT_TTL_HOURS,
+    MAX_ARMED_ALERTS_PER_USER,
+    Notification,
+    PriceAlert,
+)
+from aureon.models.assessment import (
+    MIN_COHORT,
+    WIDENING_ORDER,
+    Assessment,
+    CohortFilter,
+    Estimate,
+    HorizonConfirmation,
+    PairedOutcome,
+    ThresholdConfirmation,
+    TradeNote,
+    TrendRead,
+)
 from aureon.models.audit import AuditRecord
 from aureon.models.base import (
     SCHEMA_VERSION,
@@ -32,6 +51,8 @@ from aureon.models.detection import (
 from aureon.models.enums import (
     CONTROL_REQUEST_TRANSITIONS,
     HORIZON_TRANSITIONS,
+    PRICE_ALERT_TRANSITIONS,
+    TERMINAL_ALERT_STATUSES,
     TERMINAL_REQUEST_STATUSES,
     TRADE_REQUEST_TRANSITIONS,
     TRADE_TRANSITIONS,
@@ -48,8 +69,11 @@ from aureon.models.enums import (
     HorizonStatus,
     LinkType,
     MarketState,
+    NotificationKind,
+    NotificationStatus,
     OrderType,
     PathClassification,
+    PriceAlertStatus,
     ReferencePrice,
     SessionName,
     ThresholdUnit,
@@ -58,8 +82,10 @@ from aureon.models.enums import (
     TradeSource,
     TradeStatus,
     TransitionError,
+    TrendBias,
     assert_control_request_transition,
     assert_horizon_transition,
+    assert_price_alert_transition,
     assert_trade_request_transition,
     assert_trade_transition,
     assert_transition,
@@ -81,8 +107,19 @@ from aureon.models.identity import (
     detection_id_components,
     evaluation_doc_id,
     execution_attempt_id,
+    new_alert_id,
 )
 from aureon.models.market import Candle, QuoteSnapshot, SymbolInfo
+from aureon.models.profile import (
+    MAX_PROFILE_BINS,
+    PROFILE_SCOPES,
+    VOLATILITY_REGIMES,
+    ProfileBin,
+    ProfileSummary,
+    VolatilityContext,
+    VolumeProfile,
+    VolumeProfileRef,
+)
 from aureon.models.review import (
     DailyReview,
     HorizonOutcome,
@@ -98,7 +135,13 @@ from aureon.models.session import (
     TRENDS,
     SessionSummary,
 )
-from aureon.models.settings import ExecutionSettings
+from aureon.models.settings import (
+    DEFAULT_NOTIFIED_AGENTS,
+    ExecutionSettings,
+    NotificationSettings,
+    ResolvedLimits,
+    SymbolLimits,
+)
 from aureon.models.system import (
     DEFAULT_OFFLINE_AFTER_SECONDS,
     DEFAULT_STALE_AFTER_SECONDS,
@@ -131,6 +174,10 @@ DOCUMENT_MODELS: tuple[type[AureonDocument], ...] = (
     SessionSummary,
     DailyReview,
     WeeklyReview,
+    PriceAlert,
+    Notification,
+    Assessment,
+    TradeNote,
 )
 
 __all__ = [
@@ -141,6 +188,21 @@ __all__ = [
     "UtcDatetime",
     "to_utc",
     "utc_now",
+    "ALERT_SIDES",
+    "DEFAULT_ALERT_TTL_HOURS",
+    "MAX_ARMED_ALERTS_PER_USER",
+    "Notification",
+    "PriceAlert",
+    "MIN_COHORT",
+    "WIDENING_ORDER",
+    "Assessment",
+    "CohortFilter",
+    "Estimate",
+    "HorizonConfirmation",
+    "PairedOutcome",
+    "ThresholdConfirmation",
+    "TradeNote",
+    "TrendRead",
     "AuditRecord",
     "AccountInfo",
     "BrokerDeal",
@@ -169,7 +231,14 @@ __all__ = [
     "HorizonStatus",
     "LinkType",
     "MarketState",
+    "NotificationKind",
+    "NotificationStatus",
     "OrderType",
+    "PriceAlertStatus",
+    "TrendBias",
+    "PRICE_ALERT_TRANSITIONS",
+    "TERMINAL_ALERT_STATUSES",
+    "assert_price_alert_transition",
     "PathClassification",
     "ReferencePrice",
     "ThresholdUnit",
@@ -198,9 +267,18 @@ __all__ = [
     "detection_id_components",
     "evaluation_doc_id",
     "execution_attempt_id",
+    "new_alert_id",
     "Candle",
     "QuoteSnapshot",
     "SymbolInfo",
+    "MAX_PROFILE_BINS",
+    "PROFILE_SCOPES",
+    "VOLATILITY_REGIMES",
+    "ProfileBin",
+    "ProfileSummary",
+    "VolatilityContext",
+    "VolumeProfile",
+    "VolumeProfileRef",
     "DailyReview",
     "HorizonOutcome",
     "InferredLink",
@@ -213,6 +291,10 @@ __all__ = [
     "TREND_DOWN",
     "TREND_FLAT",
     "ExecutionSettings",
+    "NotificationSettings",
+    "DEFAULT_NOTIFIED_AGENTS",
+    "ResolvedLimits",
+    "SymbolLimits",
     "DEFAULT_OFFLINE_AFTER_SECONDS",
     "DEFAULT_STALE_AFTER_SECONDS",
     "Heartbeat",

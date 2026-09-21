@@ -25,10 +25,14 @@ test run and production and could never be checked in.
 | `aureon_beast_control_requests` | `control_id` | `ControlRequest` |
 | `aureon_beast_audit_logs` | `audit_id` | `AuditRecord` |
 | `aureon_beast_heartbeats` | `{service}` | `Heartbeat` |
-| `aureon_beast_system_state` | `current` | `SystemState` |
+| `aureon_beast_system_state` | `{symbol}_{timeframe}` | `SystemState` |
 | `aureon_beast_settings` | `execution` | `ExecutionSettings` |
 | `aureon_beast_daily_reviews` | `{market_date}` | `DailyReview` |
 | `aureon_beast_weekly_reviews` | `{iso_year}-W{iso_week}` | `WeeklyReview` |
+| `aureon_beast_alerts` | `alert_id` | `PriceAlert` |
+| `aureon_beast_notifications` | `{kind}__{ref_id}` | `Notification` |
+| `aureon_beast_assessments` | `assessment_id` | `Assessment` |
+| `aureon_beast_trade_notes` | `note_id` | `TradeNote` |
 
 Tick data is never stored in Firestore. There is no `pending_orders`
 collection (decision 9): a pending order *is* the `PENDING` trade request.
@@ -61,6 +65,8 @@ An immutable observation. Never an instruction to trade.
 | `levels` | `dict[str, float]` | no | `dict()` | Numeric levels involved (swept level, broken level, ...). |
 | `sequence_today` | `int` | yes | — |  |
 | `sequence_session` | `int` | yes | — |  |
+| `volume_profile_ref` | `VolumeProfileRef \| null` | no | `None` | Asia's value area and nodes as they stood at this close (9B). |
+| `volatility` | `VolatilityContext \| null` | no | `None` | ATR and session range vs median at this close (9B). |
 
 ### DetectionEvaluation
 
@@ -238,6 +244,7 @@ Execution gates and limits (§56, §84).
 | `status_stale_after_seconds` | `float` | no | `45.0` |  |
 | `executor_lease_seconds` | `float` | no | `60.0` |  |
 | `allowed_symbols` | `tuple[str]` | no | `()` | Empty means no symbol allowlist is enforced. |
+| `per_symbol` | `dict[str, SymbolLimits]` | no | `dict()` |  |
 | `settings_version` | `int` | no | `0` |  |
 | `updated_at` | `AwareDatetime \| null` | no | `None` |  |
 | `updated_by` | `str \| null` | no | `None` |  |
@@ -281,6 +288,7 @@ One broker trading day (§61).
 | `market_tz` | `str` | yes | — |  |
 | `generated_at` | `AwareDatetime \| null` | no | `None` |  |
 | `evaluation_rule_id` | `str` | yes | — | Which frozen rule produced the counts (§84). |
+| `symbol` | `str \| null` | no | `None` |  |
 | `detections_total` | `int` | no | `0` |  |
 | `detections_by_agent` | `dict[str, int]` | no | `dict()` |  |
 | `detections_by_session` | `dict[SessionName, int]` | no | `dict()` |  |
@@ -294,6 +302,15 @@ One broker trading day (§61).
 | `explicit_links` | `int` | no | `0` |  |
 | `inferred_links` | `tuple[InferredLink]` | no | `()` |  |
 | `notes` | `str \| null` | no | `None` |  |
+| `assessments_total` | `int` | no | `0` |  |
+| `assessments_hit` | `int` | no | `0` |  |
+| `assessments_miss` | `int` | no | `0` |  |
+| `assessments_neither` | `int` | no | `0` |  |
+| `assessments_unresolved` | `int` | no | `0` |  |
+| `assessments_not_scored` | `int` | no | `0` |  |
+| `assessment_hit_by_cohort` | `dict[str, str]` | no | `dict()` |  |
+| `trade_notes` | `dict[str, tuple[str]]` | no | `dict()` |  |
+| `trades_by_tag` | `dict[str, tuple[str]]` | no | `dict()` |  |
 | `market_date` | `str` | yes | — | Broker-local date, YYYY-MM-DD. |
 | `sessions_covered` | `tuple[SessionName]` | no | `()` |  |
 
@@ -309,6 +326,7 @@ One trading week, generated after Friday's close (§63).
 | `market_tz` | `str` | yes | — |  |
 | `generated_at` | `AwareDatetime \| null` | no | `None` |  |
 | `evaluation_rule_id` | `str` | yes | — | Which frozen rule produced the counts (§84). |
+| `symbol` | `str \| null` | no | `None` |  |
 | `detections_total` | `int` | no | `0` |  |
 | `detections_by_agent` | `dict[str, int]` | no | `dict()` |  |
 | `detections_by_session` | `dict[SessionName, int]` | no | `dict()` |  |
@@ -322,9 +340,90 @@ One trading week, generated after Friday's close (§63).
 | `explicit_links` | `int` | no | `0` |  |
 | `inferred_links` | `tuple[InferredLink]` | no | `()` |  |
 | `notes` | `str \| null` | no | `None` |  |
+| `assessments_total` | `int` | no | `0` |  |
+| `assessments_hit` | `int` | no | `0` |  |
+| `assessments_miss` | `int` | no | `0` |  |
+| `assessments_neither` | `int` | no | `0` |  |
+| `assessments_unresolved` | `int` | no | `0` |  |
+| `assessments_not_scored` | `int` | no | `0` |  |
+| `assessment_hit_by_cohort` | `dict[str, str]` | no | `dict()` |  |
+| `trade_notes` | `dict[str, tuple[str]]` | no | `dict()` |  |
+| `trades_by_tag` | `dict[str, tuple[str]]` | no | `dict()` |  |
 | `iso_year` | `int` | yes | — |  |
 | `iso_week` | `int` | yes | — |  |
 | `daily_review_ids` | `tuple[str]` | no | `()` |  |
+
+### PriceAlert
+
+A level a human asked to be told about (9C, §71).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
+| `alert_id` | `str` | yes | — |  |
+| `symbol` | `str` | yes | — |  |
+| `level` | `float` | yes | — |  |
+| `side` | `str` | yes | — | One of ('above', 'below'). |
+| `requested_by` | `str` | yes | — | Discord user id -- the only recipient. |
+| `note` | `str \| null` | no | `None` | The human's own words, echoed back when it fires. |
+| `status` | `PriceAlertStatus` | no | `'armed'` |  |
+| `created_at` | `AwareDatetime \| null` | no | `None` |  |
+| `expires_at` | `AwareDatetime \| null` | no | `None` |  |
+| `fired_at` | `AwareDatetime \| null` | no | `None` |  |
+| `fired_price` | `float \| null` | no | `None` |  |
+| `fired_snapshot` | `dict[str, object]` | no | `dict()` | What the market looked like when it crossed, frozen by the observer. Rendered by Discord as-is; never recomputed (9C). |
+| `cancelled_by` | `str \| null` | no | `None` |  |
+
+### Notification
+
+One thing Discord said, so it cannot say it twice (9C).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
+| `notification_id` | `str` | yes | — | {kind}__{ref_id}; see paths.notification_id. |
+| `kind` | `NotificationKind` | yes | — |  |
+| `symbol` | `str` | yes | — |  |
+| `ref_id` | `str` | yes | — | detection_id or alert_id -- what this is about. |
+| `channel_id` | `str` | yes | — |  |
+| `sent_at` | `AwareDatetime \| null` | no | `None` |  |
+| `status` | `NotificationStatus` | no | `'sent'` |  |
+| `failure_message` | `str \| null` | no | `None` |  |
+
+### Assessment
+
+One measured readout for one detection (§62-§64, 9D).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
+| `assessment_id` | `str` | yes | — |  |
+| `detection_id` | `str` | yes | — |  |
+| `symbol` | `str` | yes | — |  |
+| `rule_id` | `str` | yes | — |  |
+| `trend_read` | `TrendRead` | yes | — |  |
+| `cohort_filter` | `CohortFilter` | yes | — |  |
+| `n` | `int` | no | `0` |  |
+| `confirmations` | `tuple[HorizonConfirmation]` | no | `()` |  |
+| `tp_estimates` | `tuple[Estimate]` | no | `()` |  |
+| `sl_estimates` | `tuple[Estimate]` | no | `()` |  |
+| `paired` | `PairedOutcome \| null` | no | `None` |  |
+| `insufficient` | `bool` | no | `False` |  |
+| `disagrees_with_detection` | `bool` | no | `False` |  |
+| `created_at` | `AwareDatetime \| null` | no | `None` |  |
+
+### TradeNote
+
+A human sentence about one trade, kept out of the trade (§45, 9D).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
+| `note_id` | `str` | yes | — |  |
+| `trade_id` | `str` | yes | — |  |
+| `author` | `str` | yes | — |  |
+| `text` | `str` | yes | — |  |
+| `at` | `AwareDatetime \| null` | no | `None` |  |
 
 ---
 
@@ -672,6 +771,9 @@ Per symbol/timeframe observation state (§59).
 | `ema_distance` | `float \| null` | no | `None` | fast - slow, in price. Sign is the current bias. |
 | `rsi` | `float \| null` | no | `None` |  |
 | `rsi_zone` | `str \| null` | no | `None` | overbought \| oversold \| neutral, derived from rsi. |
+| `volume_profile` | `dict[str, ProfileSummary]` | no | `dict()` | current_session \| asia \| day -> that scope's summary (9B). |
+| `volatility` | `VolatilityContext \| null` | no | `None` | ATR(14) and the session range vs its median (9B). |
+| `trend_read` | `TrendRead \| null` | no | `None` | What the last N closed candles did, as facts and a summary (9D). |
 | `session` | `SessionName \| null` | no | `None` |  |
 | `session_trend` | `str \| null` | no | `None` |  |
 | `session_high` | `float \| null` | no | `None` |  |
@@ -681,6 +783,186 @@ Per symbol/timeframe observation state (§59).
 | `last_sweep` | `dict[str, object] \| null` | no | `None` | {direction, level_type, at} |
 | `last_wick` | `dict[str, object] \| null` | no | `None` | {classification, at} |
 | `last_breakout` | `dict[str, object] \| null` | no | `None` | {direction, level_type, at} |
+
+### SymbolLimits
+
+Per-symbol overrides of the execution limits (9A).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `max_lot` | `float \| null` | no | `None` |  |
+| `max_spread_points` | `float \| null` | no | `None` |  |
+| `max_deviation_points` | `int \| null` | no | `None` |  |
+
+### ResolvedLimits
+
+The limits that actually apply to one symbol, with no ``None`` left.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `symbol` | `str` | yes | — |  |
+| `max_lot` | `float` | yes | — |  |
+| `max_spread_points` | `float` | yes | — |  |
+| `max_deviation_points` | `int` | yes | — |  |
+| `overridden` | `tuple[str]` | no | `()` |  |
+
+### NotificationSettings
+
+What Discord announces, held at ``settings/notifications`` (9C).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
+| `enabled_kinds` | `tuple[str]` | no | `('ema_cross', 'wick', 'liquidity', 'breakout')` | agent_name values Discord posts an embed for (9C). |
+| `detections_enabled` | `bool` | no | `True` |  |
+| `updated_at` | `AwareDatetime \| null` | no | `None` |  |
+| `updated_by` | `str \| null` | no | `None` |  |
+
+### ProfileBin
+
+One price bin and the volume estimated to have traded in it.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `price` | `float` | yes | — | The bin's LOWER edge, in price. |
+| `volume` | `float` | yes | — | Estimated tick volume in this bin. |
+
+### ProfileSummary
+
+A profile without its bins, for ``SystemState`` and ``/status`` (9B).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `scope` | `str` | yes | — |  |
+| `poc_price` | `float \| null` | no | `None` |  |
+| `value_area_high` | `float \| null` | no | `None` |  |
+| `value_area_low` | `float \| null` | no | `None` |  |
+| `hvn` | `tuple[float]` | no | `()` |  |
+| `lvn` | `tuple[float]` | no | `()` |  |
+| `total_volume` | `float` | no | `0.0` |  |
+
+### VolumeProfile
+
+Estimated volume by price over one scope (9B, §19).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `symbol` | `str` | yes | — |  |
+| `timeframe` | `Timeframe` | yes | — |  |
+| `scope` | `str` | yes | — | One of ('asia', 'london', 'new_york', 'day', 'rolling_24h', 'previous_session'). |
+| `start_utc` | `AwareDatetime` | yes | — |  |
+| `end_utc` | `AwareDatetime` | yes | — |  |
+| `bin_points` | `float` | yes | — | Bin width in POINTS. Part of the record because the POC depends on it. |
+| `poc_price` | `float \| null` | no | `None` | Lower edge of the highest-volume bin, or None if empty. |
+| `value_area_high` | `float \| null` | no | `None` |  |
+| `value_area_low` | `float \| null` | no | `None` | The band around the POC holding 70% of estimated volume (§19). |
+| `hvn` | `tuple[float]` | no | `()` |  |
+| `lvn` | `tuple[float]` | no | `()` |  |
+| `total_volume` | `float` | no | `0.0` |  |
+| `bins` | `tuple[ProfileBin]` | no | `()` | At most 200, coarsest-first. |
+
+### VolumeProfileRef
+
+What a detection records about the profile that existed when it fired (9B).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `scope` | `str` | yes | — |  |
+| `poc_price` | `float \| null` | no | `None` |  |
+| `va_high` | `float \| null` | no | `None` |  |
+| `va_low` | `float \| null` | no | `None` |  |
+| `price_vs_va` | `str \| null` | no | `None` | above \| inside \| below, at the detection's price. |
+| `nearest_lvn` | `float \| null` | no | `None` |  |
+| `nearest_hvn` | `float \| null` | no | `None` |  |
+
+### VolatilityContext
+
+How big this candle, and this session, are by recent standards (9B).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `atr_14` | `float \| null` | no | `None` | ATR(14) in PRICE. |
+| `atr_points` | `float \| null` | no | `None` | The same, in points. |
+| `candle_range_pct_of_atr` | `float \| null` | no | `None` | This candle's range as a fraction of ATR(14). |
+| `session_range` | `float \| null` | no | `None` | High-low of the session so far, in price. |
+| `session_range_vs_median` | `float \| null` | no | `None` | That range over the 20-day median for this session. |
+| `regime` | `str \| null` | no | `None` | One of ('low', 'normal', 'high'). |
+| `bands_version` | `int \| null` | no | `None` | Which regime bands produced `regime` (9B). |
+
+### TrendRead
+
+What the last N closed candles did, as facts rather than as a verdict (9D).
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `bias` | `TrendBias` | yes | — |  |
+| `evidence` | `tuple[str]` | no | `()` |  |
+| `candles` | `int` | no | `0` | How many closed candles were read. |
+| `as_of` | `AwareDatetime \| null` | no | `None` |  |
+
+### CohortFilter
+
+Which prior detections this assessment counted, and what it had to give up.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `symbol` | `str` | yes | — |  |
+| `agent_name` | `str` | yes | — |  |
+| `direction` | `Direction` | yes | — |  |
+| `session` | `SessionName \| null` | no | `None` |  |
+| `trend_aligned` | `bool \| null` | no | `None` |  |
+| `volatility_regime` | `str \| null` | no | `None` |  |
+| `price_vs_va` | `str \| null` | no | `None` |  |
+| `wick_tag` | `str \| null` | no | `None` |  |
+| `dropped` | `tuple[str]` | no | `()` |  |
+
+### ThresholdConfirmation
+
+How often the cohort reached one threshold, with n and its interval.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `threshold` | `float` | yes | — |  |
+| `reached` | `int` | no | `0` |  |
+| `evaluated` | `int` | no | `0` |  |
+| `ci_low` | `float \| null` | no | `None` |  |
+| `ci_high` | `float \| null` | no | `None` |  |
+| `median_seconds_to_first` | `float \| null` | no | `None` |  |
+
+### HorizonConfirmation
+
+One horizon's confirmation table for the cohort.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `horizon_id` | `str` | yes | — |  |
+| `evaluated` | `int` | no | `0` |  |
+| `thresholds` | `tuple[ThresholdConfirmation]` | no | `()` |  |
+| `mae_first` | `int` | no | `0` |  |
+| `path_ambiguous` | `int` | no | `0` |  |
+
+### Estimate
+
+One quantile of the cohort's measured excursion, in points and in price.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `quantile` | `float` | yes | — |  |
+| `points` | `float` | yes | — |  |
+| `price` | `float \| null` | no | `None` | The points applied to this detection's reference price. |
+
+### PairedOutcome
+
+How often the cohort reached +T before -S, for the symbol's configured pair.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `favourable` | `float` | yes | — |  |
+| `adverse` | `float` | yes | — |  |
+| `favourable_first` | `int` | no | `0` |  |
+| `evaluated` | `int` | no | `0` |  |
+| `ci_low` | `float \| null` | no | `None` |  |
+| `ci_high` | `float \| null` | no | `None` |  |
 
 ---
 
@@ -912,6 +1194,16 @@ Whether adversity or the target came first (§23).
 | `MFE_FIRST` | `mfe_first` |
 | `MAE_FIRST` | `mae_first` |
 | `NONE` | `none` |
+
+### TrendBias
+
+What the last N closed candles did, summarised (9D).
+
+| member | value |
+|---|---|
+| `BULLISH` | `bullish` |
+| `BEARISH` | `bearish` |
+| `SIDEWAYS` | `sideways` |
 
 ### ExcursionSource
 

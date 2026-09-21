@@ -47,7 +47,7 @@ class SessionTrendAgent(BaseAgent):
     """Summarises each completed session (§18)."""
 
     agent_name = "session_trend"
-    agent_version = "1.0.0"
+    agent_version = "1.1.0"  # 9B
 
     def __init__(
         self,

@@ -23,12 +23,27 @@ reset on restart, every crash test would trivially pass.
 * ``duplicate_result``   -- the broker reports success twice.
 * ``partial_fill``       -- only part of the volume fills.
 * ``delay_result``       -- the result arrives after the lease would have expired.
+
+## More than one symbol (9A)
+
+By default this broker knows one instrument: ``symbol_info`` answers with the same spec
+whatever symbol is asked for, relabelled, and ``quote`` answers with the same bid and ask.
+That is fine for a single-symbol test and **actively misleading** for a multi-symbol one --
+silver would be handed gold's tick and gold's price, and every points figure derived from it
+would be wrong by a factor of ten while looking entirely plausible (the same failure decision
+149 found in the data provider).
+
+So pass ``symbols=`` (and usually ``prices=``) to describe each instrument. When a symbols map
+is given, a symbol that is not in it **raises**, exactly as a terminal does for a symbol that
+is not in Market Watch: a test that reaches for an instrument it did not set up should fail
+loudly rather than be served gold.
 """
 
 from __future__ import annotations
 
 import itertools
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -93,8 +108,19 @@ class FakeBroker(BrokerInterface):
         ask: float = 2400.30,
         balance: float = 100_000.0,
         margin_free: float = 100_000.0,
+        symbols: Mapping[str, SymbolInfo] | None = None,
+        prices: Mapping[str, tuple[float, float]] | None = None,
     ) -> None:
         self._info = symbol_info or DEFAULT_SYMBOL_INFO
+        #: Per-symbol specs (9A). Empty means "one instrument", the pre-9A behaviour.
+        self._infos: dict[str, SymbolInfo] = {
+            name.upper(): info for name, info in (symbols or {}).items()
+        }
+        #: Per-symbol (bid, ask). A symbol in ``symbols`` but not here uses ``bid``/``ask``,
+        #: which is almost never what a second instrument wants -- hence the pairing above.
+        self._prices: dict[str, tuple[float, float]] = {
+            name.upper(): pair for name, pair in (prices or {}).items()
+        }
         self.bid = bid
         self.ask = ask
         self.balance = balance
@@ -125,14 +151,19 @@ class FakeBroker(BrokerInterface):
         with self._lock:
             return self._behaviours.pop(0) if self._behaviours else Behaviour()
 
-    def set_quote(self, *, bid: float, ask: float) -> None:
-        self.bid, self.ask = bid, ask
+    def set_quote(self, *, bid: float, ask: float, symbol: str | None = None) -> None:
+        """Move a book. Without ``symbol`` this moves the single-instrument book (9A)."""
+        if symbol is None:
+            self.bid, self.ask = bid, ask
+            return
+        self._prices[symbol.upper()] = (bid, ask)
 
-    def set_spread_points(self, points: float) -> None:
+    def set_spread_points(self, points: float, *, symbol: str | None = None) -> None:
         """Widen the spread around the mid, for the spread guard (§41)."""
-        mid = (self.bid + self.ask) / 2
-        half = points * self._info.point / 2
-        self.bid, self.ask = mid - half, mid + half
+        bid, ask = self._book(symbol) if symbol else (self.bid, self.ask)
+        mid = (bid + ask) / 2
+        half = points * self._spec(symbol or self._info.symbol).point / 2
+        self.set_quote(bid=mid - half, ask=mid + half, symbol=symbol)
 
     # ── Account and symbol ────────────────────────────────────────────────────
 
@@ -148,12 +179,28 @@ class FakeBroker(BrokerInterface):
 
     def symbol_info(self, symbol: str) -> SymbolInfo:
         self.calls.append("symbol_info")
-        return self._info.model_copy(update={"symbol": symbol})
+        return self._spec(symbol)
+
+    def _spec(self, symbol: str) -> SymbolInfo:
+        """This symbol's spec. Raises when a configured broker does not know it (9A)."""
+        if not self._infos:
+            return self._info.model_copy(update={"symbol": symbol})
+        info = self._infos.get(symbol.upper())
+        if info is None:
+            raise BrokerError(
+                f"{symbol} is not in this broker's symbols "
+                f"({', '.join(sorted(self._infos))})"
+            )
+        return info
+
+    def _book(self, symbol: str) -> tuple[float, float]:
+        return self._prices.get(symbol.upper(), (self.bid, self.ask))
 
     def quote(self, symbol: str) -> QuoteSnapshot:
         self.calls.append("quote")
+        bid, ask = self._book(symbol)
         return QuoteSnapshot(
-            symbol=symbol, bid=self.bid, ask=self.ask, point=self._info.point
+            symbol=symbol, bid=bid, ask=ask, point=self._spec(symbol).point
         )
 
     # ── Sending ───────────────────────────────────────────────────────────────
@@ -189,8 +236,12 @@ class FakeBroker(BrokerInterface):
         with self._lock:
             ticket = next(self._tickets)
             filled = behaviour.partial_fill_volume or request.volume
+            # This symbol's book (9A). A market fill priced from a global bid/ask would
+            # open a silver position at gold's price, and every excursion, P&L and
+            # evaluation derived from it would then be measuring nothing.
+            book_bid, book_ask = self._book(request.symbol)
             price = request.price if kind == "pending" else (
-                self.ask if request.direction is Direction.BUY else self.bid
+                book_ask if request.direction is Direction.BUY else book_bid
             )
 
             if kind == "pending":
@@ -329,7 +380,8 @@ class FakeBroker(BrokerInterface):
                     message=f"position {position_id} is not open",
                 )
             closing = min(volume or position.volume, position.volume)
-            exit_price = self.bid if position.direction is Direction.BUY else self.ask
+            book_bid, book_ask = self._book(position.symbol)
+            exit_price = book_bid if position.direction is Direction.BUY else book_ask
             remaining = round(position.volume - closing, 8)
             if remaining <= 0:
                 del self._positions[position_id]
@@ -453,10 +505,10 @@ class FakeBroker(BrokerInterface):
             if entry.comment == comment and entry.kind in {"market", "pending"}
         ]
 
-    def advance_quote(self, points: float) -> None:
-        shift = points * self._info.point
-        self.bid += shift
-        self.ask += shift
+    def advance_quote(self, points: float, *, symbol: str | None = None) -> None:
+        shift = points * self._spec(symbol or self._info.symbol).point
+        bid, ask = self._book(symbol) if symbol else (self.bid, self.ask)
+        self.set_quote(bid=bid + shift, ask=ask + shift, symbol=symbol)
 
     def age_deals(self, seconds: float) -> None:
         """Shift every deal back in time, to test reconciliation windows."""

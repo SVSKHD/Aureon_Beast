@@ -24,33 +24,58 @@ class ReviewReader:
     def __init__(self, client: Any) -> None:
         self._client = client
 
-    def get_daily(self, market_date: str) -> DailyReview | None:
-        snapshot = self._client.document(paths.daily_review_path(market_date)).get()
+    def get_daily(self, market_date: str, symbol: str | None = None) -> DailyReview | None:
+        snapshot = self._client.document(
+            paths.daily_review_path(market_date, symbol)
+        ).get()
         if not getattr(snapshot, "exists", False):
             return None
         return DailyReview.model_validate(snapshot.to_dict())
 
-    def get_weekly(self, iso_year: int, iso_week: int) -> WeeklyReview | None:
+    def get_weekly(
+        self, iso_year: int, iso_week: int, symbol: str | None = None
+    ) -> WeeklyReview | None:
         snapshot = self._client.document(
-            paths.weekly_review_path(iso_year, iso_week)
+            paths.weekly_review_path(iso_year, iso_week, symbol)
         ).get()
         if not getattr(snapshot, "exists", False):
             return None
         return WeeklyReview.model_validate(snapshot.to_dict())
 
-    def latest_weekly(self) -> WeeklyReview | None:
+    def latest_weekly(self, symbol: str | None = None) -> WeeklyReview | None:
         """The most recent weekly review, or ``None``.
 
         Weekly ids sort chronologically as strings (``2026-W03``, decision 26), so taking
-        the maximum id is both correct and index-free.
+        the maximum id is both correct and index-free. With a ``symbol`` the candidates are
+        narrowed to that symbol's reviews first -- otherwise the maximum id would be
+        whichever symbol happens to sort last, which is not an answer to any question.
         """
-        return self._latest(paths.WEEKLY_REVIEWS, WeeklyReview)
+        return self._latest(paths.WEEKLY_REVIEWS, WeeklyReview, symbol)
 
-    def latest_daily(self) -> DailyReview | None:
-        return self._latest(paths.DAILY_REVIEWS, DailyReview)
+    def latest_daily(self, symbol: str | None = None) -> DailyReview | None:
+        return self._latest(paths.DAILY_REVIEWS, DailyReview, symbol)
 
-    def _latest(self, collection: str, model: type) -> Any | None:
+    def latest_for(self, symbol: str | None = None) -> Any | None:
+        """The weekly review if there is one, else the daily -- for one symbol (§61-§63).
+
+        The preference is the same one ``/status`` has always had: on a weekend the most
+        recent daily covers Friday alone, while the weekly is the wider picture.
+        """
+        return self.latest_weekly(symbol) or self.latest_daily(symbol)
+
+    def _latest(
+        self, collection: str, model: type, symbol: str | None = None
+    ) -> Any | None:
         docs = list(self._client.collection(collection).stream())
+        if symbol is not None:
+            wanted = symbol.upper()
+            docs = [
+                doc
+                for doc in docs
+                # The stored field, not the id: an id is a naming convention and the field
+                # is the document's own statement about what it measured.
+                if str((doc.to_dict() or {}).get("symbol") or "").upper() == wanted
+            ]
         if not docs:
             return None
         return model.model_validate(max(docs, key=lambda doc: doc.id).to_dict())

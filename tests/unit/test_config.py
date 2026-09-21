@@ -6,6 +6,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
+from pydantic import ValidationError
 
 from aureon.config import AureonConfig
 from aureon.config.sessions import (
@@ -44,7 +45,15 @@ def test_an_empty_allowlist_authorises_nobody() -> None:
 
 
 def test_csv_env_vars_tolerate_whitespace() -> None:
-    config = AureonConfig.from_env(env={"AUREON_SYMBOLS": "XAUUSD, EURUSD ,"})
+    # Two symbols, so AUREON_EVAL_RULES has to name both (9A). Unrelated to the
+    # whitespace this test is about, and included so the parsing is what fails if it
+    # ever regresses.
+    config = AureonConfig.from_env(
+        env={
+            "AUREON_SYMBOLS": "XAUUSD, EURUSD ,",
+            "AUREON_EVAL_RULES": "XAUUSD:XAU_OUTCOME_V2,EURUSD:XAU_OUTCOME_V2",
+        }
+    )
     assert config.symbols == ("XAUUSD", "EURUSD")
 
 
@@ -160,3 +169,64 @@ def test_session_config_version_is_stamped_and_positive() -> None:
     """Detections carry this so a later boundary change cannot reinterpret
     old data (decision 7)."""
     assert SESSION_CONFIG_VERSION >= 1
+
+
+# ── Per-symbol evaluation rules (9A) ──────────────────────────────────────────
+
+
+def test_a_single_symbol_still_needs_only_one_rule_setting() -> None:
+    """Every existing deployment is this shape, and must keep working unchanged."""
+    config = AureonConfig(symbols=("XAUUSD",), evaluation_rule_id="XAU_OUTCOME_V2")
+    assert config.rule_id_for("XAUUSD") == "XAU_OUTCOME_V2"
+    assert config.rule_id_for("xauusd") == "XAU_OUTCOME_V2", "case-insensitive"
+
+
+def test_two_symbols_must_each_name_their_rule() -> None:
+    """One rule cannot serve two instruments priced two orders of magnitude apart.
+
+    XAU_OUTCOME_V2 measures $3-$20; on silver at ~$30 that is 10-65% of price, so every
+    horizon would read "not reached" and the reached-N table would be a wall of zeros
+    that looks like a finding about silver and is a unit error.
+    """
+    with pytest.raises(ValidationError, match="AUREON_EVAL_RULES must name every"):
+        AureonConfig(symbols=("XAUUSD", "XAGUSD"))
+
+    with pytest.raises(ValidationError, match="missing XAGUSD"):
+        AureonConfig(
+            symbols=("XAUUSD", "XAGUSD"),
+            evaluation_rules={"XAUUSD": "XAU_OUTCOME_V2"},
+        )
+
+
+def test_each_symbol_resolves_to_its_own_rule() -> None:
+    config = AureonConfig(
+        symbols=("XAUUSD", "XAGUSD"),
+        evaluation_rules={"XAUUSD": "XAU_OUTCOME_V2", "XAGUSD": "XAG_OUTCOME_V1"},
+    )
+    assert config.rule_id_for("XAUUSD") == "XAU_OUTCOME_V2"
+    assert config.rule_id_for("XAGUSD") == "XAG_OUTCOME_V1"
+
+
+def test_the_rules_map_is_read_from_the_environment() -> None:
+    config = AureonConfig.from_env(
+        env={
+            "AUREON_SYMBOLS": "XAUUSD,XAGUSD",
+            "AUREON_EVAL_RULES": "XAUUSD:XAU_OUTCOME_V2, xagusd:XAG_OUTCOME_V1",
+            "AUREON_COLLECTION_PREFIX": "aureon_test",
+        }
+    )
+    assert config.symbols == ("XAUUSD", "XAGUSD")
+    assert config.rule_id_for("XAGUSD") == "XAG_OUTCOME_V1"
+
+
+def test_a_malformed_rules_entry_raises_rather_than_being_skipped() -> None:
+    """A dropped pair leaves its symbol looking unconfigured, and the refusal that
+    follows names the wrong thing."""
+    with pytest.raises(ValueError, match="is not SYMBOL:VALUE"):
+        AureonConfig.from_env(
+            env={
+                "AUREON_SYMBOLS": "XAUUSD,XAGUSD",
+                "AUREON_EVAL_RULES": "XAUUSD:XAU_OUTCOME_V2,XAGUSD",
+                "AUREON_COLLECTION_PREFIX": "aureon_test",
+            }
+        )

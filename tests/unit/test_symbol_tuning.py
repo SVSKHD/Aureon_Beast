@@ -161,18 +161,30 @@ def test_xagusd_carries_scaled_distances() -> None:
     """A placeholder of a placeholder, derived by arithmetic from gold's unresearched
     numbers -- pinned here so the derivation can be argued with rather than guessed at.
 
-    Gold's 5 points of penetration is $0.05, ~0.17% of a ~$30 daily range. The same
-    fraction of silver's ~$0.60 range is $0.001, which at a 0.001 tick is ONE point. That
-    result is the finding, not a comfort: a one-tick penetration is inside the spread on
-    most silver feeds.
+    Each distance is the same FRACTION OF PRICE as gold's, in silver's own tick. Gold's 5
+    points of penetration is $0.05 against ~$2400 (2.08e-5 of price); the same fraction of
+    ~$30 is $0.000625, which at a 0.001 tick is 0.625 of ONE TICK. Not representable, so
+    it is clamped to 1 -- and the clamp is the finding: gold's placeholders are finer than
+    one silver tick, so silver's smallest possible penetration is already ~1.6x larger in
+    relative terms.
     """
     tuning = tuning_for("XAGUSD")
     assert tuning.point == 0.001
-    assert tuning.min_penetration_points == 1.0
-    assert tuning.min_close_beyond_points == 2.0
-    assert tuning.min_range_points == 4.0
-    assert tuning.flat_points == 10.0
+    assert tuning.min_penetration_points == 1.0  # 0.625 clamped to one tick
+    assert tuning.min_close_beyond_points == 1.25
+    assert tuning.min_range_points == 2.5
+    assert tuning.flat_points == 6.25
     assert tuning.is_default is False
+
+
+def test_the_clamped_penetration_is_coarser_than_golds_in_relative_terms() -> None:
+    """Stated as arithmetic rather than as prose, because it is the one number in this
+    entry that is NOT the derivation's answer."""
+    gold, silver = tuning_for("XAUUSD"), tuning_for("XAGUSD")
+    gold_fraction = gold.min_penetration_points * gold.point / 2400.0
+    silver_fraction = silver.min_penetration_points * silver.point / 30.0
+    assert silver_fraction > gold_fraction
+    assert 1.5 < silver_fraction / gold_fraction < 1.7
 
 
 def test_the_dimensionless_ratios_are_not_scaled() -> None:
@@ -232,12 +244,25 @@ def test_the_observer_refuses_to_build_a_roster_for_an_unreviewed_symbol() -> No
 
 
 def test_every_configured_symbol_is_checked_not_just_the_first() -> None:
-    """Finding out about the third symbol three hours in is finding out too late."""
+    """Finding out about the third symbol three hours in is finding out too late.
+
+    The config's own evaluation-rule gate (9A) fires earlier and would mask this one, so
+    the rules are supplied here: this test is about the TUNING check, and the two gates
+    are deliberately independent.
+    """
     from aureon.config import AureonConfig
     from main_observer import default_agents
 
+    config = AureonConfig(
+        symbols=("XAUUSD", "XAGUSD", "GBPUSD"),
+        evaluation_rules={
+            "XAUUSD": "XAU_OUTCOME_V2",
+            "XAGUSD": "XAG_OUTCOME_V1",
+            "GBPUSD": "XAU_OUTCOME_V2",
+        },
+    )
     with pytest.raises(UnknownSymbolTuning, match="GBPUSD"):
-        default_agents(AureonConfig(symbols=("XAUUSD", "XAGUSD", "GBPUSD")))
+        default_agents(config)
 
 
 def test_the_roster_runs_silver_on_silvers_numbers() -> None:
@@ -248,9 +273,9 @@ def test_the_roster_runs_silver_on_silvers_numbers() -> None:
     snapshots = {a.agent_name: a.params_snapshot() for a in default_agents(config)}
 
     assert snapshots["liquidity"]["min_penetration_points"] == 1.0
-    assert snapshots["breakout"]["min_close_beyond_points"] == 2.0
-    assert snapshots["wick"]["min_range_points"] == 4.0
-    assert snapshots["session_trend"]["flat_points"] == 10.0
+    assert snapshots["breakout"]["min_close_beyond_points"] == 1.25
+    assert snapshots["wick"]["min_range_points"] == 2.5
+    assert snapshots["session_trend"]["flat_points"] == 6.25
     for name in ("liquidity", "breakout", "wick", "session_trend"):
         assert snapshots[name]["point"] == 0.001
     # And the dimensionless ones are gold's, unchanged.

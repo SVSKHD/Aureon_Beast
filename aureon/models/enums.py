@@ -260,6 +260,38 @@ class ControlRequestStatus(StrEnum):
     FAILED_STALE = "failed_stale"
 
 
+class PriceAlertStatus(StrEnum):
+    """Lifecycle of a ``/remind price`` alert (9C).
+
+    ``FIRED`` is terminal on purpose: an alert answers "tell me when price reaches X" once.
+    Re-arming is a new alert, so the record of what was asked for, and when it was answered,
+    stays a single immutable fact rather than a counter nobody can reconstruct.
+    """
+
+    ARMED = "armed"
+    FIRED = "fired"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+class NotificationStatus(StrEnum):
+    """Whether a notification reached Discord (9C).
+
+    ``FAILED`` is recorded rather than retried. The document exists to make the send
+    **exactly once**, and a retry loop over a channel that is rejecting messages would
+    either duplicate the post or hide the outage; an operator reading `/status` should see
+    the failure instead.
+    """
+
+    SENT = "sent"
+    FAILED = "failed"
+
+
+class NotificationKind(StrEnum):
+    DETECTION = "detection"
+    ALERT = "alert"
+
+
 # ── Evaluation (§21-§23) ──────────────────────────────────────────────────────
 
 
@@ -309,6 +341,19 @@ class ReferencePrice(StrEnum):
 
     CLOSE = "close"
     NEXT_OPEN = "next_open"
+
+
+class TrendBias(StrEnum):
+    """What the last N closed candles did, summarised (9D).
+
+    ``SIDEWAYS`` is a real answer, not a fallback for "unsure": a window whose evidence
+    points both ways is a market that is not trending, and a readout that rounded it to the
+    nearer of bullish/bearish would be inventing a direction out of a tie.
+    """
+
+    BULLISH = "bullish"
+    BEARISH = "bearish"
+    SIDEWAYS = "sideways"
 
 
 class PathClassification(StrEnum):
@@ -473,6 +518,22 @@ CONTROL_REQUEST_TRANSITIONS: Mapping[ControlRequestStatus, frozenset[ControlRequ
 }
 
 
+PRICE_ALERT_TRANSITIONS: Mapping[PriceAlertStatus, frozenset[PriceAlertStatus]] = {
+    # An armed alert can be answered, withdrawn, or time out. Nothing leaves the other
+    # three: an alert that has fired is a fact about a moment, not a switch.
+    PriceAlertStatus.ARMED: frozenset(
+        {
+            PriceAlertStatus.FIRED,
+            PriceAlertStatus.CANCELLED,
+            PriceAlertStatus.EXPIRED,
+        }
+    ),
+    PriceAlertStatus.FIRED: frozenset(),
+    PriceAlertStatus.CANCELLED: frozenset(),
+    PriceAlertStatus.EXPIRED: frozenset(),
+}
+
+
 def assert_transition(
     current: object,
     new: object,
@@ -527,6 +588,13 @@ def assert_control_request_transition(
     assert_transition(current, new, CONTROL_REQUEST_TRANSITIONS, label="control_request")
 
 
+def assert_price_alert_transition(
+    current: PriceAlertStatus, new: PriceAlertStatus
+) -> None:
+    """Gate a ``/remind`` alert's status change (9C)."""
+    assert_transition(current, new, PRICE_ALERT_TRANSITIONS, label="price_alert")
+
+
 def is_terminal(status: object, allowed: Mapping) -> bool:
     """Whether ``status`` has no outgoing edges."""
     return not allowed.get(status, frozenset())
@@ -544,4 +612,8 @@ TERMINAL_TRADE_STATUSES: frozenset[TradeStatus] = frozenset(
 
 TERMINAL_CONTROL_STATUSES: frozenset[ControlRequestStatus] = frozenset(
     s for s in ControlRequestStatus if is_terminal(s, CONTROL_REQUEST_TRANSITIONS)
+)
+
+TERMINAL_ALERT_STATUSES: frozenset[PriceAlertStatus] = frozenset(
+    s for s in PriceAlertStatus if is_terminal(s, PRICE_ALERT_TRANSITIONS)
 )

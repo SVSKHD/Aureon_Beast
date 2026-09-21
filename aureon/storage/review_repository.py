@@ -24,12 +24,14 @@ class ReviewRepository:
     # ── Daily ─────────────────────────────────────────────────────────────────
 
     def upsert_daily(self, review: DailyReview) -> str:
-        path = paths.daily_review_path(review.market_date)
+        path = paths.daily_review_path(review.market_date, review.symbol)
         self._client.document(path).set(review.model_dump(mode="json"))
         return path
 
-    def get_daily(self, market_date: str) -> DailyReview | None:
-        snapshot = self._client.document(paths.daily_review_path(market_date)).get()
+    def get_daily(self, market_date: str, symbol: str | None = None) -> DailyReview | None:
+        snapshot = self._client.document(
+            paths.daily_review_path(market_date, symbol)
+        ).get()
         if not getattr(snapshot, "exists", False):
             return None
         return DailyReview.model_validate(snapshot.to_dict())
@@ -37,13 +39,15 @@ class ReviewRepository:
     # ── Weekly ────────────────────────────────────────────────────────────────
 
     def upsert_weekly(self, review: WeeklyReview) -> str:
-        path = paths.weekly_review_path(review.iso_year, review.iso_week)
+        path = paths.weekly_review_path(review.iso_year, review.iso_week, review.symbol)
         self._client.document(path).set(review.model_dump(mode="json"))
         return path
 
-    def get_weekly(self, iso_year: int, iso_week: int) -> WeeklyReview | None:
+    def get_weekly(
+        self, iso_year: int, iso_week: int, symbol: str | None = None
+    ) -> WeeklyReview | None:
         snapshot = self._client.document(
-            paths.weekly_review_path(iso_year, iso_week)
+            paths.weekly_review_path(iso_year, iso_week, symbol)
         ).get()
         if not getattr(snapshot, "exists", False):
             return None
@@ -55,8 +59,8 @@ class ReviewRepository:
     # (see that module). Delegating rather than duplicating keeps one implementation of
     # "which review is the latest".
 
-    def latest_weekly(self) -> WeeklyReview | None:
-        return ReviewReader(self._client).latest_weekly()
+    def latest_weekly(self, symbol: str | None = None) -> WeeklyReview | None:
+        return ReviewReader(self._client).latest_weekly(symbol)
 
-    def latest_daily(self) -> DailyReview | None:
-        return ReviewReader(self._client).latest_daily()
+    def latest_daily(self, symbol: str | None = None) -> DailyReview | None:
+        return ReviewReader(self._client).latest_daily(symbol)

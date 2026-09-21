@@ -15,7 +15,8 @@ and `scripts/compare_live_vs_replay.py` replays exactly those and diffs the resu
     # ... the session ...
     python scripts/session_verify.py 2026-09-16
 
-Those two bracket the session and write `docs/evidence/session_{market_date}.md`, which is
+Those two bracket the session and write `docs/evidence/session_{market_date}_{symbol}.md`,
+which is
 what gets committed as the evidence for the Phase 2 gate. The rest of this document is
 what the two scripts cannot do for you: decide whether the numbers they print are the ones
 you meant, and read a failure.
@@ -129,7 +130,7 @@ evidence needs to be re-readable a month later.
 
 - [ ] **Exit code 0** with no `FAIL` row is the pass. A `SKIP` is not a pass: it means that
       check did not run, and the summary line says how many did not.
-- [ ] Commit `docs/evidence/session_<market-date>.md`.
+- [ ] Commit `docs/evidence/session_<market-date>_<symbol>.md` (one file per symbol).
 - [ ] **Re-run the verification the next day.** Evaluation horizons that were `PENDING` at
       the close resolve overnight, so the outcome table gets more complete. Re-running is
       safe and never touches the half written before the open.
@@ -153,7 +154,7 @@ terminal by hand before concluding anything about the engine.
 ## Recording the result
 
 `scripts/session_run.py` and `scripts/session_verify.py` write it: one generated,
-committed file at `docs/evidence/session_{market_date}.md`, carrying the market date,
+committed file at `docs/evidence/session_{market_date}_{symbol}.md`, carrying the market date,
 symbol and timeframe, the terminal build and broker server, the collection prefix, the
 commit **and whether the tree was dirty**, the preflight table, the comparison's full
 output and the day's outcomes.

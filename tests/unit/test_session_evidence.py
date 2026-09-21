@@ -504,3 +504,68 @@ def test_a_session_with_no_archive_verifies_nothing_and_says_so(tmp_path) -> Non
     assert report.get("archive").status is Status.FAIL
     assert report.get("live_vs_replay").status is Status.SKIP
     assert "checks not run" in report.summary()
+
+
+# ── 9A: the verifier asks about the symbol it was given ───────────────────────
+
+
+def two_symbol_config() -> AureonConfig:
+    return AureonConfig(
+        symbols=("XAUUSD", "XAGUSD"),
+        evaluation_rules={"XAUUSD": "XAU_OUTCOME_V2", "XAGUSD": "XAG_OUTCOME_V1"},
+    )
+
+
+def test_the_verifier_evaluates_against_the_symbols_own_rule(tmp_path) -> None:
+    """9A. Looking up gold's rule for a silver session finds nothing at all.
+
+    The verdict would then read "0 evaluated under XAU_OUTCOME_V2" — which looks like a
+    broken evaluator rather than a verifier asking the wrong question.
+    """
+    silver = SessionVerifier(
+        two_symbol_config(),
+        market_date=MARKET_DATE,
+        symbol="XAGUSD",
+        timeframe=Timeframe.M5,
+        archive_dir=tmp_path / "archive",
+        outbox_path=tmp_path / "outbox.db",
+        client_factory=InMemoryFirestore,
+        now=lambda: NOW,
+    )
+    gold = SessionVerifier(
+        two_symbol_config(),
+        market_date=MARKET_DATE,
+        symbol="XAUUSD",
+        timeframe=Timeframe.M5,
+        archive_dir=tmp_path / "archive",
+        outbox_path=tmp_path / "outbox.db",
+        client_factory=InMemoryFirestore,
+        now=lambda: NOW,
+    )
+    assert silver._rule_id() == "XAG_OUTCOME_V1"  # noqa: SLF001
+    assert gold._rule_id() == "XAU_OUTCOME_V2"  # noqa: SLF001
+
+
+def test_the_verifier_measures_in_the_symbols_own_tick(tmp_path) -> None:
+    """The same $-distance is a different number of points on each instrument."""
+    silver = SessionVerifier(
+        two_symbol_config(),
+        market_date=MARKET_DATE,
+        symbol="XAGUSD",
+        timeframe=Timeframe.M5,
+        archive_dir=tmp_path / "archive",
+        outbox_path=tmp_path / "outbox.db",
+        client_factory=InMemoryFirestore,
+        now=lambda: NOW,
+    )
+    assert silver._point() == 0.001  # noqa: SLF001
+    assert verifier(tmp_path)._point() == 0.01  # noqa: SLF001
+
+
+def test_preflight_names_the_symbols_rule_on_its_config_line() -> None:
+    """The operator reads this line to check they are about to run what they think."""
+    from aureon.services.preflight import Preflight
+
+    silver = Preflight(two_symbol_config(), symbol="XAGUSD", skip_mt5=True)
+    assert silver._rule_id() == "XAG_OUTCOME_V1"  # noqa: SLF001
+    assert "XAG_OUTCOME_V1" in silver.check_config().detail

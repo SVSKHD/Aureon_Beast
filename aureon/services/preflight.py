@@ -146,6 +146,20 @@ class Preflight:
 
     # ── Local ─────────────────────────────────────────────────────────────────
 
+    def _rule_id(self) -> str:
+        """THIS symbol's outcome rule (9A).
+
+        Printed on the config line, so a two-symbol deployment's preflight for silver says
+        `XAG_OUTCOME_V1` rather than whichever rule the environment's single-symbol setting
+        happens to name.
+        """
+        try:
+            return self.config.rule_id_for(self.symbol)
+        except KeyError:
+            # The config validator refuses this, but preflight exists to report a broken
+            # configuration rather than to crash on one.
+            return f"none configured for {self.symbol}"
+
     def check_config(self) -> CheckResult:
         """The identity and clock this session will be recorded under.
 
@@ -163,7 +177,7 @@ class Preflight:
             f"tf={','.join(t.value for t in self.config.timeframes)} "
             f"ema={self.config.ema_fast}/{self.config.ema_slow} "
             f"tz={self.config.market_tz} (UTC{hours:+.0f} now) "
-            f"rule={self.config.evaluation_rule_id}"
+            f"rule={self._rule_id()}"
         )
         if self.symbol not in self.config.symbols:
             return CheckResult(

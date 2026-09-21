@@ -66,7 +66,7 @@ defaults to false, and a fresh deploy therefore cannot trade until a human turns
     python scripts/session_run.py        # preflight again, then the observer
     # ... the session ...
     python scripts/session_verify.py 2026-09-16
-    git add docs/evidence/session_2026-09-16.md && git commit
+    git add docs/evidence/session_2026-09-16_XAUUSD.md && git commit
 
 `session_run.py` **refuses to start on a preflight FAIL**. `--force` overrides it and
 records in the evidence file that it did. Do not get into the habit.
@@ -190,17 +190,139 @@ different tick and daily range — so an unreviewed symbol would produce detecti
 like sweeps and are noise, with nothing downstream able to tell. Add an entry. An **empty**
 entry is a valid answer: it means the defaults were reviewed and kept.
 
+## Reviews are per symbol
+
+    python main_review.py daily
+    python main_review.py weekly --with-dailies
+    python main_review.py daily --symbol XAGUSD
+
+Without `--symbol` every configured symbol is generated, each with **its own** frozen rule,
+into its own document (`daily_reviews/{date}_{symbol}`). One combined review would state a
+single `evaluation_rule_id` over numbers produced by two rules, and add horizon counts
+measured against thresholds in two instruments' money.
+
+A symbol failing does not stop the others: a missing silver review is not a reason to have no
+gold review. The exit code is non-zero if any symbol failed.
+
+**After upgrading to per-symbol reviews**, regenerate the periods you care about. Reviews
+generated before the split carry no symbol, so `/status symbol:` will not show them — and
+regenerating is safe by design: a review is a pure function of the data it aggregates, and
+re-running one overwrites the same document.
+
 ## The Discord commands
 
 | command | what it does |
 |---|---|
-| `/status` | the live panels on an open market, the completed review on a closed one |
-| `/execute-trade` | opens the confirmation wizard. Nothing is sent until a human confirms, and only the requester may confirm |
-| `/cancel-order` | cancels a resting pending order |
-| `/close-trade` | closes an open position |
+| `/status [symbol]` | the live panels on an open market, the completed review on a closed one. `symbol:` narrows every number — panels, open trades, pending requests — to one instrument, read from that symbol's own state document. Each panel ends with the §19 block: the POC and value area for the current session and for Asia, the HVN and LVN nearest price, and ATR14 with its volatility regime (9B) |
+| `/execute symbol side lot [detection]` | the market-order shortcut. One embed, one CONFIRM. The lot is typed — there is no default — and the filling mode is named on the screen rather than left to the broker |
+| `/execute-trade` | opens the confirmation wizard (order type, stops, execution mode). Nothing is sent until a human confirms, and only the requester may confirm |
+| `/close symbol:` | closes the one open position on that symbol. Two open positions on it, or none, and it says what it found and stops — Aureon does not choose which of your trades to end |
+| `/cancel-order ticket [symbol]` | cancels a resting pending order. Naming the symbol refuses unless the ticket really is that symbol, at Aureon's records **and** at the broker |
+| `/close-trade position_id [volume] [symbol]` | closes an open position, with the same cross-check when a symbol is named |
+| `/remind price symbol: level: side: [note]` | arms a one-shot price alert. Aureon tells **you** once when a quote it already reads crosses the level; it expires in 24 hours, 20 armed per person. A level already behind the market is refused with the current price, because it would fire on the next quote |
+| `/remind list` | your alerts, armed ones first with their remaining time |
+| `/remind cancel id:` | disarms one of your own alerts |
+| `/monitor symbol: [detection:]` | what the **measured record** says about a detection: the observer's published trend read with its evidence, the cohort of prior detections that matched it and what had to be dropped to reach thirty, how often each threshold was reached with n and a 95% interval, and target/adverse quantiles of measured excursions. Below thirty prior detections it says "insufficient history (n=…)" and shows **no percentage at all**. Nothing here is a forecast and nothing prefills an order |
+| `/note trade:<id\|last> text:` | your own words about a trade, stored **beside** it so a CLOSED trade stays untouched (§45). `#tags` group the week in the weekly review. Nothing automated ever reads a note |
 | `/trading status` | is trading enabled, and who last changed it |
 | `/trading enable` | requires a confirmation, and lists what to check first |
 | `/trading disable` | immediate, audited, effective on the next request |
+
+## The channel announces; it never decides
+
+Set `AUREON_ALERT_CHANNEL_ID` and the bot posts each enabled detection there, once, with
+`[Monitor]` and `[Execute]` under it. Leave it unset and it announces **nothing** and says
+so in the log on startup — the alternative is a bot that picks a channel it can see and
+posts market calls into it.
+
+- **What is announced** is decided by `settings/notifications`: `detections_enabled`, and
+  `enabled_kinds` (the agent names). Read fresh on every sweep, so silencing a noisy agent
+  takes effect on the next detection rather than the next deploy. The defaults are the four
+  an eye watching a chart would notice — `ema_cross`, `liquidity`, `breakout` and
+  `wick` — and turning detections off keeps the list, so turning them back on restores what
+  you had.
+- **A fired `/remind` alert goes to you directly**, not to the channel: an alert is one
+  person's question, and the channel is readable by more people than armed it.
+- **Once each.** The record is a document (`{prefix}_notifications`), written with a
+  `create` that Firestore refuses over an existing one — so a restart, a second bot, or two
+  overlapping sweeps produce one message. A post that **fails** is recorded as FAILED for
+  the operator and not retried: a retry over a channel that is rejecting messages either
+  double-posts or hides the outage.
+- **A bot that was down does not catch up.** Each sweep reads only the last
+  `AUREON_NOTIFY_WINDOW_SECONDS` (default 120), so an hour of downtime produces a gap
+  rather than an hour of stale detections arriving at once. The gap is visible; the stale
+  flood reads as live.
+- **`[Execute]` is a shortcut through the typing, not through the authorisation.** It opens
+  a modal asking for the lot — no default, no "same as last time" — and the typed lot then
+  goes through the same confirmation, the same quote check and the same CONFIRM as
+  `/execute`. The symbol and side are prefilled because they are what the embed is about;
+  a detection with no direction has the button removed rather than defaulting to buy.
+- **Every embed is the same neutral colour** and carries `research only · not a
+  recommendation`. A green buy and a red sell would read as approval, and the eye reaches
+  the colour before the words.
+
+If the channel goes quiet, check in this order: is `AUREON_ALERT_CHANNEL_ID` set (the log
+line on startup says); is the observer writing detections at all (`/status`); is the agent
+in `enabled_kinds`; and is there a FAILED row in `{prefix}_notifications` naming a
+permissions error.
+
+## Reading a `/monitor` screen
+
+Every number on it was measured. Nothing on it is a prediction, and the four things worth
+knowing before you act on one:
+
+- **The n and the interval are the number.** "Reached +$5 in 60%" from thirty-five prior
+  detections and from three hundred are the same four characters. The count and the 95%
+  interval are printed next to every rate for that reason; if the interval is wide, the
+  rate is not telling you much.
+- **The cohort may not be the question you asked.** It matches on symbol, agent, direction
+  and session always, and on volatility regime, value-area position and wick tag when there
+  is enough history. When there is not, it drops them one at a time — wick, then value area,
+  then regime — and the screen says `widened by dropping: …`. A cohort that dropped the
+  regime is answering "what followed this signal" rather than "what followed this signal in
+  a session this size".
+- **"Insufficient history" is the honest answer, not a failure.** Below thirty COMPLETE
+  evaluations it publishes no rate rather than a small one, because a rate from eleven
+  detections reads exactly like a rate from three hundred.
+- **The target and adverse figures are quantiles, not levels.** `p50 400pt (2404.00)` means
+  half of the matched prior detections got at least that far before the horizon ended. It is
+  a description of the past, not a target, and nothing in Aureon will ever put it on an
+  order: `/execute` still asks for the lot and still requires CONFIRM, and no SL or TP is
+  prefilled anywhere.
+
+If the bias reads `sideways` with the single evidence line "no trend read published", the
+observer is not writing state — check `/status`. Discord cannot compute the trend read
+itself; it holds no data provider at all.
+
+## The weekly review scores its own readouts
+
+From 9D the weekly review carries two things it did not before.
+
+**`assessment_hit_rate`** asks, of every `/monitor` readout produced that week, whether
+price reached the target quantile it published before the stop quantile it published. Four
+outcomes, and the split matters more than the rate:
+
+- **hit** — the target's distance was covered and the stop's was not;
+- **miss** — the stop's was and the target's was not;
+- **neither** — neither distance was covered inside the horizon. Counted against the rate,
+  because the question is "did the target come first" and the answer is no, but kept apart:
+  a target nobody got near is a different lesson from one price ran away from;
+- **unresolved** — both were covered, and candle data cannot say which came first. Excluded
+  from the rate entirely rather than guessed at.
+
+The rate is also broken out **per cohort**, because "it holds when the volatility regime
+matched" and "it holds in general" are different claims — a cohort that had to widen is the
+weaker one, and a single blended number would hide which is which. `assessments_not_scored`
+counts the readouts that published nothing because there was not enough history; that number
+should fall as the record grows.
+
+Nothing writes the outcome back onto the assessment. The assessment says what was believed
+and from what evidence; the review says how it turned out.
+
+**Your notes** are printed under each trade beside its outcome, and the week is grouped by
+the `#tags` you used. They are copied into the review document rather than linked, so a
+review read next year still says what you said at the time. No number in the review, and
+nothing in `/monitor`, ever reads one.
 
 ## What the tools refuse to do
 
@@ -225,7 +347,7 @@ Knowing this in advance is cheaper than fighting it at 02:00.
 |---|---|---|
 | `docs/CONTRACTS.md` | every stored model, generated from the code | `make contracts` |
 | `docs/PHASE2_BASELINE.md` | a replay of the committed **synthetic** fixture | `make baseline` |
-| `docs/evidence/session_*.md` | one real session, bracketed by two tools | `session_run.py` / `session_verify.py` |
+| `docs/evidence/session_*_{symbol}.md` | one real session of one symbol, bracketed by two tools | `session_run.py` / `session_verify.py` |
 | `docs/PHASES.md` Evidence column | derived from the files that exist | `make phases` |
 | `daily_reviews` / `weekly_reviews` | aggregation over stored detections and trades | `python main_review.py daily` / `weekly` |
 

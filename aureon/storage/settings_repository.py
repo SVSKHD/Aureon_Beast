@@ -18,7 +18,7 @@ from typing import Any
 
 from aureon.models.audit import AuditRecord
 from aureon.models.base import to_utc, utc_now
-from aureon.models.settings import ExecutionSettings
+from aureon.models.settings import ExecutionSettings, NotificationSettings
 from aureon.storage import paths
 
 log = logging.getLogger(__name__)
@@ -153,3 +153,34 @@ class ExecutionSettingsRepository:
             return updated
 
         return self._run(self._transaction(), txn)
+
+
+class NotificationSettingsRepository:
+    """``settings/notifications`` — which agents Discord announces (9C).
+
+    Its own class rather than a method on ``ExecutionSettingsRepository`` because the two
+    documents have different blast radii: one decides whether real money can move, the other
+    whether a message is posted. Holding them apart means a surface that only needs the
+    second cannot reach the first.
+    """
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def read_or_default(self) -> NotificationSettings:
+        """The stored settings, or the shipped defaults.
+
+        Defaults rather than silence on a missing document: a deployment that has never
+        written this document should still announce the four obvious agents, and an operator
+        who wants silence has `detections_enabled`.
+        """
+        snapshot = self._client.document(paths.notification_settings_path()).get()
+        if not getattr(snapshot, "exists", False):
+            return NotificationSettings()
+        return NotificationSettings.model_validate(snapshot.to_dict())
+
+    def write(self, settings: NotificationSettings) -> NotificationSettings:
+        self._client.document(paths.notification_settings_path()).set(
+            settings.model_dump(mode="json")
+        )
+        return settings

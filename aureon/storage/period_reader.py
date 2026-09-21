@@ -22,12 +22,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from aureon.models.assessment import Assessment, TradeNote
 from aureon.models.detection import Detection
 from aureon.models.evaluation import DetectionEvaluation
 from aureon.models.session import SessionSummary
 from aureon.models.trade import Trade
+from aureon.storage.assessment_repository import AssessmentRepository
 from aureon.storage.detection_repository import DetectionRepository
 from aureon.storage.evaluation_repository import EvaluationRepository
+from aureon.storage.note_repository import TradeNoteRepository
 from aureon.storage.session_repository import SessionRepository
 from aureon.storage.trade_repository import TradeRepository
 
@@ -42,6 +45,11 @@ class PeriodReader:
         self.__evaluations = EvaluationRepository(client)
         self.__trades = TradeRepository(client, account_scope=account_scope)
         self.__sessions = SessionRepository(client)
+        # 9D. Both READ-ONLY through this surface, like everything else here: a review
+        # describes a period, and one that could rewrite an assessment or a note would be
+        # able to make its own numbers agree with itself.
+        self.__assessments = AssessmentRepository(client)
+        self.__notes = TradeNoteRepository(client)
 
     def detections_in(self, start: datetime, end: datetime) -> list[Detection]:
         return self.__detections.in_period(start, end)
@@ -58,3 +66,11 @@ class PeriodReader:
 
     def sessions_in(self, start: datetime, end: datetime) -> list[SessionSummary]:
         return self.__sessions.in_period(start, end)
+
+    def assessments_in(self, start: datetime, end: datetime) -> list[Assessment]:
+        """`/monitor` readouts produced in the period, for scoring them (9D)."""
+        return self.__assessments.in_period(start, end)
+
+    def notes_for(self, trades: list[Trade]) -> dict[str, list[TradeNote]]:
+        """What the trader wrote about each of the period's trades (9D)."""
+        return self.__notes.for_trades([t.trade_id for t in trades])

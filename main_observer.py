@@ -40,12 +40,13 @@ from aureon.agents.session_trend_agent import SessionTrendAgent, summary_from_de
 from aureon.agents.wick_agent import WickAgent
 from aureon.config import AureonConfig
 from aureon.config.sessions import session_for
-from aureon.config.symbol_tuning import require_tuning
+from aureon.config.symbol_tuning import require_tuning, tuning_for
 from aureon.data.base_provider import BaseMarketDataProvider
 from aureon.data.live_candle_archive import LiveCandleArchive
 from aureon.engine.analysis_engine import AnalysisEngine
 from aureon.engine.levels import LevelTracker
 from aureon.engine.market_engine import MarketEngine
+from aureon.engine.symbol_engines import SymbolEngines
 from aureon.evaluation.outcome_tracker import OutcomeTracker
 from aureon.evaluation.rules import get_rule
 from aureon.models.detection import Detection
@@ -54,6 +55,7 @@ from aureon.models.market import Candle
 from aureon.models.system import SymbolState, SystemState
 from aureon.outbox.local_outbox import LocalOutbox
 from aureon.outbox.outbox_worker import OutboxWorker
+from aureon.services.alert_watcher import AlertWatcher, build_snapshot, minutes_since
 from aureon.services.heartbeat_service import HeartbeatService
 from aureon.services.market_snapshot import MarketSnapshot
 from aureon.services.market_state_service import MarketStateService
@@ -88,10 +90,11 @@ class Observer:
         session_repository: object | None = None,
         symbol_repository: object | None = None,
         evaluation_repository: object | None = None,
-        outcome_tracker: OutcomeTracker | None = None,
+        outcome_trackers: dict[str, OutcomeTracker] | None = None,
         heartbeat: HeartbeatService | None = None,
         candle_archive: LiveCandleArchive | None = None,
-        agents: list[BaseAgent] | None = None,
+        agents: list[BaseAgent] | dict[str, list[BaseAgent]] | None = None,
+        alert_repository: object | None = None,
     ) -> None:
         self.config = config
         self.provider = provider
@@ -105,22 +108,37 @@ class Observer:
         # it to read (decision 79).
         self.symbol_repository = symbol_repository
         self.evaluation_repository = evaluation_repository
-        # Decision 50: evaluation runs IN the observer process.
-        self.outcome_tracker = outcome_tracker
+        # Decision 50: evaluation runs IN the observer process. One tracker per symbol,
+        # because an outcome rule's thresholds are in the instrument's own money and its
+        # conversion to points needs that symbol's tick (decision 141).
+        self.outcome_trackers: dict[str, OutcomeTracker] = dict(outcome_trackers or {})
         self.heartbeat = heartbeat
+        # 9C: the observer answers price alerts because it is the process with quotes --
+        # Discord may not call the broker, and a second MT5 connection polling levels
+        # would double the terminal's load for no new information.
+        self.alerts = (
+            AlertWatcher(alert_repository) if alert_repository is not None else None
+        )
 
-        self.engine = AnalysisEngine(
-            agents or default_agents(config),
-            account_scope=config.account_scope,
-            market_tz=config.market_tz,
+        # One engine, one roster and one LevelTracker per symbol. See SymbolEngines for
+        # why a single shared engine cannot do this: it would keep the right history and
+        # the wrong thresholds.
+        self.engines = SymbolEngines(
+            {symbol: AnalysisEngine(
+                roster,
+                account_scope=config.account_scope,
+                market_tz=config.market_tz,
+            )
+                for symbol, roster in _rosters(config, agents).items()}
         )
         self.market_engine = MarketEngine(
             provider,
-            self.engine,
+            self.engines,
             symbols=config.symbols,
             timeframes=config.timeframes,
             on_detections=self._on_detections,
             on_candle_close=self._on_candle_close,
+            on_poll=self._check_alerts,
         )
         self._last_candles: dict[tuple[str, Timeframe], Candle] = {}
         # One snapshot per symbol/timeframe, fed by every detection and candle so
@@ -151,28 +169,35 @@ class Observer:
         self._track_outcomes(detections)
 
     def _track_outcomes(self, detections: list[Detection]) -> None:
-        """Begin evaluating new detections, and close any horizons they end (§22)."""
-        if self.outcome_tracker is None:
-            return
+        """Begin evaluating new detections, and close any horizons they end (§22).
+
+        Routed by the detection's own symbol: each symbol's tracker holds that symbol's
+        rule and tick, so handing gold's detection to silver's tracker would measure it
+        against $0.10 thresholds converted with the wrong point.
+        """
         try:
             for detection in detections:
+                tracker = self.outcome_trackers.get(detection.symbol)
+                if tracker is None:
+                    continue
                 # Notify BEFORE tracking: a reversing detection closes the
                 # opposite_cross horizon of earlier ones, and cannot close its own.
-                self._persist_evaluations(self.outcome_tracker.on_detection(detection))
-                started = self.outcome_tracker.track(detection)
+                self._persist_evaluations(tracker.on_detection(detection))
+                started = tracker.track(detection)
                 if started is not None:
                     self._persist_evaluations([started])
         except Exception:  # noqa: BLE001 - evaluation must never stop observation
             log.exception("outcome tracking failed for a detection batch")
 
     def _advance_evaluations(self, candle: Candle) -> None:
-        if self.outcome_tracker is None:
+        tracker = self.outcome_trackers.get(candle.symbol)
+        if tracker is None:
             return
         try:
-            self._persist_evaluations(self.outcome_tracker.on_closed_candle(candle))
+            self._persist_evaluations(tracker.on_closed_candle(candle))
             # Finished evaluations are dropped so a long-running observer does not
             # accumulate them; they are already persisted.
-            self.outcome_tracker.release_closed()
+            tracker.release_closed()
         except Exception:  # noqa: BLE001 - see above
             log.exception("advancing evaluations failed at %s", candle.open_time.utc)
 
@@ -245,7 +270,59 @@ class Observer:
         # Saved per candle, not per poll: a crash between two candles must not
         # re-process the earlier one.
         self.state.set_and_save(candle.symbol, candle.timeframe, candle.open_time.utc)
+        if self.alerts is not None:
+            # On the candle clock, so expiry runs on the same clock as everything else the
+            # observer records and needs no second scheduler (9C).
+            self.alerts.expire()
         self._write_system_state(force=True)
+
+    def _check_alerts(self) -> None:
+        """Answer every armed alert the current quotes have crossed (9C).
+
+        On the poll clock rather than the candle clock: "the first quote across the level"
+        is what a human asked about, and answering on candle close would tell them five
+        minutes later about a move that may already have reversed.
+
+        The snapshot is built here because this is the process that has the indicators --
+        the same fields ``/status`` renders, so a reminder and the panel cannot describe one
+        moment differently. Discord posts from the frozen copy (9C).
+        """
+        if self.alerts is None:
+            return
+        timeframe = self.config.timeframes[0]
+        for symbol in self.config.symbols:
+            armed = self.alerts.alerts.armed(symbol=symbol)
+            if not armed:
+                # The common case, and the cheap one: no quote is read for a symbol nobody
+                # is watching a level on.
+                continue
+            quote = self._latest_quote(symbol)
+            if quote is None:
+                continue
+            fired = self.alerts.check(
+                symbol,
+                quote,
+                snapshot=build_snapshot(
+                    quote=quote,
+                    state_fields=self._snapshot(symbol, timeframe).as_state(),
+                    **self._context_for_snapshot(symbol, timeframe),
+                ),
+            )
+            for alert in fired:
+                log.info(
+                    "alert %s answered at %s (level %s)",
+                    alert.alert_id,
+                    alert.price,
+                    alert.level,
+                )
+
+    def _context_for_snapshot(self, symbol: str, timeframe: Timeframe) -> dict[str, object]:
+        """9B's profile summaries and volatility, for a fired alert's snapshot."""
+        context = self._market_context(symbol, timeframe)
+        return {
+            "profiles": context.get("volume_profile") or None,
+            "volatility": context.get("volatility"),
+        }
 
     def _latest_quote(self, symbol: str):
         """The provider's current quote, or None if it cannot be read.
@@ -284,8 +361,12 @@ class Observer:
                         # Read from the engine rather than recounted here: the engine
                         # already resets them on the market clock, and a second tally
                         # would eventually disagree with the first.
-                        **self.engine.cross_counts(symbol, timeframe).as_state(),
+                        **self.engines.for_symbol(symbol)
+                        .cross_counts(symbol, timeframe)
+                        .as_state(),
                         **self._snapshot(symbol, timeframe).as_state(),
+                        **self._market_context(symbol, timeframe),
+                        trend_read=self._trend_read(symbol, timeframe),
                     )
                 )
         try:
@@ -294,6 +375,101 @@ class Observer:
             )
         except Exception:  # noqa: BLE001 - state reporting must not stop observation
             log.exception("system_state write failed")
+
+    def _trend_read(self, symbol: str, timeframe) -> object:
+        """What the last N closed candles did, computed HERE and published (9D).
+
+        The observer does it because the observer has the candles. Discord holds no data
+        provider at all -- a boundary test enforces that by inspecting ``BotContext``'s own
+        annotations -- so `/monitor` reads this field rather than deriving it, and the two
+        processes cannot come to different conclusions about the same window (decision 194).
+
+        The EMA endpoints are computed from the SAME candles and the SAME configured periods
+        the agents use. A second EMA over a different window would eventually disagree with
+        the one the detections were stamped with, and the disagreement would appear in a
+        readout about those very detections.
+        """
+        from aureon.services.assessment_service import DEFAULT_TREND_CANDLES, read_trend
+
+        tracker = self.engines.for_symbol(symbol).context_tracker(symbol, timeframe)
+        if tracker is None:
+            # No candle has closed yet. An absent read is honest; an empty one would render
+            # as a market that was measured and found to be going nowhere.
+            return None
+
+        candles = tracker.recent(DEFAULT_TREND_CANDLES)
+        if not candles:
+            return None
+
+        fields = self._snapshot(symbol, timeframe).as_state()
+        context = self._market_context(symbol, timeframe)
+        profiles = context.get("volume_profile") or {}
+        tuning = tuning_for(symbol)
+
+        try:
+            return read_trend(
+                candles,
+                ema_fast=fields.get("ema_fast"),
+                ema_slow=fields.get("ema_slow"),
+                ema_fast_earlier=self._ema_fast_at_start(candles),
+                session_trend=fields.get("session_trend"),
+                asia_profile=profiles.get("asia"),
+                volatility=context.get("volatility"),
+                minutes_since_opposite_cross=minutes_since(
+                    fields.get("last_cross_at"), self.provider.now_utc()
+                ),
+                point=tuning.point,
+                flat_points=tuning.flat_points,
+            )
+        except Exception:  # noqa: BLE001 - a trend read must never stop observation
+            log.exception("trend read failed for %s", symbol)
+            return None
+
+    def _ema_fast_at_start(self, candles) -> float | None:
+        """The fast EMA at the START of the window, for the slope.
+
+        Computed over the window with the configured fast period rather than stored,
+        because nothing keeps an EMA series: the snapshot holds the latest value only. The
+        first `fast_period` candles are warm-up, so a window shorter than that yields no
+        slope rather than one measured from a half-warmed average.
+        """
+        from aureon.engine.indicators import ema
+
+        period = self.config.ema_fast
+        if len(candles) <= period:
+            return None
+        try:
+            import pandas as pd
+
+            series = ema(pd.Series([c.close for c in candles], dtype="float64"), period)
+        except Exception:  # noqa: BLE001 - diagnostic, never critical
+            log.debug("could not compute the window's EMA", exc_info=True)
+            return None
+        value = series.iloc[period]
+        return None if pd.isna(value) else float(value)
+
+    def _market_context(self, symbol: str, timeframe) -> dict[str, object]:
+        """This symbol's profile summaries and volatility, for the state document (9B).
+
+        Read from the engine's tracker rather than recomputed here, for the same reason the
+        cross counts are: a second computation would eventually disagree with the one the
+        detections were stamped with, and the panel would then describe a market the stored
+        detections never saw.
+        """
+        from aureon.models.profile import ProfileSummary
+
+        tracker = self.engines.for_symbol(symbol).context_tracker(symbol, timeframe)
+        if tracker is None:
+            # No candle has closed for this symbol yet. An absent block is honest; an empty
+            # one would render as a profile that found nothing.
+            return {}
+        return {
+            "volume_profile": {
+                scope: ProfileSummary.of(profile)
+                for scope, profile in tracker.profiles().items()
+            },
+            "volatility": tracker.volatility(),
+        }
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -371,7 +547,7 @@ class Observer:
         how a genuinely short history (a brand-new symbol) terminates.
         """
         bar = timedelta(minutes=timeframe.minutes)
-        needed = self.engine.window_size
+        needed = self.engines.for_symbol(symbol).window_size
         span = bar * needed
         candles: list[Candle] = []
 
@@ -434,7 +610,7 @@ class Observer:
                 symbol,
                 timeframe.value,
                 cursor.isoformat(),
-                self.engine.window_size,
+                self.engines.for_symbol(symbol).window_size,
             )
             candles = self._reach_back(symbol, timeframe, cursor=cursor, now=now)
         if not candles:
@@ -446,8 +622,9 @@ class Observer:
 
         produced = 0
         warmed = 0
+        engine = self.engines.for_symbol(symbol)
         for candle in candles:
-            detections = self.engine.on_closed_candle(candle)
+            detections = engine.on_closed_candle(candle)
             is_warmup = cursor is not None and candle.open_time.utc <= cursor
             if is_warmup:
                 # Window rebuilt; these detections belong to the previous run. (Even
@@ -511,8 +688,37 @@ class Observer:
         self.provider.close()
 
 
+def _rosters(
+    config: AureonConfig, agents: list[BaseAgent] | dict[str, list[BaseAgent]] | None
+) -> dict[str, list[BaseAgent]]:
+    """One roster per configured symbol.
+
+    An explicit ``agents`` list is accepted only for a SINGLE-symbol process. Handing one
+    list to two engines would share the agent instances and their ``LevelTracker`` between
+    two instruments, which is the bug this whole split exists to prevent -- so it raises
+    rather than doing it quietly. A dict is the multi-symbol override.
+    """
+    if isinstance(agents, dict):
+        missing = [s for s in config.symbols if s not in agents]
+        if missing:
+            raise ValueError(f"no agent roster supplied for {', '.join(missing)}")
+        return {symbol: agents[symbol] for symbol in config.symbols}
+    if agents is not None:
+        if len(config.symbols) > 1:
+            raise ValueError(
+                "one agent roster cannot serve "
+                f"{len(config.symbols)} symbols: its thresholds and its LevelTracker "
+                "belong to one instrument. Pass {symbol: [agents]}."
+            )
+        return {config.symbols[0]: agents}
+    return {symbol: default_agents(config, symbol=symbol) for symbol in config.symbols}
+
+
 def default_agents(
-    config: AureonConfig, *, point: float | None = None
+    config: AureonConfig,
+    *,
+    symbol: str | None = None,
+    point: float | None = None,
 ) -> list[BaseAgent]:
     """The full Part A + Part B roster.
 
@@ -529,22 +735,27 @@ def default_agents(
     table's value rather than to gold's 0.01; a caller that has read ``symbol_info.point``
     from the broker passes it and it wins, because that is the tick the symbol actually
     has.
+
+    ``symbol`` says which symbol the roster is FOR, and defaults to the first configured
+    one. With two symbols each gets its own roster (9A): the thresholds are not
+    dimensionless, so a shared roster would measure silver with gold's numbers.
     """
     timeframe = config.timeframes[0]
+    wanted = symbol or config.symbols[0]
     levels = LevelTracker()
     # EVERY configured symbol, not just the one the roster is built for: the observer
     # watches them all, and finding out about the third one three hours in is finding
     # out too late.
-    for symbol in config.symbols:
-        require_tuning(symbol)
+    for configured in config.symbols:
+        require_tuning(configured)
     # Per-symbol, because the level and wick thresholds are NOT dimensionless:
     # min_penetration_points = 5 is $0.05 on gold and something else entirely on a
     # symbol with a different tick and a different daily range (D-15).
-    tuning = require_tuning(config.symbols[0], point=point)
+    tuning = require_tuning(wanted, point=point)
     if not tuning.is_default:
         log.info(
             "%s runs tuned agent parameters: %s",
-            config.symbols[0],
+            wanted,
             ", ".join(tuning.overridden),
         )
     return [
@@ -579,6 +790,7 @@ def default_agents(
 def build_observer(config: AureonConfig) -> Observer:
     """Assemble a live observer from configuration."""
     from aureon.data.mt5_provider import MT5DataProvider
+    from aureon.storage.alert_repository import PriceAlertRepository
     from aureon.storage.detection_repository import DetectionRepository
     from aureon.storage.evaluation_repository import EvaluationRepository
     from aureon.storage.firebase_service import get_client
@@ -619,11 +831,23 @@ def build_observer(config: AureonConfig) -> Observer:
         session_repository=SessionRepository(client),
         symbol_repository=SymbolRepository(client),
         evaluation_repository=EvaluationRepository(client),
-        outcome_tracker=OutcomeTracker(
-            get_rule(config.evaluation_rule_id), market_tz=config.market_tz
-        ),
+        outcome_trackers={
+            # Each symbol's own rule AND its own tick. The tick matters as much as the
+            # rule: XAG_OUTCOME_V1's $0.10 is 100 points at silver's 0.001 and would be
+            # 10 at gold's 0.01, so a shared point would measure silver's thresholds ten
+            # times too small (decision 138, again).
+            symbol: OutcomeTracker(
+                get_rule(config.rule_id_for(symbol)),
+                market_tz=config.market_tz,
+                point=require_tuning(symbol).point,
+            )
+            for symbol in config.symbols
+        },
         candle_archive=LiveCandleArchive(),
         heartbeat=HeartbeatService(heartbeat_repo, paths.SERVICE_OBSERVER),
+        # 9C: the observer answers the price alerts Discord armed, from the quotes it is
+        # already reading.
+        alert_repository=PriceAlertRepository(client),
     )
 
 

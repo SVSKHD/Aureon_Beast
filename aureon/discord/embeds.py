@@ -49,7 +49,11 @@ def confirmation_embed(screen: ConfirmationScreen) -> Any:
     should see that before reading a single field.
     """
     colour = COLOUR_WARN if screen.warnings else COLOUR_INFO
-    description = "\n".join(f"⚠️ {w}" for w in screen.warnings) or None
+    lines = [f"⚠️ {w}" for w in screen.warnings]
+    # Info lines come after the warnings and carry no icon: 9D's "last assessment" is
+    # context, and an order screen that decorated it would be nudging.
+    lines += list(getattr(screen, "info", []))
+    description = "\n".join(lines) or None
     embed = _embed(screen.title, colour=colour, description=description)
     for name, value in screen.fields:
         embed.add_field(name=name, value=value or "—", inline=True)
@@ -108,7 +112,12 @@ def status_embed(screen: StatusScreen) -> Any:
         Freshness.OFFLINE: COLOUR_BAD,
     }.get(screen.overall, COLOUR_INFO)
 
-    embed = _embed(f"{icon} Aureon — {screen.overall.value.upper()}", colour=colour)
+    # The scope is in the title, not a footnote: a reader who asked for one symbol must
+    # not mistake its panel for the whole deployment, and vice versa (9A).
+    scope = f" · {screen.symbol}" if screen.symbol else ""
+    embed = _embed(
+        f"{icon} Aureon{scope} — {screen.overall.value.upper()}", colour=colour
+    )
     embed.add_field(
         name="Services",
         value="\n".join(
@@ -148,3 +157,64 @@ def status_embed(screen: StatusScreen) -> Any:
 
 def notice_embed(title: str, message: str, *, bad: bool = False) -> Any:
     return _embed(title, colour=COLOUR_BAD if bad else COLOUR_INFO, description=message)
+
+
+def notification_embed(screen: Any) -> Any:
+    """A detection announcement (9C).
+
+    Deliberately the INFO colour whatever the direction. A green embed for a bullish cross
+    and a red one for a bearish one would read as approval and disapproval, which is a
+    recommendation drawn in colour — and the footer says the opposite in words.
+    """
+    embed = _embed(screen.title, colour=COLOUR_INFO)
+    for name, value in screen.fields:
+        embed.add_field(name=name, value=value or "—", inline=True)
+    embed.set_footer(text=screen.footer)
+    return embed
+
+
+def reminder_embed(screen: Any) -> Any:
+    """A fired price alert, rendered from its frozen snapshot (9C)."""
+    embed = _embed(
+        screen.title,
+        colour=COLOUR_INFO,
+        description=(f"> {screen.note}" if screen.note else None),
+    )
+    for name, value in screen.fields:
+        embed.add_field(name=name, value=value or "—", inline=True)
+    embed.set_footer(text=screen.footer)
+    return embed
+
+
+def monitor_embed(screen: Any) -> Any:
+    """A `/monitor` readout (9D).
+
+    Neutral in colour like 9C's, and for the same reason: a green embed over a bullish bias
+    would read as approval, and the eye reaches a colour before it reaches a confidence
+    interval. The one-line summary is the description rather than a field, because it is the
+    part that gets quoted and it should be the part that carries the n.
+    """
+    description = [screen.next_move]
+    if screen.disagreement:
+        description.append(f"⚠ {screen.disagreement}")
+    if screen.insufficient:
+        description.append(f"**{screen.insufficient}**")
+
+    embed = _embed(
+        f"{screen.title} — assessment",
+        colour=COLOUR_INFO,
+        description="\n\n".join(description),
+    )
+    embed.add_field(name="Bias", value=screen.bias, inline=True)
+    embed.add_field(
+        name="Cohort",
+        value=screen.cohort + (f"\n{screen.dropped}" if screen.dropped else ""),
+        inline=False,
+    )
+    # The evidence sits under the bias rather than in place of it: the summary is a vote
+    # over these facts, and a reader who disagrees with the vote can see what it counted.
+    embed.add_field(name="Evidence", value="\n".join(screen.evidence) or "—", inline=False)
+    for name, value in screen.fields:
+        embed.add_field(name=name, value=value or "—", inline=False)
+    embed.set_footer(text=screen.footer)
+    return embed

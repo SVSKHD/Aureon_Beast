@@ -43,7 +43,7 @@ class WickAgent(BaseAgent):
     """Classifies wick rejections (§16)."""
 
     agent_name = "wick"
-    agent_version = "1.0.0"
+    agent_version = "1.1.0"  # 9B
 
     def __init__(
         self,

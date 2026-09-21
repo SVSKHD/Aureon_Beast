@@ -175,8 +175,10 @@ def main(argv: list[str] | None = None) -> int:
     from main_observer import default_agents
 
     engine = AnalysisEngine(
-        # No point= : the tuning table's tick for this symbol, not gold's.
-        default_agents(config),
+        # This SYMBOL's roster, and no point= so the tuning table's tick for it is used
+        # rather than gold's. Replaying silver's archive through gold's roster would
+        # report every detection as a difference and blame the engine (9A).
+        default_agents(config, symbol=symbol),
         account_scope=config.account_scope,
         market_tz=config.market_tz,
     )

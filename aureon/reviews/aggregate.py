@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from aureon.evaluation.context_tags import CONTEXT_TAGS
+from aureon.models.assessment import Assessment, TradeNote
 from aureon.models.detection import Detection
 from aureon.models.enums import (
     ExecutionClassification,
@@ -59,6 +60,11 @@ class PeriodData:
     evaluations: dict[str, DetectionEvaluation] = field(default_factory=dict)
     trades: list[Trade] = field(default_factory=list)
     sessions: list[SessionSummary] = field(default_factory=list)
+    #: 9D. The readouts produced in this period, and what the trader wrote about its
+    #: trades. Both default empty, so a review of a period from before 9D builds exactly
+    #: as it did before rather than failing on a missing collection.
+    assessments: list[Assessment] = field(default_factory=list)
+    notes: dict[str, list[TradeNote]] = field(default_factory=dict)
 
     def sorted_detections(self) -> list[Detection]:
         return sorted(self.detections, key=lambda d: (d.detected_at.utc, d.detection_id))
@@ -232,6 +238,7 @@ def build_daily_review(
     period_end: datetime,
     market_tz: str,
     infer_window_minutes: int,
+    symbol: str | None = None,
     generated_at: datetime | None = None,
 ) -> DailyReview:
     """One broker trading day (§61)."""
@@ -247,6 +254,7 @@ def build_daily_review(
         market_tz=market_tz,
         generated_at=generated_at,
         evaluation_rule_id=rule.rule_id,
+        symbol=symbol,
         detections_total=totals.detections_total,
         detections_by_agent=totals.detections_by_agent,
         detections_by_session=totals.detections_by_session,
@@ -262,6 +270,8 @@ def build_daily_review(
         market_date=market_date,
         sessions_covered=sessions_covered,
         notes=_classification_note(totals),
+        **_assessment_fields(data),
+        **_note_fields(data),
     )
 
 
@@ -276,6 +286,7 @@ def build_weekly_review(
     market_tz: str,
     infer_window_minutes: int,
     daily_review_ids: tuple[str, ...] = (),
+    symbol: str | None = None,
     generated_at: datetime | None = None,
 ) -> WeeklyReview:
     """One trading week, generated after Friday's close (§63)."""
@@ -286,6 +297,7 @@ def build_weekly_review(
         period_start=period_start,
         period_end=period_end,
         market_tz=market_tz,
+        symbol=symbol,
         generated_at=generated_at,
         evaluation_rule_id=rule.rule_id,
         detections_total=totals.detections_total,
@@ -304,7 +316,58 @@ def build_weekly_review(
         iso_week=iso_week,
         daily_review_ids=tuple(sorted(daily_review_ids)),
         notes=_classification_note(totals),
+        **_assessment_fields(data),
+        **_note_fields(data),
     )
+
+
+def _assessment_fields(data: PeriodData) -> dict[str, object]:
+    """How the readouts published in this period fared (§63, 9D).
+
+    Counted onto the review rather than written back onto each assessment: a stored document
+    that later said something different from what it said when it was written is exactly the
+    failure §21 freezes evaluation rules to avoid (decision 195).
+    """
+    from aureon.reviews.assessment_scoring import score_assessments
+
+    scores = score_assessments(data.assessments, data.evaluations)
+    return {
+        "assessments_total": scores.total,
+        "assessments_hit": scores.hit,
+        "assessments_miss": scores.miss,
+        "assessments_neither": scores.neither,
+        "assessments_unresolved": scores.unresolved,
+        "assessments_not_scored": scores.not_scored,
+        "assessment_hit_by_cohort": {
+            key: f"{hit}/{resolved}" for key, (hit, resolved) in sorted(scores.by_cohort.items())
+        },
+    }
+
+
+def _note_fields(data: PeriodData) -> dict[str, object]:
+    """The trader's own words, and the groups they put trades into (9D).
+
+    Copied into the review rather than linked, so a document read next year still says what
+    they said at the time. Tags come from the sentence, so the grouping is the trader's
+    vocabulary rather than anything Aureon invented -- and nothing here feeds a number: the
+    notes sit beside the outcomes, they do not move them.
+    """
+    by_trade: dict[str, tuple[str, ...]] = {}
+    by_tag: dict[str, list[str]] = {}
+    for trade in data.sorted_trades():
+        found = data.notes.get(trade.trade_id) or []
+        if not found:
+            continue
+        by_trade[trade.trade_id] = tuple(note.text for note in found)
+        for note in found:
+            for tag in note.tags:
+                trades = by_tag.setdefault(tag, [])
+                if trade.trade_id not in trades:
+                    trades.append(trade.trade_id)
+    return {
+        "trade_notes": by_trade,
+        "trades_by_tag": {tag: tuple(ids) for tag, ids in sorted(by_tag.items())},
+    }
 
 
 def _classification_note(totals: Aggregates) -> str:

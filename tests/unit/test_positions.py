@@ -387,3 +387,103 @@ def test_release_returns_the_final_excursion_and_stops_tracking() -> None:
     assert final is not None and final.mfe == pytest.approx(100.0)
     assert tracker.tracked == 0
     assert tracker.current("t1") is None
+
+
+# ── 9A: excursions are measured in the position's own tick ────────────────────
+
+SILVER = "XAGUSD"
+TICKS = {"XAUUSD": 0.01, SILVER: 0.001}
+
+
+def silver_quote(bid: float, *, seconds: int = 0) -> QuoteSnapshot:
+    return QuoteSnapshot(
+        symbol=SILVER,
+        bid=bid,
+        ask=bid + 0.02,
+        point=0.001,
+        captured_at=T0 + timedelta(seconds=seconds),
+    )
+
+
+def silver_trade(**kwargs) -> Trade:
+    base = dict(
+        trade_id="s1",
+        mt5_position_id=POSITION + 1,
+        symbol=SILVER,
+        direction=Direction.BUY,
+        volume=0.10,
+        open_price=30.000,
+        open_time=MarketTime.from_utc(T0, TZ),
+    )
+    return Trade(**(base | kwargs))
+
+
+def test_each_symbol_is_measured_in_its_own_tick() -> None:
+    """9A. A tenfold error in a number nobody can sanity-check by eye.
+
+    The same $0.30 move is 30 points of gold and 300 of silver. One shared ``point`` would
+    report silver's excursion as 30 -- plausible, and wrong by the ratio of the two ticks.
+    """
+    tracker = ExcursionTracker(point=0.01, point_for=TICKS.get)
+    tracker.track(trade())
+    tracker.track(silver_trade())
+
+    tracker.on_quote("t1", quote(2400.30))
+    tracker.on_quote("s1", silver_quote(30.300))
+
+    assert tracker.current("t1").mfe == pytest.approx(30.0)
+    assert tracker.current("s1").mfe == pytest.approx(300.0)
+
+
+def test_the_old_single_tick_would_have_understated_silver_tenfold() -> None:
+    """The bug, stated as the difference it makes (9A).
+
+    Kept as a test rather than a comment because it is the whole reason the resolver exists:
+    with gold's tick the same silver move reads 30 instead of 300.
+    """
+    wrong = ExcursionTracker(point=0.01)
+    wrong.track(silver_trade())
+    wrong.on_quote("s1", silver_quote(30.300))
+    assert wrong.current("s1").mfe == pytest.approx(30.0)
+
+    right = ExcursionTracker(point=0.01, point_for=TICKS.get)
+    right.track(silver_trade())
+    right.on_quote("s1", silver_quote(30.300))
+    assert right.current("s1").mfe == pytest.approx(300.0)
+
+
+def test_a_symbol_with_no_tick_is_left_unmeasured_rather_than_measured_wrongly() -> None:
+    """An absent excursion is a gap in a diagnostic; a wrong one is a figure a review
+    reports as fact."""
+    tracker = ExcursionTracker(point=0.01, point_for=lambda _: None)
+    tracker.track(silver_trade())
+    assert tracker.tracked == 0
+    assert tracker.current("s1") is None
+    assert SILVER in tracker.untracked_symbols
+    # And the quote that follows is simply ignored, not folded in with the fallback.
+    assert tracker.on_quote("s1", silver_quote(30.300)) is None
+
+
+def test_tracking_starts_as_soon_as_the_tick_becomes_readable() -> None:
+    """``track`` runs on every poll, so a spec that was briefly unreadable resolves itself."""
+    ticks: dict[str, float] = {}
+    tracker = ExcursionTracker(point=0.01, point_for=ticks.get)
+    tracker.track(silver_trade())
+    assert tracker.tracked == 0
+
+    ticks[SILVER] = 0.001
+    tracker.track(silver_trade())
+    tracker.on_quote("s1", silver_quote(30.300))
+    assert tracker.current("s1").mfe == pytest.approx(300.0)
+    assert tracker.untracked_symbols == set()
+
+
+def test_a_resolver_that_raises_declines_rather_than_defaulting() -> None:
+    """A broker read can fail. It must not silently become gold's tick."""
+
+    def explode(symbol: str) -> float:
+        raise RuntimeError("terminal not connected")
+
+    tracker = ExcursionTracker(point=0.01, point_for=explode)
+    tracker.track(silver_trade())
+    assert tracker.tracked == 0

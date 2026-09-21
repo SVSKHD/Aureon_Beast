@@ -161,6 +161,33 @@ def execution_attempt_id() -> str:
     return uuid.uuid4().hex
 
 
+def new_alert_id() -> str:
+    """A fresh ``/remind`` alert id (9C).
+
+    Random like ``execution_attempt_id``, because an alert is a request rather than an
+    observation: two alerts on the same level are two different things a human asked for, and
+    a deterministic id would collapse them into one. Short enough to type into
+    ``/remind cancel id:``, which is the only place a human ever writes one.
+    """
+    return f"al-{uuid.uuid4().hex[:10]}"
+
+
+def new_assessment_id() -> str:
+    """A fresh ``/monitor`` assessment id (9D).
+
+    Random rather than derived from the detection: the SAME detection can be assessed twice
+    -- an hour apart, with an hour more history in the cohort -- and those are two different
+    statements about two different evidence bases. A deterministic id would overwrite the
+    first with the second, which is exactly the record the weekly review needs to score.
+    """
+    return f"as-{uuid.uuid4().hex[:12]}"
+
+
+def new_note_id() -> str:
+    """A fresh trade-note id (9D). Random, because two notes on one trade are two notes."""
+    return f"nt-{uuid.uuid4().hex[:12]}"
+
+
 def evaluation_doc_id(detection_id_value: str, rule_id: str) -> str:
     """Doc id for ``detection_evaluations`` (Phase 3).
 

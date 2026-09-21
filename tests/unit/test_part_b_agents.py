@@ -82,8 +82,15 @@ def one_candle(
 
 @pytest.mark.parametrize("agent_class", PART_B)
 def test_every_agent_is_versioned_and_named(agent_class: type[BaseAgent]) -> None:
+    """9B bumped every Part B agent to 1.1.0.
+
+    Not only the four the phase named: the reason to bump is that the two populations must
+    be **separable**, and every agent's documents changed shape identically when the engine
+    began attaching volume-profile and volatility context. An agent left at 1.0.0 would have
+    pre-9B and post-9B detections sharing ids with nothing to tell them apart (§12).
+    """
     agent = agent_class()
-    assert agent.agent_version == "1.0.0"
+    assert agent.agent_version == "1.1.0"
     assert agent.agent_name not in {"", "base"}
 
 

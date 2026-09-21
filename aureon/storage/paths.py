@@ -76,6 +76,11 @@ SETTINGS = collection("settings")
 SYMBOL_SPECS = collection("symbol_specs")
 DAILY_REVIEWS = collection("daily_reviews")
 WEEKLY_REVIEWS = collection("weekly_reviews")
+# 9C: what Discord has already said, and what a human asked to be told.
+NOTIFICATIONS = collection("notifications")
+ALERTS = collection("alerts")
+ASSESSMENTS = collection("assessments")
+TRADE_NOTES = collection("trade_notes")
 
 ALL_COLLECTIONS: tuple[str, ...] = (
     DETECTIONS,
@@ -91,11 +96,19 @@ ALL_COLLECTIONS: tuple[str, ...] = (
     SYMBOL_SPECS,
     DAILY_REVIEWS,
     WEEKLY_REVIEWS,
+    NOTIFICATIONS,
+    ALERTS,
 )
 
 # ── Fixed document ids ────────────────────────────────────────────────────────
-SYSTEM_STATE_DOC = "current"
+#: The whole-system document id, used until Phase 9A split ``system_state`` per symbol.
+#: Kept named so the read path can SKIP it: a deployment that ran before the split still
+#: has one, and merging it back in would report every symbol twice -- once live, once
+#: frozen at whenever the split happened.
+LEGACY_SYSTEM_STATE_DOC = "current"
 EXECUTION_SETTINGS_DOC = "execution"
+#: ``settings/notifications`` -- which agents Discord announces (9C).
+NOTIFICATION_SETTINGS_DOC = "notifications"
 
 # Service names used as heartbeat document ids (§67).
 SERVICE_OBSERVER = "observer"
@@ -166,8 +179,20 @@ def heartbeat_path(service: str) -> str:
     return f"{HEARTBEATS}/{_require(service, 'service')}"
 
 
-def system_state_path() -> str:
-    return f"{SYSTEM_STATE}/{SYSTEM_STATE_DOC}"
+def system_state_doc_id(symbol: str, timeframe: object) -> str:
+    """``XAUUSD_M5``. One document per symbol and timeframe (9A).
+
+    Per symbol rather than one document for everything, for two reasons that only appear
+    with a second symbol: the write throttle is per document, so gold's candle close would
+    otherwise suppress silver's state for the next few seconds, and a reader that wants one
+    symbol should not have to read every symbol to get it.
+    """
+    frame = getattr(timeframe, "value", timeframe)
+    return f"{_require(symbol, 'symbol')}_{_require(str(frame), 'timeframe')}"
+
+
+def system_state_path(symbol: str, timeframe: object) -> str:
+    return f"{SYSTEM_STATE}/{system_state_doc_id(symbol, timeframe)}"
 
 
 def execution_settings_path() -> str:
@@ -184,14 +209,69 @@ def symbol_spec_path(symbol: str) -> str:
     return f"{SYMBOL_SPECS}/{_require(symbol, 'symbol')}"
 
 
-def daily_review_path(market_date: str) -> str:
-    """Keyed by broker date so regenerating a day overwrites it (Phase 7)."""
-    return f"{DAILY_REVIEWS}/{_require(market_date, 'market_date')}"
+def notification_settings_path() -> str:
+    """``settings/notifications`` (9C)."""
+    return f"{SETTINGS}/{NOTIFICATION_SETTINGS_DOC}"
 
 
-def weekly_review_doc_id(iso_year: int, iso_week: int) -> str:
-    return f"{iso_year:04d}-W{iso_week:02d}"
+def notification_id(kind: str, ref_id: str) -> str:
+    """``{kind}__{ref_id}`` -- the id that makes a send exactly-once (9C).
+
+    Derived from what the message is ABOUT rather than auto-generated, so a bot that dies
+    between posting and recording, then restarts, finds the document instead of posting
+    again. The two parts are joined by a double underscore because a detection_id is a hex
+    digest and an alert id is ours: neither contains one, so the id cannot be ambiguous.
+    """
+    return f"{_require(kind, 'kind')}__{_require(ref_id, 'ref_id')}"
 
 
-def weekly_review_path(iso_year: int, iso_week: int) -> str:
-    return f"{WEEKLY_REVIEWS}/{weekly_review_doc_id(iso_year, iso_week)}"
+def notification_path(kind: str, ref_id: str) -> str:
+    return f"{NOTIFICATIONS}/{notification_id(kind, ref_id)}"
+
+
+def alert_path(alert_id: str) -> str:
+    return f"{ALERTS}/{_require(alert_id, 'alert_id')}"
+
+
+def assessment_path(assessment_id: str) -> str:
+    """``assessments/{assessment_id}`` (9D)."""
+    return f"{ASSESSMENTS}/{_require(assessment_id, 'assessment_id')}"
+
+
+def trade_note_path(note_id: str) -> str:
+    """``trade_notes/{note_id}`` (9D).
+
+    Its own collection rather than a subcollection of the trade, so a note cannot be
+    mistaken for a field write on a CLOSED trade (§45) by any code path that iterates a
+    document's children.
+    """
+    return f"{TRADE_NOTES}/{_require(note_id, 'note_id')}"
+
+
+def daily_review_doc_id(market_date: str, symbol: str | None = None) -> str:
+    """``{market_date}`` or ``{market_date}_{symbol}`` (9A).
+
+    The symbol is a suffix rather than a prefix so the ids still sort chronologically as
+    strings, which is what makes "the latest review" an index-free maximum (decision 26).
+    A review without a symbol keeps the pre-9A id, so nothing already stored moves.
+    """
+    date = _require(market_date, "market_date")
+    return f"{date}_{_require(symbol, 'symbol').upper()}" if symbol else date
+
+
+def daily_review_path(market_date: str, symbol: str | None = None) -> str:
+    """Keyed by broker date (and symbol) so regenerating a day overwrites it (Phase 7)."""
+    return f"{DAILY_REVIEWS}/{daily_review_doc_id(market_date, symbol)}"
+
+
+def weekly_review_doc_id(
+    iso_year: int, iso_week: int, symbol: str | None = None
+) -> str:
+    week = f"{iso_year:04d}-W{iso_week:02d}"
+    return f"{week}_{_require(symbol, 'symbol').upper()}" if symbol else week
+
+
+def weekly_review_path(
+    iso_year: int, iso_week: int, symbol: str | None = None
+) -> str:
+    return f"{WEEKLY_REVIEWS}/{weekly_review_doc_id(iso_year, iso_week, symbol)}"

@@ -147,3 +147,59 @@ def test_v2_applies_to_the_directional_agents_only() -> None:
     assert "wick" not in XAU_V2_AGENTS
     assert "rsi" not in XAU_V2_AGENTS
     assert "session_trend" not in XAU_V2_AGENTS
+
+
+# ── XAG_OUTCOME_V1 (9A) ───────────────────────────────────────────────────────
+
+#: Pinned so an edit to silver's thresholds is a failing test naming the rule, exactly
+#: as V1's hash is. Frozen from the moment it shipped (§21): a better scale is
+#: XAG_OUTCOME_V2, never an edit to this one.
+XAG_OUTCOME_V1_HASH = "fee97267fa1ed457c4825d820c6dffd698b13f8a2383aecfed11907ec10892dd"
+
+
+def test_xag_is_registered_and_reachable_by_id() -> None:
+    from aureon.evaluation.rules import XAG_OUTCOME_V1, get_rule
+
+    assert get_rule("XAG_OUTCOME_V1") is XAG_OUTCOME_V1
+
+
+def test_xag_measures_silvers_own_distances() -> None:
+    """$0.10-$1.00, because $3-$20 on a ~$30 instrument is 10-65% of price.
+
+    Sharing gold's rule would make every silver horizon read "not reached", and a
+    reached-N table of zeros looks like a finding about silver rather than a unit error.
+    """
+    from aureon.evaluation.rules import XAG_OUTCOME_V1
+    from aureon.models.enums import ThresholdUnit
+
+    assert XAG_OUTCOME_V1.threshold_unit is ThresholdUnit.PRICE
+    assert XAG_OUTCOME_V1.thresholds == (0.10, 0.20, 0.30, 0.50, 1.00)
+    # At silver's tick those are 100-1000 points, DERIVED rather than written down.
+    assert XAG_OUTCOME_V1.thresholds_in_points(0.001) == (100.0, 200.0, 300.0, 500.0, 1000.0)
+
+
+def test_xag_keeps_the_same_shape_as_gold() -> None:
+    """The thresholds are not comparable threshold-for-threshold; the SHAPE is."""
+    from aureon.evaluation.rules import XAG_OUTCOME_V1, XAU_OUTCOME_V2
+
+    assert XAG_OUTCOME_V1.horizons == XAU_OUTCOME_V2.horizons
+    assert XAG_OUTCOME_V1.reference_price is XAU_OUTCOME_V2.reference_price
+    assert XAG_OUTCOME_V1.definition_hash != XAU_OUTCOME_V2.definition_hash
+
+
+def test_xag_definition_is_frozen() -> None:
+    from aureon.evaluation.rules import XAG_OUTCOME_V1
+
+    assert XAG_OUTCOME_V1.definition_hash == XAG_OUTCOME_V1_HASH, (
+        "XAG_OUTCOME_V1 has changed. Its stored results are keyed by rule_id, so an edit "
+        "silently redefines every number already recorded against it. Publish "
+        "XAG_OUTCOME_V2 instead (§21)."
+    )
+
+
+def test_xag_thresholds_read_in_the_unit_they_were_written_in() -> None:
+    """``1.00`` keys as ``"1"`` and ``0.10`` as ``"0.1"``, so a stored result stays
+    readable as the dollars it meant."""
+    from aureon.evaluation.rules import XAG_OUTCOME_V1
+
+    assert XAG_OUTCOME_V1.threshold_keys == ("0.1", "0.2", "0.3", "0.5", "1")

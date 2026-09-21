@@ -39,7 +39,7 @@ class BreakoutAgent(BaseAgent):
     """Detects levels broken and held through the close (§17)."""
 
     agent_name = "breakout"
-    agent_version = "1.0.0"
+    agent_version = "1.1.0"  # 9B
 
     def __init__(
         self,

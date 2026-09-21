@@ -12,7 +12,7 @@ from datetime import timedelta
 
 import pytest
 
-from aureon.execution.fake_broker import FakeBroker
+from aureon.execution.fake_broker import DEFAULT_SYMBOL_INFO, FakeBroker
 from aureon.models.base import MarketTime, utc_now
 from aureon.models.broker import BrokerDeal
 from aureon.models.enums import (
@@ -608,3 +608,162 @@ def test_incomplete_exit_deals_do_not_mark_a_trade_closed(
     assert final.status is TradeStatus.CLOSED
     assert final.realized_pnl == pytest.approx(42.0), "the corrected total must be recorded"
     assert final.closed_volume == pytest.approx(0.10)
+
+
+# ── 9A: two symbols on one account ────────────────────────────────────────────
+
+SILVER = "XAGUSD"
+SILVER_INFO = DEFAULT_SYMBOL_INFO.model_copy(
+    update={"symbol": SILVER, "point": 0.001, "digits": 3}
+)
+GOLD_INFO = DEFAULT_SYMBOL_INFO.model_copy(update={"symbol": SYMBOL})
+
+
+@pytest.fixture
+def two_symbol_broker() -> FakeBroker:
+    """A broker that knows both instruments, each at its own tick and price (9A).
+
+    Without the per-symbol maps this double answers every ``symbol_info`` with gold's spec
+    and every ``quote`` with gold's price, so a silver assertion here would be measuring
+    gold and passing for the wrong reason.
+    """
+    return FakeBroker(
+        symbols={SYMBOL: GOLD_INFO, SILVER: SILVER_INFO},
+        prices={SYMBOL: (2400.00, 2400.30), SILVER: (30.000, 30.020)},
+    )
+
+
+@pytest.fixture
+def two_symbol_monitor(trades, repository, two_symbol_broker) -> PositionMonitor:
+    return PositionMonitor(
+        trades,
+        repository,
+        two_symbol_broker,
+        magic=MAGIC,
+        account_scope=SCOPE,
+        market_tz=TZ,
+        poll_seconds=1.0,
+    )
+
+
+def open_by_hand(broker: FakeBroker, symbol: str, *, volume: float = 0.20) -> int:
+    """A position the trader opened in the terminal: our account, not our magic (§52)."""
+    from aureon.models.enums import OrderType
+    from aureon.models.trade import BrokerOrderRequest
+
+    result = broker.send_market_order(
+        BrokerOrderRequest(
+            symbol=symbol,
+            order_type=OrderType.MARKET_BUY,
+            volume=volume,
+            magic=999_999,
+            comment="opened by hand",
+        )
+    )
+    assert result.position_id is not None
+    return result.position_id
+
+
+@pytest.mark.parametrize("symbol", [SYMBOL, SILVER])
+def test_a_hand_opened_position_is_imported_on_either_symbol(
+    two_symbol_broker, two_symbol_monitor, trades, symbol: str
+) -> None:
+    """§52, both instruments. Aureon reports on it and leaves it alone."""
+    position_id = open_by_hand(two_symbol_broker, symbol)
+    two_symbol_monitor.poll_once()
+
+    stored = trades.get_by_position(position_id)
+    assert stored is not None
+    assert stored.symbol == symbol
+    assert stored.source is TradeSource.EXTERNAL_MT5
+    assert stored.trade_request_id is None
+    assert stored.status is TradeStatus.OPEN
+
+
+def test_both_symbols_are_imported_in_one_poll(
+    two_symbol_broker, two_symbol_monitor, trades
+) -> None:
+    """One account, one poll, two instruments -- and neither overwrites the other."""
+    gold_id = open_by_hand(two_symbol_broker, SYMBOL)
+    silver_id = open_by_hand(two_symbol_broker, SILVER, volume=0.50)
+    result = two_symbol_monitor.poll_once()
+
+    assert len(result.imported_external) == 2
+    assert {t.symbol for t in trades.open_trades()} == {SYMBOL, SILVER}
+    assert trades.get_by_position(gold_id).volume == pytest.approx(0.20)
+    assert trades.get_by_position(silver_id).volume == pytest.approx(0.50)
+
+
+def test_each_symbols_excursions_use_that_symbols_tick(
+    two_symbol_broker, two_symbol_monitor, trades
+) -> None:
+    """9A. The same $0.30 move is 30 points on gold and 300 on silver.
+
+    Read from the broker's own spec rather than one configured ``point``: this account can
+    hold a position on anything, including an instrument Aureon does not observe.
+    """
+    gold_id = open_by_hand(two_symbol_broker, SYMBOL)
+    silver_id = open_by_hand(two_symbol_broker, SILVER)
+    two_symbol_monitor.poll_once()
+
+    # Entries were at the ask; both books move $0.30 up, and a long is measured at the bid.
+    two_symbol_broker.set_quote(bid=2400.60, ask=2400.90, symbol=SYMBOL)
+    two_symbol_broker.set_quote(bid=30.300, ask=30.320, symbol=SILVER)
+    two_symbol_monitor.poll_once()
+
+    gold = trades.get_by_position(gold_id).excursion
+    silver = trades.get_by_position(silver_id).excursion
+    assert gold.mfe == pytest.approx(30.0, abs=1.0)  # 2400.60 - 2400.30, at 0.01
+    assert silver.mfe == pytest.approx(280.0, abs=2.0)  # 30.300 - 30.020, at 0.001
+    # The ratio is the finding: one shared tick would have made these the same number.
+    assert silver.mfe > gold.mfe * 5
+
+
+def test_the_tick_is_read_once_per_symbol_not_once_per_poll(
+    two_symbol_broker, two_symbol_monitor, trades
+) -> None:
+    """Cached: it cannot change within a session, and the monitor polls every two seconds."""
+    open_by_hand(two_symbol_broker, SYMBOL)
+    open_by_hand(two_symbol_broker, SILVER)
+    two_symbol_monitor.poll_once()
+    before = two_symbol_broker.calls.count("symbol_info")
+    for _ in range(3):
+        two_symbol_monitor.poll_once()
+    assert two_symbol_broker.calls.count("symbol_info") == before
+
+
+def test_a_reconstruction_uses_the_symbols_tick_too(
+    two_symbol_broker, two_symbol_monitor, trades
+) -> None:
+    """A rebuilt excursion is already the weaker measurement; the wrong tick would make it
+    a wrong one (§45)."""
+    silver_id = open_by_hand(two_symbol_broker, SILVER)
+    two_symbol_monitor.poll_once()
+    trade = trades.get_by_position(silver_id)
+
+    base = trade.open_time.utc
+    candles = [
+        Candle(
+            symbol=SILVER,
+            timeframe=Timeframe.M1,
+            open_time=MarketTime.from_utc(base + timedelta(minutes=1), TZ),
+            open=30.000,
+            high=30.300,
+            low=29.900,
+            close=30.100,
+        )
+    ]
+    two_symbol_monitor.reconstruct_excursions(trade, candles)
+
+    rebuilt = trades.get_by_position(silver_id).excursion
+    assert rebuilt.source is ExcursionSource.RECONSTRUCTED
+    # (30.300 - 30.020) / 0.001 = 280 points. At gold's tick it would read 28.
+    assert rebuilt.mfe == pytest.approx(280.0, abs=2.0)
+
+
+def test_a_broker_that_does_not_know_a_symbol_says_so(two_symbol_broker) -> None:
+    """The double is strict once configured, so a test cannot be served gold by accident."""
+    from aureon.execution.broker_interface import BrokerError
+
+    with pytest.raises(BrokerError, match="EURUSD"):
+        two_symbol_broker.symbol_info("EURUSD")
