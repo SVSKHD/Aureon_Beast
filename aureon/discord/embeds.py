@@ -129,9 +129,14 @@ def status_embed(screen: StatusScreen) -> Any:
         inline=False,
     )
     if screen.symbols:
+        market = "\n".join(f"`{name}` {state}" for name, state in screen.symbols)
+        # 11B: the next open goes above the per-symbol rows, not in a footer. "Closed" on
+        # its own reads as a fault to anybody who has not checked the calendar, and the
+        # first thing they would do about it is restart something.
+        closed = screen.closed_line
         embed.add_field(
             name="Market",
-            value="\n".join(f"`{name}` {state}" for name, state in screen.symbols),
+            value=f"💤 {closed}\n{market}" if closed else market,
             inline=False,
         )
     embed.add_field(
@@ -199,6 +204,11 @@ def monitor_embed(screen: Any) -> Any:
         description.append(f"⚠ {screen.disagreement}")
     if screen.insufficient:
         description.append(f"**{screen.insufficient}**")
+    if screen.history:
+        # In the DESCRIPTION, above the numbers, not in the footer (11C, F-9). "Every rate
+        # here describes the generator" is not a caveat a reader should meet after they have
+        # already read the rates.
+        description.append(f"⚠ **{screen.history}**")
 
     embed = _embed(
         f"{screen.title} — assessment",

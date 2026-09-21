@@ -42,7 +42,7 @@ them onto an order (§64). The rendering says "measured from n=... · not advice
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -62,6 +62,7 @@ from aureon.models.base import to_utc, utc_now
 from aureon.models.detection import Detection
 from aureon.models.enums import (
     Direction,
+    HistorySource,
     HorizonKind,
     PathClassification,
     TrendBias,
@@ -548,6 +549,7 @@ def build_assessment(
     estimate_horizon: str | None = None,
     pair: tuple[float, float] | None = None,
     point: float = 0.01,
+    real_days: Collection[str] | None = None,
     now: datetime | None = None,
 ) -> Assessment:
     """One measured readout, ready to store and to render (9D).
@@ -558,6 +560,7 @@ def build_assessment(
     testable without a database.
     """
     cohort, wanted = select_cohort(subject, subject_evaluation, population)
+    source, days = classify_history(cohort, real_days)
     horizon_id = estimate_horizon or default_estimate_horizon(rule)
     reference = subject.price
 
@@ -614,8 +617,44 @@ def build_assessment(
         ),
         insufficient=len(cohort) < MIN_COHORT,
         disagrees_with_detection=disagrees,
+        history_source=source,
+        real_days=days,
         created_at=to_utc(now or utc_now()),
     )
+
+
+def classify_history(
+    cohort: Sequence[CohortMember], real_days: Collection[str] | None
+) -> tuple[HistorySource, int]:
+    """Where this cohort's bars came from, and how many verified days it spans (11C, F-9).
+
+    ``real_days`` is the set of broker dates with a VERIFIED session for this symbol, from
+    ``session_evidence.verified_market_dates``. Passed in rather than read here for the same
+    reason the population is: this function is arithmetic, and arithmetic should not touch a
+    filesystem.
+
+    ``None`` means the caller did not say, and the answer is UNKNOWN with zero days -- not
+    SYNTHETIC. A caller who has not been wired up yet and a cohort we know was generated are
+    different facts, and labelling the first as the second would quietly relabel every
+    readout written before this field existed.
+
+    An EMPTY set is different again: the caller looked, and no session has been verified, so
+    every member is synthetic. That is the state this repository is in today.
+    """
+    if real_days is None:
+        return HistorySource.UNKNOWN, 0
+    if not cohort:
+        # No members, so no bars, so nothing to be real or synthetic about. SYNTHETIC would
+        # be a claim about data that does not exist.
+        return HistorySource.UNKNOWN, 0
+    verified = {str(day) for day in real_days}
+    dates = [member.detection.candle_open_time.market_date for member in cohort]
+    matched = {day for day in dates if day in verified}
+    if len(matched) == len(set(dates)):
+        return HistorySource.REAL, len(matched)
+    if not matched:
+        return HistorySource.SYNTHETIC, 0
+    return HistorySource.MIXED, len(matched)
 
 
 def default_estimate_horizon(rule: EvaluationRule) -> str:

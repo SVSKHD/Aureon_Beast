@@ -46,7 +46,7 @@ class EmaCrossAgent(BaseAgent):
     #: 9/21 to 20/50. Under §12 the version is part of the detection id, so this bump
     #: forks history rather than rewriting it -- 1.0.0's detections stay exactly where
     #: they are and the two pairs can be compared over the same week.
-    agent_version = "2.1.0"  # 9B
+    agent_version = "2.2.0"  # 11D
 
     def __init__(
         self,

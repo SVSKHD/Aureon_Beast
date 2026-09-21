@@ -68,9 +68,34 @@ class HeartbeatService:
             self.beats += 1
         return written
 
+    def set_interval(self, seconds: float) -> None:
+        """Change the cadence of a running heartbeat (11B).
+
+        An explicit method rather than assigning the attribute, because two things about it
+        need saying. It takes effect at the NEXT wait, so a change is visible within one old
+        interval -- fine when the change is 5s to 300s at a weekly close, and not something
+        to rely on for anything tighter. And a non-positive value is refused: a heartbeat is
+        the one thing that must keep going while a service sleeps, since one that stopped
+        would be indistinguishable from a process that died at the close, and ``wait(0)``
+        would spin a core for two days rather than stop.
+        """
+        if seconds <= 0:
+            raise ValueError(f"heartbeat interval must be positive, got {seconds}")
+        if seconds == self.interval_seconds:
+            return
+        log.info(
+            "heartbeat cadence for %s: %ss -> %ss",
+            self.service,
+            self.interval_seconds,
+            seconds,
+        )
+        self.interval_seconds = seconds
+
     def run(self) -> None:
         while not self._stop.is_set():
             self.beat_once()
+            # Read on every iteration, so ``set_interval`` reaches a heartbeat that is
+            # already running instead of only a freshly built one.
             self._stop.wait(self.interval_seconds)
 
     def start(self) -> None:

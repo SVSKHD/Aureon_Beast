@@ -23,14 +23,18 @@ from __future__ import annotations
 import logging
 import signal
 import sys
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from types import FrameType
 
 from aureon.config import AureonConfig
 from aureon.execution.broker_interface import BrokerInterface
-from aureon.models.enums import Timeframe
+from aureon.models.base import utc_now
+from aureon.models.enums import MarketState, Timeframe
 from aureon.positions.position_monitor import PositionMonitor
 from aureon.services.heartbeat_service import HeartbeatService
+from aureon.services.market_state_service import WeeklySchedule
+from aureon.services.sleep_cycle import SleepCycle, SleepGate
 from aureon.storage import paths
 from aureon.storage.trade_repository import TradeRepository
 from aureon.storage.trade_request_repository import TradeRequestRepository
@@ -55,12 +59,44 @@ class Monitor:
         candle_provider: object | None = None,
         heartbeat: HeartbeatService | None = None,
         point: float = 0.01,
+        market_state_provider: object | None = None,
+        schedule: object | None = None,
+        now: Callable[[], datetime] = utc_now,
     ) -> None:
         self.config = config
         self.broker = broker
         self.trades = trades
         self.candle_provider = candle_provider
         self.heartbeat = heartbeat
+
+        # ── The weekend (11B) ────────────────────────────────────────────────
+        #
+        # The monitor IS parked, unlike the executor: every number it records comes from a
+        # quote, and a closed market has no new ones -- polling would rewrite the same
+        # excursions with the same prices for forty-eight hours. What makes that safe is
+        # the ONE full reconciliation at the close, which is also the most useful moment
+        # for it: whatever the broker's books say after the last tick of the week is what
+        # they will still say on Sunday, so a discrepancy found now has two days to be
+        # looked at rather than being noticed at the open.
+        self.sleep = SleepCycle(
+            schedule=schedule or WeeklySchedule(),
+            close_confirm_seconds=config.close_confirm_seconds,
+            preopen_seconds=config.preopen_seconds,
+            sleep_heartbeat_seconds=config.sleep_heartbeat_seconds,
+            sleep_poll_seconds=config.sleep_poll_seconds,
+        )
+        self.gate = SleepGate(
+            cycle=self.sleep,
+            states=self._market_states,
+            # The provider's clock, not this process's: see the note in main_executor.
+            clock=now,
+            on_sleep=self._on_market_close,
+            on_wake=self._on_market_open,
+            service=paths.SERVICE_MONITOR,
+        )
+        self._market_state_provider = market_state_provider
+        #: How many closes have been reconciled, for the emulator test to count.
+        self.closing_reconciliations = 0
 
         self.monitor = PositionMonitor(
             trades,
@@ -71,6 +107,9 @@ class Monitor:
             market_tz=config.market_tz,
             point=point,
             poll_seconds=config.monitor_poll_seconds,
+            before_poll=self.gate.tick,
+            parked=lambda: self.gate.parked,
+            pace=self.gate.pace,
         )
 
     def startup(self, *, now: datetime | None = None) -> None:
@@ -93,6 +132,56 @@ class Monitor:
         )
         if self.heartbeat is not None:
             self.heartbeat.start()
+
+    def _market_states(self) -> dict[str, MarketState]:
+        """Every configured symbol's state. A fault reads UNKNOWN, which never sleeps."""
+        if self._market_state_provider is None:
+            return {}
+        states: dict[str, MarketState] = {}
+        for symbol in self.config.symbols:
+            try:
+                states[symbol] = self._market_state_provider(symbol)  # type: ignore[operator]
+            except Exception:  # noqa: BLE001
+                states[symbol] = MarketState.UNKNOWN
+        return states
+
+    def _on_market_close(self, crossing: object) -> None:
+        """One full reconciliation, then park.
+
+        The same ``startup`` reconciliation the process runs when it boots, deliberately:
+        a second "closing" variant would be a second definition of what reconciled means,
+        and the two would drift. It is the last chance to compare our books against the
+        broker's while the broker is still answering; anything found after this is found at
+        the open, in the busiest ten minutes of the week.
+        """
+        try:
+            result = self.monitor.startup()
+            self.closing_reconciliations += 1
+            log.info(
+                "closing reconciliation: %d opened, %d closed, %d partial, %d external, "
+                "%d pending resolved",
+                len(result.opened),
+                len(result.closed),
+                len(result.partially_closed),
+                len(result.imported_external),
+                len(result.pending_resolved),
+            )
+        except Exception:  # noqa: BLE001 - a failed reconciliation must not stop the park
+            log.exception("the closing reconciliation failed")
+        self._set_heartbeat_cadence()
+
+    def _on_market_open(self, crossing: object) -> None:
+        self._set_heartbeat_cadence()
+
+    def _set_heartbeat_cadence(self) -> None:
+        if self.heartbeat is None:
+            return
+        try:
+            self.heartbeat.set_interval(
+                self.sleep.heartbeat_seconds(self.config.state_heartbeat_seconds)
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("could not change the monitor heartbeat cadence")
 
     def _reconstruct_offline_excursions(self, *, now: datetime | None = None) -> None:
         """Rebuild excursions from M1 candles for positions we did not watch (§45).
@@ -143,6 +232,7 @@ def build_monitor(config: AureonConfig) -> Monitor:
     """Assemble a live monitor from configuration."""
     from aureon.data.mt5_provider import MT5DataProvider
     from aureon.execution.mt5_broker import MT5Broker
+    from aureon.services.market_state_service import MarketStateService
     from aureon.storage.firebase_service import get_client
     from aureon.storage.system_state_repository import HeartbeatRepository
 
@@ -158,6 +248,9 @@ def build_monitor(config: AureonConfig) -> Monitor:
         emulator_host=config.firestore_emulator_host,
     )
     provider = MT5DataProvider(market_tz=config.market_tz)
+    # The same market-state service the observer and executor use, and its schedule, so
+    # three processes cannot hold three opinions about when the week ends (11B).
+    market_state = MarketStateService(provider)
 
     return Monitor(
         config,
@@ -166,6 +259,9 @@ def build_monitor(config: AureonConfig) -> Monitor:
         TradeRequestRepository(client),
         candle_provider=provider,
         heartbeat=HeartbeatService(HeartbeatRepository(client), paths.SERVICE_MONITOR),
+        market_state_provider=lambda symbol: market_state.state_for(symbol).state,
+        schedule=market_state.schedule,
+        now=provider.now_utc,
     )
 
 

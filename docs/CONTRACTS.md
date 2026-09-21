@@ -25,6 +25,8 @@ test run and production and could never be checked in.
 | `aureon_beast_detection_evaluations` | `{detection_id}__{rule_id}` | `DetectionEvaluation` |
 | `aureon_beast_detections` | `detection_id` | `Detection` |
 | `aureon_beast_heartbeats` | `{service}` | `Heartbeat` |
+| `aureon_beast_market_day_frames` | `**not documented — add it to COLLECTION_DOCS**` | `?` |
+| `aureon_beast_market_days` | `**not documented — add it to COLLECTION_DOCS**` | `?` |
 | `aureon_beast_notifications` | `{kind}__{ref_id}` | `Notification` |
 | `aureon_beast_ops_events` | `{name}[__{scope}]` | `OpsEvent` |
 | `aureon_beast_sessions` | `{market_date}__{session}` | `SessionSummary` |
@@ -69,6 +71,7 @@ An immutable observation. Never an instruction to trade.
 | `sequence_session` | `int` | yes | — |  |
 | `volume_profile_ref` | `VolumeProfileRef \| null` | no | `None` | Asia's value area and nodes as they stood at this close (9B). |
 | `volatility` | `VolatilityContext \| null` | no | `None` | ATR and session range vs median at this close (9B). |
+| `mtf` | `MtfContext \| null` | no | `None` | Higher-timeframe reads and alignment at this close (11D). |
 
 ### DetectionEvaluation
 
@@ -227,6 +230,8 @@ One document describing the whole system's health (§59, §61-§63).
 | `heartbeats` | `dict[str, AwareDatetime]` | no | `dict()` |  |
 | `trading_enabled` | `bool \| null` | no | `None` | Mirror of settings/execution, for display only. |
 | `account_mode` | `AccountMode \| null` | no | `None` |  |
+| `sleep_phase` | `SleepPhase \| null` | no | `None` |  |
+| `next_market_open` | `AwareDatetime \| null` | no | `None` |  |
 | `notes` | `str \| null` | no | `None` |  |
 
 ### ExecutionSettings
@@ -312,6 +317,7 @@ One broker trading day (§61).
 | `assessments_unresolved` | `int` | no | `0` |  |
 | `assessments_not_scored` | `int` | no | `0` |  |
 | `assessment_hit_by_cohort` | `dict[str, str]` | no | `dict()` |  |
+| `assessment_hit_by_source` | `dict[str, str]` | no | `dict()` |  |
 | `trade_notes` | `dict[str, tuple[str]]` | no | `dict()` |  |
 | `trades_by_tag` | `dict[str, tuple[str]]` | no | `dict()` |  |
 | `market_date` | `str` | yes | — | Broker-local date, YYYY-MM-DD. |
@@ -350,6 +356,7 @@ One trading week, generated after Friday's close (§63).
 | `assessments_unresolved` | `int` | no | `0` |  |
 | `assessments_not_scored` | `int` | no | `0` |  |
 | `assessment_hit_by_cohort` | `dict[str, str]` | no | `dict()` |  |
+| `assessment_hit_by_source` | `dict[str, str]` | no | `dict()` |  |
 | `trade_notes` | `dict[str, tuple[str]]` | no | `dict()` |  |
 | `trades_by_tag` | `dict[str, tuple[str]]` | no | `dict()` |  |
 | `iso_year` | `int` | yes | — |  |
@@ -413,6 +420,8 @@ One measured readout for one detection (§62-§64, 9D).
 | `paired` | `PairedOutcome \| null` | no | `None` |  |
 | `insufficient` | `bool` | no | `False` |  |
 | `disagrees_with_detection` | `bool` | no | `False` |  |
+| `history_source` | `HistorySource` | no | `'unknown'` |  |
+| `real_days` | `int` | no | `0` |  |
 | `created_at` | `AwareDatetime \| null` | no | `None` |  |
 
 ### TradeNote
@@ -795,6 +804,7 @@ Per symbol/timeframe observation state (§59).
 | `volume_profile` | `dict[str, ProfileSummary]` | no | `dict()` | current_session \| asia \| day -> that scope's summary (9B). |
 | `volatility` | `VolatilityContext \| null` | no | `None` | ATR(14) and the session range vs its median (9B). |
 | `trend_read` | `TrendRead \| null` | no | `None` | What the last N closed candles did, as facts and a summary (9D). |
+| `mtf` | `MtfContext \| null` | no | `None` | Higher-timeframe reads at the last closed candle (11D). |
 | `session` | `SessionName \| null` | no | `None` |  |
 | `session_trend` | `str \| null` | no | `None` |  |
 | `session_high` | `float \| null` | no | `None` |  |

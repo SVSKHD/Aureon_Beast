@@ -35,6 +35,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from aureon.models.assessment import Assessment
+from aureon.models.enums import HistorySource
 from aureon.models.evaluation import DetectionEvaluation
 
 log = logging.getLogger(__name__)
@@ -70,6 +71,29 @@ class AssessmentScores:
     #: and "it holds in general" are different claims, and the widening makes the difference
     #: visible: a cohort that had to drop the volatility regime is a weaker statement.
     by_cohort: dict[str, tuple[int, int]] = field(default_factory=dict)
+    #: history source -> (hit, resolved), for 11C's F-9 split.
+    #:
+    #: The whole rate is an average over incomparable populations until this is read: a
+    #: readout measured on replayed fixture bars and one measured on bars a broker served are
+    #: the same arithmetic over different worlds, and a merged hit rate is a number about
+    #: neither. Kept beside the merged rate rather than replacing it, because the merged one
+    #: is what a reader will quote and the split is what tells them whether to.
+    by_source: dict[str, tuple[int, int]] = field(default_factory=dict)
+
+    def rate_for_source(self, source: str) -> float | None:
+        """One source's hit rate, or ``None`` when nothing of it resolved."""
+        hit, resolved = self.by_source.get(source, (0, 0))
+        return None if resolved == 0 else hit / resolved
+
+    @property
+    def only_synthetic(self) -> bool:
+        """True when every resolved readout came from generated bars.
+
+        Worth its own property because it is the state this repository is in, and a review
+        that printed a hit rate without saying so would read as a measurement of the market.
+        """
+        sources = {name for name, (_, resolved) in self.by_source.items() if resolved}
+        return sources == {HistorySource.SYNTHETIC.value}
 
     @property
     def resolved(self) -> int:
@@ -182,4 +206,15 @@ def score_assessments(
             key = cohort_key(assessment)
             hit, resolved = scores.by_cohort.get(key, (0, 0))
             scores.by_cohort[key] = (hit + (1 if verdict == HIT else 0), resolved + 1)
+
+            # 11C F-9. ``getattr`` with an UNKNOWN default rather than the field directly:
+            # assessments stored before this field existed are read back by a model that has
+            # it, but a future reader of a stored dict might not, and UNKNOWN is the honest
+            # answer for a readout whose provenance nobody recorded.
+            source = str(
+                getattr(assessment, "history_source", HistorySource.UNKNOWN)
+                or HistorySource.UNKNOWN
+            )
+            hit, resolved = scores.by_source.get(source, (0, 0))
+            scores.by_source[source] = (hit + (1 if verdict == HIT else 0), resolved + 1)
     return scores

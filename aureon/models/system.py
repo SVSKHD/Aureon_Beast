@@ -19,9 +19,11 @@ from aureon.models.enums import (
     Freshness,
     MarketState,
     SessionName,
+    SleepPhase,
     Timeframe,
 )
 from aureon.models.market import QuoteSnapshot
+from aureon.models.mtf import MtfContext
 from aureon.models.profile import ProfileSummary, VolatilityContext
 
 # §84 defaults; overridable via config. 46s old must read STALE at 45s.
@@ -149,6 +151,15 @@ class SymbolState(AureonModel):
         default=None,
         description="What the last N closed candles did, as facts and a summary (9D).",
     )
+    #: Where the higher timeframes stood at the last closed candle (11D). Published for the
+    #: same reason the trend read is: Discord holds no data provider, so the process with the
+    #: feed computes it and Discord renders it. ``None`` when the observer has too little M5
+    #: history to seed an EMA above M5 -- which is not "flat", and is why every reader goes
+    #: through ``MtfContext.bias_of`` rather than assuming a missing read means sideways.
+    mtf: MtfContext | None = Field(
+        default=None,
+        description="Higher-timeframe reads at the last closed candle (11D).",
+    )
 
     # ── Session context (§18) ─────────────────────────────────────────────────
     session: SessionName | None = None
@@ -230,6 +241,16 @@ class SystemState(AureonDocument):
     #: guard that trusted a value another process wrote would be trusting a document instead
     #: of a terminal.
     account_mode: AccountMode | None = None
+    #: Where the observer is in the weekly sleep cycle (11B), and when the market is next
+    #: expected to open.
+    #:
+    #: Published because Discord may not call the broker and must not compute the weekly
+    #: boundary itself: two processes each deciding when the market opens is two places for
+    #: that answer to be wrong, and the one holding the feed is the one that knows. Display
+    #: only, like ``account_mode`` -- the executor refuses a closed market through the guard,
+    #: on its own broker's word, not on a phase another process wrote here.
+    sleep_phase: SleepPhase | None = None
+    next_market_open: UtcDatetime | None = None
     notes: str | None = None
 
     def freshness(

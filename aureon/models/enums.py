@@ -129,6 +129,66 @@ class MarketState(StrEnum):
     UNKNOWN = "unknown"
 
 
+class HistorySource(StrEnum):
+    """Where a measured cohort's history came from (11C, F-9).
+
+    A readout built on replayed fixture bars and one built on bars a broker served are the
+    same arithmetic over incomparable data, and until 11C nothing on the stored assessment
+    said which. A generated random walk has the distribution its generator was given, so a
+    hit rate measured over one is a statement about ``scripts/gen_fixtures.py``.
+
+    ``UNKNOWN`` exists for an assessment written before this field did, and is not the same
+    as SYNTHETIC: "nobody recorded it" and "we know it was generated" are different, and
+    collapsing them would quietly relabel old readouts.
+    """
+
+    SYNTHETIC = "synthetic"
+    REAL = "real"
+    MIXED = "mixed"
+    UNKNOWN = "unknown"
+
+    @property
+    def is_evidence(self) -> bool:
+        """Only a wholly real cohort is evidence about the instrument."""
+        return self is HistorySource.REAL
+
+
+class MtfAlignment(StrEnum):
+    """Whether the higher timeframes agree with a detection's direction (11D).
+
+    Three answers and no fourth. ``MIXED`` covers both "some agree and some do not" and
+    "nobody has a view", deliberately: a timeframe with too few bars to seed an EMA is an
+    absence of evidence, and giving that its own value would invite treating it as a weak
+    ALIGNED. The reasoning lives in ``aureon/engine/mtf.py``.
+
+    Recorded, never gated on. Whether alignment predicts anything is a question for the
+    evaluation rules; building a filter on the assumption that it does would be a threshold
+    nobody researched.
+    """
+
+    ALIGNED = "aligned"
+    MIXED = "mixed"
+    AGAINST = "against"
+
+
+class SleepPhase(StrEnum):
+    """Where a service is in the weekly sleep cycle (11B).
+
+    Lives here rather than beside the state machine in ``aureon.services.sleep_cycle``
+    because ``SystemState`` publishes it and models may not import services. The machine
+    that produces it, and the reasoning behind each value, are in that module.
+    """
+
+    #: Normal operation.
+    AWAKE = "awake"
+    #: Every symbol reads CLOSED, but the confirmation window has not elapsed.
+    CLOSING = "closing"
+    #: Confirmed closed. Loops parked, heartbeat slow, process alive.
+    ASLEEP = "asleep"
+    #: Still closed, but the open is imminent: loops run again so the open finds us ready.
+    WAKING = "waking"
+
+
 class SessionName(StrEnum):
     """Trading sessions (§18). Boundaries live in aureon/config/sessions.py."""
 

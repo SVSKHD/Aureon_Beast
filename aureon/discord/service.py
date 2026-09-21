@@ -45,6 +45,7 @@ from aureon.models.enums import (
     MarketState,
     OrderType,
     PriceAlertStatus,
+    SleepPhase,
     TradeRequestStatus,
 )
 from aureon.models.identity import new_alert_id
@@ -52,6 +53,7 @@ from aureon.models.market import QuoteSnapshot, SymbolInfo
 from aureon.models.settings import ExecutionSettings
 from aureon.models.system import DEFAULT_OFFLINE_AFTER_SECONDS, freshness_of
 from aureon.models.trade import TradeRequest
+from aureon.services.sleep_cycle import DEFAULT_SLEEP_HEARTBEAT_SECONDS
 
 log = logging.getLogger(__name__)
 
@@ -294,6 +296,66 @@ def for_symbol(items: Sequence[Any], symbol: str | None) -> list[Any]:
     return [item for item in items if str(getattr(item, "symbol", "")).upper() == wanted]
 
 
+@dataclass(frozen=True)
+class Cadences:
+    """How often the Discord process should beat and poll (11B)."""
+
+    heartbeat_seconds: float
+    poll_seconds: float
+
+
+def discord_cadences(
+    system_state: Any | None,
+    *,
+    awake_heartbeat: float,
+    awake_poll: float,
+    sleep_heartbeat: float,
+    sleep_poll: float,
+) -> Cadences:
+    """Slow down while the observer says the market is shut, speed up when it opens.
+
+    Discord is the one service that does not decide this for itself. It has no feed to
+    classify -- it may not call the broker (CLAUDE.md) -- so it follows the phase the
+    observer publishes. That also means it follows a *stale* phase if the observer dies
+    while asleep, which is the right failure: a Discord process beating every five minutes
+    over a weekend that has secretly ended is reported STALE by ``/status`` on its own
+    heartbeat age, and speeds back up on the first state write.
+
+    Pure, so the awkward part -- an absent or unparseable state document -- is a unit test
+    rather than a live weekend.
+    """
+    phase = getattr(system_state, "sleep_phase", None)
+    if phase in {SleepPhase.ASLEEP, SleepPhase.WAKING}:
+        return Cadences(heartbeat_seconds=sleep_heartbeat, poll_seconds=sleep_poll)
+    return Cadences(heartbeat_seconds=awake_heartbeat, poll_seconds=awake_poll)
+
+
+def weekend_notice(system_state: Any | None) -> str | None:
+    """Why an order cannot be placed right now, when the services are asleep (11B).
+
+    A **refusal**, where a merely-CLOSED symbol row is only a warning, and the difference is
+    the confirmation TTL. A stale feed or a symbol the broker has disabled on a Tuesday may
+    clear within the sixty seconds a confirmation lives, so the screen says so and lets the
+    human decide -- which is the posture every other gate on that screen takes. A confirmed
+    weekly close will not clear for forty-eight hours, so the only thing a confirmation
+    could do is expire: it would burn the human's confirm press, write a REQUESTED document
+    that becomes an EXPIRED one, and teach them that Aureon's screens do not mean anything.
+
+    Read from the observer's published phase, never computed: Discord may not call the
+    broker, and a second opinion about the weekly boundary is a second thing to be wrong.
+    """
+    phase = getattr(system_state, "sleep_phase", None)
+    if phase not in {SleepPhase.ASLEEP, SleepPhase.WAKING}:
+        return None
+    opens = getattr(system_state, "next_market_open", None)
+    when = f" It next opens {to_utc(opens):%a %d %b %H:%M} UTC." if opens else ""
+    return (
+        f"The market is closed — Aureon is asleep ({phase.value}).{when} A confirmation "
+        "lives for a minute, so this would expire rather than execute. `/remind` still "
+        "works, and so does `/monitor`."
+    )
+
+
 # ── /execute: the market-order shortcut (9A) ──────────────────────────────────
 
 
@@ -324,15 +386,16 @@ def plan_market_order(
     info: SymbolInfo | None,
     observed_symbols: Sequence[str],
     detection: Detection | None = None,
+    system_state: Any | None = None,
 ) -> MarketOrderPlan:
     """Every rule ``/execute`` applies before a confirmation screen exists.
 
     In this order, because each one makes the next one meaningful: the side has to parse,
     the symbol has to be one this deployment observes (otherwise there is no quote, no
-    spec and no detection history to put on the screen), the lot has to be legal for that
-    symbol, the symbol has to support a market filling mode at all (§39), and a named
-    detection has to be for the same symbol -- a link that misdescribes what was acted on
-    poisons every review built on it (§50).
+    spec and no detection history to put on the screen), the market has to be open, the lot
+    has to be legal for that symbol, the symbol has to support a market filling mode at all
+    (§39), and a named detection has to be for the same symbol -- a link that misdescribes
+    what was acted on poisons every review built on it (§50).
     """
     symbol = symbol.upper()
     kind = MARKET_SIDES.get(str(side).lower())
@@ -344,6 +407,10 @@ def plan_market_order(
     unobserved = unobserved_symbol_notice(symbol, observed_symbols)
     if unobserved:
         return MarketOrderPlan(False, unobserved)
+
+    shut = weekend_notice(system_state)
+    if shut:
+        return MarketOrderPlan(False, shut)
 
     check = validate_lot(lot, info, settings, symbol=symbol)
     if not check.ok:
@@ -1019,6 +1086,11 @@ class MonitorScreen:
     next_move: str = ""
     disagreement: str | None = None
     insufficient: str | None = None
+    #: Where the cohort's history came from, and whether it spans enough verified days
+    #: (11C, F-9). A line, not a badge: the difference between a rate measured on replayed
+    #: fixture bars and one measured on bars a broker served is the difference between a
+    #: statement about `gen_fixtures.py` and a statement about the market.
+    history: str | None = None
     footer: str = ""
 
 
@@ -1048,6 +1120,51 @@ def _cohort_line(assessment: Any) -> str:
     if wanted.wick_tag:
         parts.append(wanted.wick_tag.replace("has_", "").replace("_", " "))
     return f"n={assessment.n} · " + ", ".join(parts)
+
+
+def history_line(assessment: Any) -> str | None:
+    """One line about where this readout's history came from (11C, F-9).
+
+    ``None`` only for a wholly real cohort spanning enough verified days -- the case that
+    needs no caveat. Everything else gets one, and the wording separates the three states
+    that are easy to conflate:
+
+    * **synthetic** -- replayed fixture bars. A generated random walk has the distribution
+      its generator was given, so every rate on the screen is a statement about
+      `scripts/gen_fixtures.py`.
+    * **mixed** -- some of each, which is the worst of the three to read silently: the rate
+      is a weighted average of a real frequency and a generated one and nothing about it
+      looks unusual.
+    * **immature** -- real, but spanning fewer than ``MATURE_REAL_DAYS`` verified days. Two
+      hundred detections from one Tuesday are not two hundred independent observations.
+
+    ``UNKNOWN`` says so plainly rather than guessing. An assessment stored before this field
+    existed has no provenance recorded, and "we do not know" is the honest rendering.
+    """
+    from aureon.models.assessment import MATURE_REAL_DAYS
+    from aureon.models.enums import HistorySource
+
+    source = getattr(assessment, "history_source", HistorySource.UNKNOWN)
+    days = int(getattr(assessment, "real_days", 0) or 0)
+
+    if source is HistorySource.SYNTHETIC:
+        return (
+            "history: SYNTHETIC — every rate here is measured on replayed fixture bars, "
+            "so it describes the generator, not the market"
+        )
+    if source is HistorySource.MIXED:
+        return (
+            f"history: MIXED — {days} verified broker day(s) plus generated bars. Each "
+            "rate is a weighted average of a real frequency and a synthetic one"
+        )
+    if source is HistorySource.UNKNOWN:
+        return "history: not recorded for this readout — treat the rates as unverified"
+    if days < MATURE_REAL_DAYS:
+        return (
+            f"history: {days} verified broker day(s), fewer than {MATURE_REAL_DAYS} — "
+            "immature. A single quiet session moves every number above"
+        )
+    return None
 
 
 def build_monitor(assessment: Any, detection: Detection) -> MonitorScreen:
@@ -1080,6 +1197,8 @@ def build_monitor(assessment: Any, detection: Detection) -> MonitorScreen:
             name.replace("_", " ") for name in assessment.cohort_filter.dropped
         )
         screen.dropped = f"widened by dropping: {given_up}"
+
+    screen.history = history_line(assessment)
 
     if assessment.disagrees_with_detection:
         screen.disagreement = (
@@ -1454,6 +1573,12 @@ class StatusScreen:
     pending_requests: int = 0
     review_summary: str | None = None
     market_closed: bool = False
+    #: Where the observer said it was in the weekly cycle, and when the market next opens
+    #: (11B). READ, never computed: Discord may not call the broker (CLAUDE.md), so it has
+    #: no feed to classify and no business holding a second opinion about the weekly
+    #: boundary. The process with the terminal publishes both in ``system_state``.
+    sleep_phase: SleepPhase | None = None
+    next_market_open: datetime | None = None
     #: The symbol this screen was scoped to, or ``None`` for every observed symbol (9A).
     #: Stated rather than implied: with two symbols observed, a panel showing one of them
     #: and a count covering both would be read as one picture of one instrument.
@@ -1469,6 +1594,26 @@ class StatusScreen:
     #: a STALE screen has drifted -- 46 seconds and six hours read identically.
     updated_at: datetime | None = None
     age_seconds: float | None = None
+
+    @property
+    def asleep(self) -> bool:
+        return self.sleep_phase in {SleepPhase.ASLEEP, SleepPhase.WAKING}
+
+    @property
+    def closed_line(self) -> str | None:
+        """``closed — next open Sun 20 Sep 22:00 UTC``, or None while the market is open.
+
+        The next open is the whole point of the line. "Closed" on its own reads as a fault
+        to anybody who has not checked the calendar, and the first thing they would do about
+        it is restart something.
+        """
+        if not self.market_closed and not self.asleep:
+            return None
+        phase = (self.sleep_phase or SleepPhase.ASLEEP).value
+        if self.next_market_open is None:
+            return f"closed ({phase}) — next open unknown"
+        stamp = self.next_market_open.strftime("%a %d %b %H:%M")
+        return f"closed ({phase}) — next open {stamp} UTC"
 
     @property
     def updated_line(self) -> str:
@@ -1557,9 +1702,34 @@ def build_live_panel(state: Any) -> LivePanel:
         f"last wick {_event(state.last_wick, 'classification')} at "
         f"{_fmt_at((state.last_wick or {}).get('at'))}",
         f"detections today {state.detections_today}",
+        *_mtf_lines(state),
         *_context_lines(state, quote),
     ]
     return panel
+
+
+def _mtf_lines(state: Any) -> list[str]:
+    """The higher timeframes, one row, from the observer's published reads (11D).
+
+    Rendered whether or not the reads exist, like every other row here: a block that appeared
+    only when populated would change the panel's shape as data arrives.
+
+    A timeframe that was never read prints a dash rather than "sideways", because
+    "nobody computed H4" and "H4 was flat" are different facts and this panel is the place a
+    reader would otherwise conflate them. No alignment: alignment needs a direction, and this
+    panel describes a market rather than a signal.
+    """
+    from aureon.models.enums import Timeframe
+
+    mtf = getattr(state, "mtf", None)
+    shown = (Timeframe.M15, Timeframe.M30, Timeframe.H1, Timeframe.H4, Timeframe.D1)
+    if mtf is None:
+        return [f"higher tf {' '.join(f'{tf.value}:{UNKNOWN}' for tf in shown)}"]
+    cells = []
+    for timeframe in shown:
+        bias = mtf.bias_of(timeframe)
+        cells.append(f"{timeframe.value}:{UNKNOWN if bias is None else bias.value[:4]}")
+    return [f"higher tf {' '.join(cells)}"]
 
 
 def _context_lines(state: Any, quote: Any) -> list[str]:
@@ -1636,6 +1806,7 @@ def build_status(
     stale_after: float | None = None,
     symbol: str | None = None,
     now: datetime | None = None,
+    sleep_heartbeat_seconds: float = DEFAULT_SLEEP_HEARTBEAT_SECONDS,
 ) -> StatusScreen:
     """Assemble the status screen from Firestore reads only (§59).
 
@@ -1645,6 +1816,16 @@ def build_status(
     """
     moment = to_utc(now or utc_now())
     limit = stale_after if stale_after is not None else settings.status_stale_after_seconds
+
+    # 11B: the hang detector has to widen while the services are asleep, or every one of
+    # them reads STALE all weekend. Their heartbeats are five minutes apart by then and the
+    # awake threshold is forty-five seconds, so without this the first thing an operator
+    # sees on a Saturday is four dead services -- and a screen that cries wolf every weekend
+    # is a screen nobody reads on the Monday it is right. Twice the sleep cadence: one
+    # missed beat is a gap, two is a hang.
+    published_phase = getattr(system_state, "sleep_phase", None)
+    if published_phase in {SleepPhase.ASLEEP, SleepPhase.WAKING}:
+        limit = max(limit, 2 * sleep_heartbeat_seconds)
 
     services: list[ServiceStatus] = []
     for name in ("observer", "executor", "monitor", "discord"):
@@ -1679,6 +1860,11 @@ def build_status(
         if state is MarketState.CLOSED:
             market_closed = True
 
+    # A published ASLEEP is as good as a CLOSED symbol row, and better: the row is whatever
+    # the market-state service last said, and the phase is what the observer acted on.
+    if published_phase in {SleepPhase.ASLEEP, SleepPhase.WAKING}:
+        market_closed = True
+
     state_updated = getattr(system_state, "updated_at", None)
     screen = StatusScreen(
         updated_at=to_utc(state_updated) if state_updated else None,
@@ -1693,6 +1879,12 @@ def build_status(
         pending_requests=pending_requests,
         market_closed=market_closed,
         symbol=symbol.upper() if symbol else None,
+        sleep_phase=published_phase,
+        next_market_open=(
+            to_utc(getattr(system_state, "next_market_open", None))
+            if getattr(system_state, "next_market_open", None)
+            else None
+        ),
     )
 
     # §59 vs §61-§63: the two modes are mutually exclusive, deliberately.

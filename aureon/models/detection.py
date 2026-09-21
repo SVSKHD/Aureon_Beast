@@ -20,6 +20,7 @@ from pydantic import ConfigDict, Field
 
 from aureon.models.base import AureonDocument, AureonModel, MarketTime
 from aureon.models.enums import Direction, SessionName, Timeframe
+from aureon.models.mtf import MtfContext
 from aureon.models.profile import VolatilityContext, VolumeProfileRef
 
 
@@ -138,6 +139,15 @@ class Detection(AureonDocument):
     )
     volatility: VolatilityContext | None = Field(
         default=None, description="ATR and session range vs median at this close (9B)."
+    )
+    #: Where the higher timeframes stood at this close (11D). Same rules as the two above:
+    #: aggregated from M5 bars that had ALREADY closed, never recomputed, never a reason the
+    #: detection exists. ``None`` on a detection produced before 11D, or by a process with too
+    #: little history to seed an EMA above M5 -- which is not the same as "flat", and
+    #: ``MtfContext.bias_of`` returns ``None`` rather than SIDEWAYS for exactly that reason.
+    mtf: MtfContext | None = Field(
+        default=None,
+        description="Higher-timeframe reads and alignment at this close (11D).",
     )
 
     @property

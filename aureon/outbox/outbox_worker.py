@@ -61,12 +61,14 @@ class OutboxWorker:
 
     # ── One pass ──────────────────────────────────────────────────────────────
 
-    def drain_once(self) -> int:
+    def drain_once(self, *, respect_stop: bool = True) -> int:
         """Attempt one batch. Returns the number delivered.
 
         Stops the batch at the first failure rather than continuing: if Firestore is
         down, the remaining rows in this batch will fail too, and burning through
         them would inflate every row's attempt count for one outage.
+
+        ``respect_stop=False`` is for the deliberate final drain -- see ``flush``.
         """
         rows = self.outbox.pending(limit=self.batch_size)
         if not rows:
@@ -75,7 +77,7 @@ class OutboxWorker:
 
         delivered = 0
         for row in rows:
-            if self._stop.is_set():
+            if respect_stop and self._stop.is_set():
                 break
             if not self._deliver_row(row):
                 self._grow_backoff()
@@ -104,16 +106,25 @@ class OutboxWorker:
         self.delivered_total += 1
         return True
 
-    def flush(self, *, max_passes: int = 1000) -> int:
+    def flush(self, *, max_passes: int = 1000, final: bool = False) -> int:
         """Drain until empty or nothing more can be delivered.
 
-        Used at startup (§75) and at graceful shutdown, where waiting matters more
-        than returning quickly. Stops as soon as a pass delivers nothing, so a
-        persistent outage cannot spin here forever.
+        Used at startup (§75), at a market close (11B) and at graceful shutdown, where
+        waiting matters more than returning quickly. Stops as soon as a pass delivers
+        nothing, so a persistent outage cannot spin here forever.
+
+        ``final=True`` drains a worker whose thread has already been stopped, and exists
+        because the obvious spelling was silently a no-op. ``drain_once`` checks the stop
+        flag before every row so that ``stop()`` aborts a long batch promptly -- which
+        also meant that ``stop(); flush()``, the order the observer's shutdown has used
+        since Phase 2, delivered **zero** rows every time. The log line reporting how many
+        were delivered during shutdown could not fire, and the module docstring's promise
+        that "a clean stop leaves nothing queued" was false. A caller who has stopped the
+        thread and is now asking, synchronously, for the queue to be drained means it.
         """
         total = 0
         for _ in range(max_passes):
-            delivered = self.drain_once()
+            delivered = self.drain_once(respect_stop=not final)
             total += delivered
             if delivered == 0:
                 break

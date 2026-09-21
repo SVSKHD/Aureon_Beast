@@ -77,6 +77,11 @@ class LotModal(discord.ui.Modal):
         if self.detection_id:
             linked = await context.run(context.detections.get, self.detection_id)
 
+        # Read before planning: the plan refuses a closed market, and the published sleep
+        # phase is where that answer lives (11B).
+        state = await context.run(
+            context.system_state.read_symbol, self.symbol, context.config.timeframes[0]
+        )
         plan = plan_market_order(
             symbol=self.symbol,
             side=self.side,
@@ -86,6 +91,7 @@ class LotModal(discord.ui.Modal):
             info=spec,
             observed_symbols=context.config.symbols,
             detection=linked,
+            system_state=state,
         )
         if not plan.ok or plan.draft is None:
             await interaction.followup.send(
@@ -96,9 +102,6 @@ class LotModal(discord.ui.Modal):
             )
             return
 
-        state = await context.run(
-            context.system_state.read_symbol, self.symbol, context.config.timeframes[0]
-        )
         quote = quote_of(state, self.symbol)
         if quote is None:
             await interaction.followup.send(

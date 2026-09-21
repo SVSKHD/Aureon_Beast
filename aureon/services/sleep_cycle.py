@@ -59,13 +59,28 @@ cheapest thing in this file.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import StrEnum
 
 from aureon.models.base import to_utc
-from aureon.models.enums import MarketState
+from aureon.models.enums import MarketState, SleepPhase
 from aureon.services.market_state_service import WeeklySchedule
+
+__all__ = [
+    "DEFAULT_CLOSE_CONFIRM_SECONDS",
+    "DEFAULT_PREOPEN_SECONDS",
+    "DEFAULT_SLEEP_HEARTBEAT_SECONDS",
+    "DEFAULT_SLEEP_POLL_SECONDS",
+    "WAKE_ORDER",
+    "SleepCycle",
+    "SleepGate",
+    "SleepPhase",
+    "SleepTransition",
+]
+
+log = logging.getLogger(__name__)
 
 #: CLOSED must hold this long continuously before anything sleeps.
 DEFAULT_CLOSE_CONFIRM_SECONDS = 300.0
@@ -79,19 +94,6 @@ DEFAULT_SLEEP_HEARTBEAT_SECONDS = 300.0
 
 #: How often a sleeping service asks whether the market is open yet.
 DEFAULT_SLEEP_POLL_SECONDS = 60.0
-
-
-class SleepPhase(StrEnum):
-    """Where a service is in the weekly cycle."""
-
-    #: Normal operation.
-    AWAKE = "awake"
-    #: Every symbol reads CLOSED, but the confirmation window has not elapsed.
-    CLOSING = "closing"
-    #: Confirmed closed. Loops parked, heartbeat slow, process alive.
-    ASLEEP = "asleep"
-    #: Still closed, but the open is imminent: loops run again so the open finds us ready.
-    WAKING = "waking"
 
 
 @dataclass(frozen=True)
@@ -284,3 +286,79 @@ class SleepCycle:
 #: quotes the observer has already refreshed. Discord last of all: it is the operator's
 #: window, and it should not show "live" until the things behind it are.
 WAKE_ORDER: tuple[str, ...] = ("observer", "monitor", "executor", "discord")
+
+
+@dataclass
+class SleepGate:
+    """One service's sleep cycle, shaped for a poll loop.
+
+    Every service in the system runs the same loop -- ``while not stopped: poll_once();
+    wait(cadence)`` -- so the decision to park one is the same three steps in four places:
+    read the market states, feed the cycle, act on a crossing. Writing that three times
+    invites three slightly different versions of "what counts as closed", which is exactly
+    the drift that ``SleepCycle`` exists to prevent.
+
+    **Nothing here raises.** A sleep decision is an optimisation; a service that crashed
+    because it could not work out whether the market was open would be strictly worse than
+    one that stayed awake unnecessarily. So every callback and every read is guarded, and
+    every failure leaves the phase where it was -- which, from AWAKE, means awake.
+    """
+
+    cycle: SleepCycle
+    #: Every configured symbol's current state. Called once per poll.
+    states: Callable[[], dict[str, MarketState]]
+    #: The clock. A provider's, not the process's, wherever there is one to ask.
+    clock: Callable[[], datetime]
+    on_sleep: Callable[[SleepTransition], None] | None = None
+    on_wake: Callable[[SleepTransition], None] | None = None
+    #: Named in log lines, so four services parking at the same minute are distinguishable.
+    service: str = "service"
+
+    def tick(self) -> SleepTransition | None:
+        """Advance the cycle one poll. Call this FIRST in the loop body.
+
+        First, because a decision taken after the work could only park the loop from the
+        next iteration -- and at the open that costs a poll for no reason.
+        """
+        try:
+            states = self.states()
+            now = self.clock()
+        except Exception:  # noqa: BLE001 - see the class docstring
+            log.exception("%s: could not read the market state; staying as we are", self.service)
+            return None
+        try:
+            crossing = self.cycle.observe(states, now=now)
+        except Exception:  # noqa: BLE001
+            log.exception("%s: sleep cycle raised; staying as we are", self.service)
+            return None
+        if crossing is None:
+            return None
+        if crossing.slept:
+            log.info(
+                "%s: market closed, parking until %s", self.service, crossing.next_open
+            )
+            self._call(self.on_sleep, crossing)
+        else:
+            log.info("%s: market opening, resuming", self.service)
+            self._call(self.on_wake, crossing)
+        return crossing
+
+    def _call(
+        self, hook: Callable[[SleepTransition], None] | None, crossing: SleepTransition
+    ) -> None:
+        if hook is None:
+            return
+        try:
+            hook(crossing)
+        except Exception:  # noqa: BLE001
+            log.exception("%s: %s hook failed", self.service, crossing.kind)
+
+    @property
+    def parked(self) -> bool:
+        return self.cycle.parked
+
+    def pace(self, awake_cadence: float) -> float:
+        return self.cycle.poll_seconds(awake_cadence)
+
+    def heartbeat(self, awake_cadence: float) -> float:
+        return self.cycle.heartbeat_seconds(awake_cadence)

@@ -46,9 +46,14 @@ from discord import app_commands
 from aureon.discord.context import BotContext
 from aureon.discord.embeds import notice_embed
 from aureon.discord.notifier import Notifier
-from aureon.discord.service import NotAuthorized, authorize
+from aureon.discord.service import NotAuthorized, authorize, discord_cadences
 
 log = logging.getLogger(__name__)
+
+#: How often the bot re-reads the observer's published phase (11B). A minute: the thing it
+#: is watching for happens twice a week, and the cost of noticing it a minute late is one
+#: minute of the wrong cadence.
+FOLLOW_SECONDS = 60.0
 
 T = TypeVar("T")
 
@@ -93,6 +98,12 @@ class AureonBot(discord.Client):
         )
         self.notifier = Notifier(context, send=self.announce)
         self._notifier_task: asyncio.Task[None] | None = None
+        #: 11B. Optional: a bot without one behaves exactly as it did before, at the awake
+        #: cadence all week. Set by ``main_discord`` when there is a heartbeat to slow.
+        self.heartbeat: Any | None = None
+        self._follow_task: asyncio.Task[None] | None = None
+        #: The awake cadences, captured before anything slows them down.
+        self._awake_poll = self.notifier.poll_seconds
 
     async def setup_hook(self) -> None:
         """Register commands, scoped to the configured guild (§71).
@@ -123,6 +134,9 @@ class AureonBot(discord.Client):
         elif self._notifier_task is None:
             self._notifier_task = asyncio.create_task(self._announce_forever())
 
+        if self._follow_task is None:
+            self._follow_task = asyncio.create_task(self._follow_the_market())
+
     async def _announce_forever(self) -> None:
         """One task for the life of the process, started once.
 
@@ -135,6 +149,44 @@ class AureonBot(discord.Client):
             "announcing detections in channel %s", self.context.config.alert_channel_id
         )
         await self.notifier.run()
+
+    async def _follow_the_market(self) -> None:
+        """Slow this process down while the observer says the market is shut (11B).
+
+        One state read a minute, and that is the whole cost. Discord does not decide whether
+        the market is open -- it has no feed and may not call the broker -- so it follows
+        the phase the observer publishes, which is also what ``/status`` and ``/execute``
+        read. One source, one answer.
+
+        A read failure is skipped rather than acted on: the cadences it would fall back to
+        are the awake ones, and resetting them on every hiccup would undo the slowdown
+        repeatedly over a weekend for no reason.
+        """
+        context = self.context
+        config = context.config
+        while not self.is_closed():
+            try:
+                state = await context.run(
+                    context.system_state.read_symbol,
+                    config.symbols[0],
+                    config.timeframes[0],
+                )
+                cadences = discord_cadences(
+                    state,
+                    awake_heartbeat=config.state_heartbeat_seconds,
+                    awake_poll=self._awake_poll,
+                    sleep_heartbeat=config.sleep_heartbeat_seconds,
+                    sleep_poll=config.sleep_poll_seconds,
+                )
+                self.notifier.poll_seconds = cadences.poll_seconds
+                if self.heartbeat is not None:
+                    self.heartbeat.set_interval(cadences.heartbeat_seconds)
+            except Exception:  # noqa: BLE001 - following the market must not kill the bot
+                log.exception("could not follow the market's phase")
+            try:
+                await asyncio.sleep(FOLLOW_SECONDS)
+            except asyncio.CancelledError:
+                return
 
     async def announce(
         self,
@@ -163,6 +215,8 @@ class AureonBot(discord.Client):
         self.notifier.stop()
         if self._notifier_task is not None:
             self._notifier_task.cancel()
+        if self._follow_task is not None:
+            self._follow_task.cancel()
         await super().close()
 
     async def on_ready(self) -> None:  # pragma: no cover - requires a gateway

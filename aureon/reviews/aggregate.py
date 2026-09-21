@@ -341,6 +341,10 @@ def _assessment_fields(data: PeriodData) -> dict[str, object]:
         "assessment_hit_by_cohort": {
             key: f"{hit}/{resolved}" for key, (hit, resolved) in sorted(scores.by_cohort.items())
         },
+        "assessment_hit_by_source": {
+            key: f"{hit}/{resolved}"
+            for key, (hit, resolved) in sorted(scores.by_source.items())
+        },
     }
 
 

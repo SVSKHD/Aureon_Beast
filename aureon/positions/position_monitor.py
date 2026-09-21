@@ -107,6 +107,9 @@ class PositionMonitor:
         market_tz: str = "Etc/UTC",
         point: float = 0.01,
         poll_seconds: float = DEFAULT_POLL_SECONDS,
+        before_poll: object | None = None,
+        parked: object | None = None,
+        pace: object | None = None,
         deal_overlap_seconds: float = DEAL_OVERLAP_SECONDS,
     ) -> None:
         self.trades = trades
@@ -117,6 +120,16 @@ class PositionMonitor:
         self.market_tz = market_tz
         self.point = point
         self.poll_seconds = poll_seconds
+        #: Called first in every loop iteration (11B): the monitor's sleep decision.
+        self.before_poll = before_poll
+        #: Whether to skip this poll entirely (11B). Unlike the executor, the monitor IS
+        #: parked: every number it records comes from a quote, and a closed market has no
+        #: new quotes -- polling one would rewrite the same excursions with the same prices
+        #: for forty-eight hours. The one full reconciliation at the close is what makes
+        #: that safe, and it runs from the sleep hook rather than from here.
+        self.parked = parked
+        #: Given the awake cadence, the wait before the next iteration (11B).
+        self.pace = pace
         self.deal_overlap_seconds = deal_overlap_seconds
 
         #: symbol -> tick, from the broker's own spec. Cached: it does not change within a
@@ -536,11 +549,37 @@ class PositionMonitor:
         executor, not the recording of positions that are already live.
         """
         while not self._stop.is_set():
-            try:
-                self.poll_once()
-            except Exception:  # noqa: BLE001 - a poll failure must not kill the monitor
-                log.exception("monitor poll failed")
-            self._stop.wait(self.poll_seconds)
+            if self.before_poll is not None:
+                try:
+                    self.before_poll()  # type: ignore[operator]
+                except Exception:  # noqa: BLE001 - a side errand must not stop monitoring
+                    log.exception("monitor before_poll failed")
+            if not self.is_parked:
+                try:
+                    self.poll_once()
+                except Exception:  # noqa: BLE001 - a poll failure must not kill the monitor
+                    log.exception("monitor poll failed")
+            self._stop.wait(self._wait())
+
+    @property
+    def is_parked(self) -> bool:
+        """Fails toward polling: a hook that raises leaves the monitor watching (11B)."""
+        if self.parked is None:
+            return False
+        try:
+            return bool(self.parked())  # type: ignore[operator]
+        except Exception:  # noqa: BLE001
+            log.exception("monitor parked hook failed; staying awake")
+            return False
+
+    def _wait(self) -> float:
+        if self.pace is None:
+            return self.poll_seconds
+        try:
+            return float(self.pace(self.poll_seconds))  # type: ignore[operator]
+        except Exception:  # noqa: BLE001
+            log.exception("monitor pace hook failed; using the awake cadence")
+            return self.poll_seconds
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self.run, name="position-monitor", daemon=True)

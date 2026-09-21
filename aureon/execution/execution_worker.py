@@ -72,6 +72,8 @@ class ExecutionWorker:
         poll_seconds: float = DEFAULT_POLL_SECONDS,
         allow_live_execution: bool = False,
         on_ops_event: object | None = None,
+        before_poll: object | None = None,
+        pace: object | None = None,
     ) -> None:
         self.repository = repository
         self.broker = broker
@@ -88,6 +90,16 @@ class ExecutionWorker:
         self.allow_live_execution = allow_live_execution
         #: Optional ``callable(name, detail)`` for the ops channel (11A F-15).
         self.on_ops_event = on_ops_event
+        #: Called first in every loop iteration (11B). The executor's sleep decision lives
+        #: here, and note what is NOT here: there is no ``parked``. A closed market slows
+        #: this loop down; it does not stop it. A human who confirms a trade on a Saturday
+        #: is owed a refusal that says "market closed", not silence until Sunday night --
+        #: and the refusal is the guard's, on this process's own broker, already.
+        self.before_poll = before_poll
+        #: Given the awake cadence, the wait before the next iteration (11B). Safe to slow
+        #: right down because the snapshot listener, not the poll, is what makes a CONFIRMED
+        #: request prompt; the poll is the fallback for a listener that could not start.
+        self.pace = pace
         #: Set by ``announce_account_mode`` when the terminal turns out to be real money
         #: and nobody said that was intended. Reconcile-only: startup reconciliation runs
         #: as usual, and every request is refused before the broker is touched.
@@ -441,11 +453,26 @@ class ExecutionWorker:
 
     def run(self) -> None:
         while not self._stop.is_set():
+            if self.before_poll is not None:
+                try:
+                    self.before_poll()  # type: ignore[operator]
+                except Exception:  # noqa: BLE001 - a side errand must not stop executing
+                    log.exception("executor before_poll failed")
             try:
                 self.poll_once()
             except Exception:  # noqa: BLE001 - a poll failure must not kill the executor
                 log.exception("executor poll failed")
-            self._stop.wait(self.poll_seconds)
+            self._stop.wait(self._wait())
+
+    def _wait(self) -> float:
+        """This iteration's cadence, asked for each time round (11B)."""
+        if self.pace is None:
+            return self.poll_seconds
+        try:
+            return float(self.pace(self.poll_seconds))  # type: ignore[operator]
+        except Exception:  # noqa: BLE001
+            log.exception("executor pace hook failed; using the awake cadence")
+            return self.poll_seconds
 
     def start(self) -> None:
         self.start_listener()

@@ -29,6 +29,10 @@ correction lands that a doc might still contradict.
 | exchange volume | Aureon has never had exchange volume and cannot get it from MT5's M5 candles. | tick volume (MT5) |
 | `weekday in (5, 6)` | 11B drives sleep/wake from `MarketStateService`, never from a weekday. A holiday is not a weekend and a Friday close is not midnight. | market state CLOSED, confirmed over `AUREON_CLOSE_CONFIRM_SECONDS` |
 | `is_demo` | Never a field on `AccountInfo`; the `getattr` that read it was dead code for the whole of its life (decision 208). | `account.mode is AccountMode.DEMO` |
+| restarted at the open | 11B: nothing restarts. The processes stay up and wake themselves, because a restart is the one moment a stateful service loses its cursor, its lease or its queue. | wakes itself before the open |
+| services are stopped at the close | 11B: they park their loops and slow their heartbeats. A stopped service and a sleeping one look identical to an operator and only one of them is fine. | parks its loops |
+| fetches the H1 | 11D: every timeframe above M5 is AGGREGATED from the M5 stream, so a claim that one is fetched describes a design this repository rejected for parity (§82). | aggregates the H1 from closed M5 |
+| M1 in Firestore | Tick-scale data never goes to Firestore (CLAUDE.md). The M1 archive is parquet, and 11D's day cache deliberately stores M5/M15/H1 only. | the M1 parquet archive |
 
 Phrases are matched case-insensitively as substrings, so keep them specific enough not to fire
 on prose that happens to contain the words. A row that starts producing false positives should

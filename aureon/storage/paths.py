@@ -83,6 +83,10 @@ ASSESSMENTS = collection("assessments")
 TRADE_NOTES = collection("trade_notes")
 # 11A F-15: named operational conditions, and whether each is currently true.
 OPS_EVENTS = collection("ops_events")
+# 11D: one broker day's shape, and the bars it was made of. M1 is NOT here -- it lives in
+# parquet, because tick-scale data never goes to Firestore (CLAUDE.md).
+MARKET_DAYS = collection("market_days")
+MARKET_DAY_FRAMES = collection("market_day_frames")
 
 def _all_collections() -> tuple[str, ...]:
     """Every prefixed collection constant in this module, found rather than listed (11A, F-10).
@@ -199,6 +203,30 @@ def system_state_doc_id(symbol: str, timeframe: object) -> str:
     """
     frame = getattr(timeframe, "value", timeframe)
     return f"{_require(symbol, 'symbol')}_{_require(str(frame), 'timeframe')}"
+
+
+def market_day_doc_id(symbol: str, market_date: str) -> str:
+    """``{SYMBOL}_{market_date}`` -- the BROKER date (11D).
+
+    Symbol first so a prefix scan reads as one instrument's history rather than as one day's
+    instruments: "every day of gold" is the question a tuning report and a review both ask,
+    and "every instrument on Tuesday" is not a question anything asks.
+    """
+    return f"{symbol.upper()}_{market_date}"
+
+
+def market_day_path(symbol: str, market_date: str) -> str:
+    return f"{MARKET_DAYS}/{market_day_doc_id(symbol, market_date)}"
+
+
+def market_day_frame_doc_id(symbol: str, market_date: str, timeframe: object) -> str:
+    """``{SYMBOL}_{market_date}_{TIMEFRAME}`` (11D)."""
+    name = getattr(timeframe, "value", timeframe)
+    return f"{market_day_doc_id(symbol, market_date)}_{name}"
+
+
+def market_day_frame_path(symbol: str, market_date: str, timeframe: object) -> str:
+    return f"{MARKET_DAY_FRAMES}/{market_day_frame_doc_id(symbol, market_date, timeframe)}"
 
 
 def system_state_path(symbol: str, timeframe: object) -> str:

@@ -42,6 +42,27 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 PHASES = REPO_ROOT / "docs" / "PHASES.md"
+
+
+def _observed_symbols() -> tuple[str, ...]:
+    """Every symbol the PROJECT supports, from the reviewed tuning table (11C, F-1).
+
+    Deliberately not ``AureonConfig.from_env().symbols``, which was the first version and was
+    wrong in a way worth recording: ``AUREON_SYMBOLS`` defaults to gold alone, so running this
+    script on a box that had not exported it produced a Phase 2 gate demanding one verified
+    session -- the evidence bar relaxing itself to match whoever happened to run the tool.
+    An evidence gate is a claim about the project, so it reads a committed source.
+
+    ``known_symbols()`` is that source: a symbol has a reviewed tuning entry only because
+    somebody chose its thresholds in that instrument's own money (decision 141), which is
+    exactly the population for which a gold session proves nothing about silver.
+    """
+    from aureon.config.symbol_tuning import known_symbols
+
+    return known_symbols()
+
+
+OBSERVED_SYMBOLS = _observed_symbols()
 EVIDENCE_HEADER = "Evidence"
 PRESENT = "✅"
 ABSENT = "⬜"
@@ -60,21 +81,53 @@ class Artefact:
     produced_by: str | None = None
     #: Rendered without a link (a directory of guards rather than a document).
     link: bool = True
+    #: When set, the artefact needs one matching file **per symbol**, and ``path`` carries
+    #: a ``{symbol}`` placeholder (11C, F-1).
+    #:
+    #: The reason this exists: Phase 2's "verified real session" globbed
+    #: ``evidence/session_*.md``, so ONE green file turned the column green -- and with two
+    #: instruments observed, a verified gold session would have reported Phase 2 complete
+    #: while silver had never been run at all. Thresholds are in points, and points are
+    #: different money per instrument (decision 141); a parity claim about gold says nothing
+    #: about silver. So every configured symbol has to have its own verified session, and
+    #: the cell names the ones that do not.
+    per_symbol: tuple[str, ...] = ()
 
-    def matches(self, root: Path) -> list[Path]:
-        if any(ch in self.path for ch in "*?["):
-            return sorted(root.glob(self.path))
-        candidate = root / self.path
+    def matches(self, root: Path, path: str | None = None) -> list[Path]:
+        pattern = path or self.path
+        if any(ch in pattern for ch in "*?["):
+            return sorted(root.glob(pattern))
+        candidate = root / pattern
         return [candidate] if candidate.exists() else []
 
-    def present(self, root: Path) -> tuple[bool, list[Path]]:
-        found = [
-            path
-            for path in self.matches(root)
+    def _qualifying(self, root: Path, path: str | None = None) -> list[Path]:
+        return [
+            found
+            for found in self.matches(root, path)
             if self.must_contain is None
-            or self.must_contain in path.read_text(encoding="utf-8")
+            or self.must_contain in found.read_text(encoding="utf-8")
         ]
-        return bool(found), found
+
+    def missing_symbols(self, root: Path) -> tuple[str, ...]:
+        """Which symbols have no qualifying file. Empty for a non-per-symbol artefact."""
+        return tuple(
+            symbol
+            for symbol in self.per_symbol
+            if not self._qualifying(root, self.path.format(symbol=symbol))
+        )
+
+    def present(self, root: Path) -> tuple[bool, list[Path]]:
+        if self.per_symbol:
+            if self.missing_symbols(root):
+                # Deliberately no partial credit: a column that went green on one of two
+                # instruments is the failure this field exists to prevent.
+                return False, []
+            found: list[Path] = []
+            for symbol in self.per_symbol:
+                found.extend(self._qualifying(root, self.path.format(symbol=symbol)))
+            return True, found
+        qualifying = self._qualifying(root)
+        return bool(qualifying), qualifying
 
 
 @dataclass(frozen=True)
@@ -122,9 +175,13 @@ CATALOGUE: tuple[PhaseEvidence, ...] = (
             ),
             Artefact(
                 label="verified real session",
-                path="evidence/session_*.md",
+                path="evidence/session_*_{symbol}.md",
                 must_contain="SESSION VERIFIED",
-                produced_by="scripts/session_run.py, then scripts/session_verify.py",
+                produced_by=(
+                    "scripts/session_run.py --symbol X, then "
+                    "scripts/session_verify.py --symbol X, for each symbol"
+                ),
+                per_symbol=OBSERVED_SYMBOLS,
             ),
         ),
     ),
@@ -222,6 +279,33 @@ CATALOGUE: tuple[PhaseEvidence, ...] = (
         ),
     ),
     PhaseEvidence(
+        "11A",
+        None,
+        (
+            Artefact(
+                label="ops register",
+                path="aureon/services/ops_events.py",
+                must_contain="live_account_detected",
+            ),
+            Artefact(
+                label="the frozen spec",
+                path="docs/ARCHITECTURE.md",
+                produced_by="supplied by the operator; see docs/DOCS_CHECK.md",
+            ),
+        ),
+    ),
+    PhaseEvidence(
+        "11B",
+        None,
+        (
+            Artefact(
+                label="weekend cycle checks",
+                path="tests/failure_injection/test_weekend_cycle.py",
+                link=False,
+            ),
+        ),
+    ),
+    PhaseEvidence(
         "—",
         "Corrections slice",
         (
@@ -258,6 +342,11 @@ def render_cell(entry: PhaseEvidence, *, root: Path, docs: Path) -> str:
         present, found = artefact.present(base)
         if not present:
             missing = f"{ABSENT} missing: {artefact.label}"
+            absent = artefact.missing_symbols(base)
+            if absent:
+                # Named, because "missing: verified real session" over two instruments does
+                # not say which one still has to be run.
+                missing += f" for {', '.join(absent)}"
             if artefact.produced_by:
                 missing += f" (`{artefact.produced_by}`)"
             parts.append(missing)
@@ -283,8 +372,17 @@ def render_cell(entry: PhaseEvidence, *, root: Path, docs: Path) -> str:
 
 
 def _relative(path: Path, docs: Path) -> str:
-    """A link relative to docs/, since PHASES.md lives there."""
-    return path.relative_to(docs).as_posix()
+    """A link relative to docs/, since PHASES.md lives there.
+
+    An artefact OUTSIDE docs/ -- a module or a test file -- is linked from the repository
+    root with ``../``, rather than crashing. The alternative, which the first 11A entry hit,
+    is a tool that can only cite documents; and "the code that does this exists" is a
+    perfectly good piece of evidence for a phase whose gate is a behaviour.
+    """
+    try:
+        return path.relative_to(docs).as_posix()
+    except ValueError:
+        return "../" + path.relative_to(docs.parent).as_posix()
 
 
 def _split_row(line: str) -> list[str]:

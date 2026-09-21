@@ -68,6 +68,9 @@ async def run(config: AureonConfig) -> None:
         detail_provider=lambda: {"guild": config.discord_guild_id},
     )
     heartbeat.start()
+    # 11B: handed to the bot so its market-follower task can slow it down at the close.
+    # The bot does not build it -- one owner for the thread that has to be stopped.
+    bot.heartbeat = heartbeat
     try:
         await bot.start(config.discord_token or "")
     finally:

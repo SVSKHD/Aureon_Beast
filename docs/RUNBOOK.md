@@ -100,6 +100,168 @@ dates and both ends are inclusive.
 deliberately, because after the close those numbers are a snapshot of whenever the market
 shut, and rendering them in a live layout invites reading them as current.
 
+Since 11B there is a fourth way to run these, and it is the one to prefer:
+
+    python main_review.py watch
+
+It stays up and generates the week's last daily and every symbol's weekly **at the close**,
+on the market's word rather than a cron line's. A cron line holding a UTC time is a fourth
+opinion about when the week ends, and it cannot notice a broker that closed early for a
+holiday or stayed open late after an outage. A closure that is *not* the week's end sleeps
+the watcher and generates nothing: a "weekly review" of three days would be published with
+the same field names as a real one, and nothing downstream could tell them apart.
+
+## The weekend: what the services do when nothing is open
+
+Nobody has to stop or start anything at the close. The four processes stay up, park what
+they cannot usefully do, and bring themselves back before the open.
+
+    AUREON_CLOSE_CONFIRM_SECONDS=300     # CLOSED must hold this long, on every symbol
+    AUREON_PREOPEN_SECONDS=900           # how early they wake
+    AUREON_SLEEP_HEARTBEAT_SECONDS=300   # heartbeat cadence while asleep
+    AUREON_SLEEP_POLL_SECONDS=60         # how often a sleeping service asks
+
+What each one does is different, and the differences are deliberate:
+
+| service | at the close | while asleep |
+|---------|--------------|--------------|
+| observer | drains the outbox, flushes the candle archive, saves the cursor | stops polling candles and answering alerts; keeps the terminal connected |
+| executor | nothing | **keeps serving requests**, slowly. A trade confirmed on a Saturday is refused with `MARKET_CLOSED`, not left waiting |
+| monitor | one full reconciliation | stops polling: every number it records comes from a quote |
+| review | the week's last daily and every symbol's weekly | waits |
+| Discord | — | slows its heartbeat and its announcement sweep; `/status` says "closed — next open …"; `/execute` is refused; `/remind` still arms |
+
+Three things to expect, so none of them reads as a fault:
+
+* **`/status` on a Saturday shows every service LIVE**, not STALE, even though they are
+  beating once every five minutes. The freshness threshold widens to twice the sleep cadence
+  while the services are asleep. Two missed sleep beats is still reported, so a process that
+  really died over the weekend still shows up.
+* **`/execute` is refused outright**, where a merely stale feed is only a warning. A
+  confirmation lives for a minute and the market will not open for two days, so the only
+  thing it could do is expire.
+* **a bar straddling the close is thrown away**, with a WARNING naming it. Its open is the
+  last price before the weekend and its close the first price after, so its range is the
+  weekend gap; a cross found in it would be a two-day move that involved no trading.
+
+Only CLOSED sleeps anything. A STALE feed inside trading hours, or a provider that cannot
+say what a symbol is, keeps everything awake and the heartbeats fast — those are faults, and
+they are exactly when the system must stay loud. One symbol closing is not the market
+closing: every configured symbol has to read CLOSED, or the observer would stop watching
+gold because silver was disabled.
+
+If you need a service to behave as it did before 11B, set `AUREON_CLOSE_CONFIRM_SECONDS` to
+something longer than a weekend. Nothing will ever confirm a close, and everything stays
+awake.
+
+## Higher timeframes, and where they come from
+
+The observer polls **one** stream per symbol: M5. M15, M30, H1, H4 and D1 are aggregated from
+those bars — no second poll loop, no extra broker call, no second cursor. Parity is the reason:
+replay feeds the same engine the same M5 bars, so an H1 bias derived from them is reproducible
+from the archive, where a broker's own H1 is its own aggregation and a difference between the
+two would be indistinguishable from a bug in either.
+
+A higher bar exists only when **every M5 bar inside it has closed, with none missing**. An hour
+holding eleven of its twelve bars has a high that may still be exceeded and a close that is not
+the close, so it is simply absent — the same rule the M5 grace period applies, one level up. A
+daily bar is complete when a bar from the NEXT broker day arrives, because there is no fixed bar
+count for a day and a holiday makes any number wrong.
+
+Every detection now carries `mtf`: one read per timeframe (the EMA pair, the close and the
+bias) plus an `alignment` of `aligned` / `mixed` / `against`. Three things to know when reading
+it:
+
+* **nothing gates on it.** No agent reads it, no guard refuses a trade because H4 disagrees.
+  Whether alignment predicts anything is a question for the evaluation rules, and
+  `scripts/report_outcomes.py` is where it will be answered.
+* **`mtf` being absent is not "flat".** A detection with no context came from a process with too
+  little history; a timeframe that was read and had no view records `sideways`. `mixed` covers
+  both "some agree and some do not" and "nobody has a view" — a sideways timeframe is an
+  absence of evidence, and counting it as agreement would make `aligned` mean "we could not
+  tell".
+* **the agent versions moved.** ema_cross is 2.2.0 and the other five are 1.2.0, because a
+  detection carrying the context and one without it would otherwise sit at the same
+  `detection_id` — indistinguishable and incomparable.
+
+    AUREON_MTF_M5_BARS=2880   # ten 24-hour days; enough for an H4 EMA(50). 0 disables it
+
+That buffer is deliberately separate from the analysis window, which is a **correctness**
+parameter fixed at the hungriest agent's requirement: widening it to reach H4 would silently
+change every agent's detections.
+
+D1 needs fifty trading days, which no live buffer will hold. That is what the day cache is for.
+
+## The broker-day cache
+
+At each day rollover the observer writes two documents per symbol:
+
+* `{prefix}_market_days/{SYMBOL}_{date}` — the day's open, high, low, close, bar count and tick
+  count. One small read for "what did Tuesday do".
+* `{prefix}_market_day_frames/{SYMBOL}_{date}_{M5|M15|H1}` — the bars, so a process with no
+  broker connection can rebuild a chart or a multi-week H4 bias.
+
+M30, H4 and D1 are **not** cached: each is derivable from the stored M5 or H1, and a second
+stored copy is a second thing that can disagree with the first. M1 is not cached either — tick
+data never goes to Firestore, and the M1 archive is parquet, where it is read for exactly one
+job (rebuilding a position's excursions for a stretch the monitor was down).
+
+Two things to expect:
+
+* **the day in progress is not stored.** Only finished days. A document flagged incomplete is
+  one mistake away from an aggregation reading it as finished, which produces a daily bar whose
+  close is not the close. Use the parquet archive for a live view.
+* **a truncated frame says so.** The bar list is capped at 600 and sets `truncated`; the day's
+  first bars are kept. Hitting the cap means the aggregation is wrong, not that the market was
+  busy.
+
+## Choosing a threshold, and why no tool applies one
+
+    python scripts/tune_report.py --symbol XAGUSD --days 10
+
+Writes `docs/TUNING_{SYMBOL}.md`: one section per threshold, each with the distribution of
+the quantity the agent compares against it and a table of candidate values against how many
+bars each would admit. Read it for the two extremes rather than for a recommendation — a
+value above every observed measure produces no detections and looks exactly like a quiet
+market, and one below the first quartile produces a detection on most bars and looks exactly
+like a busy one. Neither is visible from the detections.
+
+It reads the parquet archive the observer writes, so it needs a recorded session and refuses
+without one. `--fixture` reads the generated fixture instead and stamps **SYNTHETIC** on
+every page: a random walk has the distribution its generator was given, so a threshold
+chosen from one is a threshold chosen from `scripts/gen_fixtures.py`.
+
+**There is no `--apply`, and there will not be.** Changing a threshold is an `agent_version`
+bump: edit `OVERRIDES` in `aureon/config/symbol_tuning.py` and bump the agent's version in
+the same commit. Without the bump the detections from before and after sit at ids produced by
+the same version — indistinguishable and incomparable — and the whole point of D-1 putting
+`agent_version` back into `detection_id` was to make a retune safe to do and safe to undo.
+
+The first thing the tool said, on gold: `min_range_points = 20` admits about 99% of
+five-minute bars. As a filter it does almost nothing.
+
+## Reading a `/monitor` history line
+
+Since 11C every stored readout records where its cohort came from, and the screen says so
+above the numbers whenever it is anything other than a mature real one:
+
+| line | what it means |
+|------|---------------|
+| (nothing) | real bars, ten or more verified broker days. The only case that is evidence about the instrument |
+| `history: SYNTHETIC` | replayed fixture bars. Every rate describes `gen_fixtures.py` |
+| `history: MIXED` | some of each. The rate is a weighted average of a real frequency and a generated one |
+| `history: N verified broker day(s) … immature` | real, but too few days. Two hundred detections from one Tuesday are not two hundred independent observations |
+| `history: not recorded` | written before the field existed. Treat the rates as unverified |
+
+"Verified" means a `docs/evidence/session_{date}_{SYMBOL}.md` containing `SESSION VERIFIED`
+— written by `scripts/session_verify.py` after six checks against a real terminal. A replay
+writes detections into the same collection a live session does, so the evidence file is the
+only thing that can tell the two apart. **Today this repository has none**, so every cohort
+it can build is synthetic and every `/monitor` screen says so.
+
+The weekly review keeps its single `assessment_hit_rate` and adds `assessment_hit_by_source`
+beside it. Read the split before quoting the rate.
+
 ## Enabling execution
 
 Read `docs/DEMO_EXECUTION_CHECKLIST.md` first, in full, and run the drills:

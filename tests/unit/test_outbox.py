@@ -333,3 +333,60 @@ def test_both_symbols_share_one_queue_without_colliding(
     symbols = [str(row["symbol"]) for row in delivered]
     assert symbols.count("XAUUSD") == 30
     assert symbols.count("XAGUSD") == 30
+
+
+# ── 11B: the shutdown flush that delivered nothing ───────────────────────────
+
+
+def test_a_stopped_worker_flushes_nothing_unless_the_flush_is_final(
+    outbox: LocalOutbox, detections: list[Detection]
+) -> None:
+    """The flaw, pinned from both sides.
+
+    ``drain_once`` checks the stop flag before every row so that ``stop()`` aborts a long
+    batch promptly. The consequence nobody noticed: ``stop(); flush()`` -- the order the
+    observer's shutdown has used since Phase 2 -- delivered **zero** rows, every time. The
+    "delivered N during shutdown" log line could not fire, and the module docstring's
+    promise that a clean stop leaves nothing queued was false.
+
+    Both halves are asserted, because fixing it by simply dropping the check would remove
+    the abort that makes a stop prompt.
+    """
+    queued = outbox.enqueue_many(detections[:5])
+    assert queued == 5
+
+    delivered: list[dict[str, object]] = []
+    worker = OutboxWorker(outbox, delivered.append, initial_backoff=0.001)
+    worker.stop()
+
+    assert worker.flush() == 0, "a stopped worker still refuses an ordinary flush"
+    assert outbox.pending_count() == 5
+
+    assert worker.flush(final=True) == 5
+    assert outbox.pending_count() == 0
+    assert len(delivered) == 5
+
+
+def test_a_final_flush_still_stops_at_a_failing_row(
+    outbox: LocalOutbox, detections: list[Detection]
+) -> None:
+    """``final`` waives the stop flag and nothing else.
+
+    The assertion that matters is the ATTEMPT COUNT, not the pending count. A first draft
+    checked only that nothing was delivered and that five rows were still queued -- and both
+    of those hold just as well for a worker that hammered all five rows against a dead
+    Firestore, which is the behaviour the batch-stops-at-the-first-failure rule exists to
+    prevent. Planting ``continue`` for ``return`` proved the test vacuous.
+    """
+    outbox.enqueue_many(detections[:5])
+    attempts: list[object] = []
+
+    def refuse(payload: dict[str, object]) -> None:
+        attempts.append(payload)
+        raise ConnectionError("Firestore is unreachable")
+
+    worker = OutboxWorker(outbox, refuse, initial_backoff=0.001)
+    worker.stop()
+    assert worker.flush(final=True) == 0
+    assert outbox.pending_count() == 5
+    assert len(attempts) == 1, "one outage must not cost five rows an attempt each"

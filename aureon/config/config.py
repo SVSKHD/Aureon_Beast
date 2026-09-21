@@ -151,6 +151,16 @@ class AureonConfig(AureonModel):
     #: How often a sleeping service asks whether the market is open yet.
     sleep_poll_seconds: float = 60.0
 
+    # ── Higher timeframes (11D) ───────────────────────────────────────────────
+    #: How many M5 bars the engine keeps for aggregating M15…D1. SEPARATE from the analysis
+    #: window, which is a correctness parameter fixed at the hungriest agent's requirement --
+    #: widening that to reach H4 would silently rewrite every agent's history.
+    #:
+    #: 2880 is ten 24-hour days, which covers an H4 EMA(50) (200 hours) with room to spare. D1
+    #: needs fifty trading days and will not be reachable from a live buffer at any sane size;
+    #: that is what the ``market_day_frames`` cache is for. Zero disables the context entirely.
+    mtf_m5_bars: int = 2880
+
     # ── Evaluation (§84) ──────────────────────────────────────────────────────
     #: The rule for a SINGLE-symbol deployment, and the historical name of this
     #: setting. With more than one symbol it is not enough -- see evaluation_rules.
@@ -303,6 +313,7 @@ class AureonConfig(AureonModel):
             preopen_seconds=_env_float("AUREON_PREOPEN_SECONDS", 900.0),
             sleep_heartbeat_seconds=_env_float("AUREON_SLEEP_HEARTBEAT_SECONDS", 300.0),
             sleep_poll_seconds=_env_float("AUREON_SLEEP_POLL_SECONDS", 60.0),
+            mtf_m5_bars=_env_int("AUREON_MTF_M5_BARS", 2880),
             # AUREON_EVAL_RULE is the current name. The older
             # AUREON_EVALUATION_RULE_ID still wins when set, so an existing .env
             # pinning EMA_OUTCOME_V1 keeps getting V1 rather than silently switching

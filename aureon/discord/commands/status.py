@@ -107,6 +107,9 @@ class StatusCommands:
             latest_review=latest,
             latest_reviews=reviews,
             symbol=symbol,
+            # 11B: so the freshness thresholds widen while the services are asleep rather
+            # than reporting four dead services every weekend.
+            sleep_heartbeat_seconds=context.config.sleep_heartbeat_seconds,
         )
 
 

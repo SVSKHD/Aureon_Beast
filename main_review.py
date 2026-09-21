@@ -35,12 +35,15 @@ from __future__ import annotations
 
 import argparse
 import logging
+import signal
 import sys
+import threading
 from datetime import datetime
 
 from aureon.config import AureonConfig
 from aureon.evaluation.rules import get_rule
 from aureon.models.base import utc_now
+from aureon.models.enums import MarketState
 from aureon.reviews.aggregate import compare_by_tag, render_tag_comparisons
 from aureon.reviews.periods import (
     previous_iso_week,
@@ -48,6 +51,8 @@ from aureon.reviews.periods import (
     week_period,
 )
 from aureon.reviews.service import ReviewService
+from aureon.services.market_state_service import WeeklySchedule
+from aureon.services.sleep_cycle import SleepCycle, SleepGate
 
 log = logging.getLogger("aureon.review")
 
@@ -129,10 +134,129 @@ def run_weekly(
     return 0
 
 
+# ── Watching for the week's close (11B) ──────────────────────────────────────
+
+
+class ReviewWatcher:
+    """Generates the week's last daily and every symbol's weekly, at the close.
+
+    The reviews were always meant to run "after Friday's close", which until now meant a
+    cron line holding a UTC time -- and a cron line is a fourth opinion about when the week
+    ends, one that cannot notice a broker closing early for a holiday or staying open late
+    after an outage. This watches the same ``MarketStateService`` every other process
+    watches, and fires on the transition.
+
+    Two things make that safe to do from a loop:
+
+    * reviews are **idempotent** -- ``generate_weekly`` for the same ISO week writes the
+      same document -- so a second firing after a restart costs a re-read, not a wrong
+      number;
+    * it fires only on a **weekly** close. A holiday closure on a Tuesday sleeps the
+      services and generates nothing, because a "weekly review" of three days would be
+      published with the same field names as a real one and nothing downstream could tell.
+
+    Not a daemon that also polls: between closes it does nothing at all, at one wake a
+    minute while asleep and one a second while awake. The process exists so a human does
+    not have to remember, which is the whole of its job.
+    """
+
+    def __init__(
+        self,
+        config: AureonConfig,
+        *,
+        market_state_provider: object | None = None,
+        schedule: object | None = None,
+        now: object = utc_now,
+        build: object | None = None,
+    ) -> None:
+        self.config = config
+        self._market_state_provider = market_state_provider
+        self._now = now
+        self._build = build or (lambda symbol: build_service(config, symbol))
+        self.sleep = SleepCycle(
+            schedule=schedule or WeeklySchedule(),
+            close_confirm_seconds=config.close_confirm_seconds,
+            preopen_seconds=config.preopen_seconds,
+            sleep_heartbeat_seconds=config.sleep_heartbeat_seconds,
+            sleep_poll_seconds=config.sleep_poll_seconds,
+        )
+        self.gate = SleepGate(
+            cycle=self.sleep,
+            states=self._market_states,
+            clock=self._now,  # type: ignore[arg-type]
+            on_sleep=self._on_close,
+            service="review",
+        )
+        #: What the last close generated, for a test and for the log.
+        self.generated: list[str] = []
+        self._stop = threading.Event()
+
+    def _market_states(self) -> dict[str, MarketState]:
+        if self._market_state_provider is None:
+            return {}
+        states: dict[str, MarketState] = {}
+        for symbol in self.config.symbols:
+            try:
+                states[symbol] = self._market_state_provider(symbol)  # type: ignore[operator]
+            except Exception:  # noqa: BLE001
+                states[symbol] = MarketState.UNKNOWN
+        return states
+
+    def _on_close(self, crossing: object) -> None:
+        if not getattr(crossing, "weekly", False):
+            log.info("closed, but not the week's close; no reviews generated")
+            return
+        moment = self._now()  # type: ignore[operator]
+        for symbol in self.config.symbols:
+            # Per symbol, each with its own frozen rule: one document covering two rules
+            # would add reached-counts measured in two instruments' money (9A).
+            try:
+                service = self._build(symbol)  # type: ignore[operator]
+                date = previous_market_date(service.market_tz, now=moment)
+                service.generate_daily(date, generated_at=moment)
+                self.generated.append(f"daily {date} {symbol}")
+                year, week = previous_iso_week(service.market_tz, now=moment)
+                service.generate_weekly(year, week, generated_at=moment)
+                self.generated.append(f"weekly {year}-W{week:02d} {symbol}")
+            except Exception:  # noqa: BLE001 - one symbol must not lose the others
+                log.exception("close-of-week reviews failed for %s", symbol)
+        log.info("generated %s", ", ".join(self.generated[-2 * len(self.config.symbols):]))
+
+    def poll_once(self) -> None:
+        self.gate.tick()
+
+    def run(self) -> None:
+        """Watch until stopped."""
+        log.info("review watcher live; waiting for the week's close")
+        while not self._stop.is_set():
+            self.poll_once()
+            self._stop.wait(self.gate.pace(self.config.monitor_poll_seconds))
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
+def build_watcher(config: AureonConfig) -> ReviewWatcher:
+    from aureon.data.mt5_provider import MT5DataProvider
+    from aureon.services.market_state_service import MarketStateService
+
+    market_state = MarketStateService(MT5DataProvider(market_tz=config.market_tz))
+    return ReviewWatcher(
+        config,
+        market_state_provider=lambda symbol: market_state.state_for(symbol).state,
+        schedule=market_state.schedule,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "period", choices=["daily", "weekly"], help="which review to generate"
+        "period",
+        choices=["daily", "weekly", "watch"],
+        help=(
+            "which review to generate, or 'watch' to stay up and generate the week's "
+            "last daily and every symbol's weekly at the close (11B)"
+        ),
     )
     parser.add_argument("--date", help="broker date YYYY-MM-DD (daily); default: yesterday")
     parser.add_argument("--iso-year", type=int, help="ISO year (weekly)")
@@ -153,6 +277,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     config = AureonConfig.from_env()
     now = utc_now()
+
+    if args.period == "watch":
+        watcher = build_watcher(config)
+
+        def handle(signum: int, _frame: object) -> None:
+            log.info("received signal %s", signum)
+            watcher.stop()
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, handle)
+        watcher.run()
+        return 0
 
     iso = None
     if args.iso_year and args.iso_week:

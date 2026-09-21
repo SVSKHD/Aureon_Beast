@@ -52,7 +52,7 @@ class LiquidityAgent(BaseAgent):
     """Detects levels swept and rejected (§15)."""
 
     agent_name = "liquidity"
-    agent_version = "1.1.0"  # 9B
+    agent_version = "1.2.0"  # 11D
 
     def __init__(
         self,

@@ -102,6 +102,37 @@ class WeeklySchedule:
         """When the market next closes."""
         return self._next_weekly(to_utc(moment), self.close_weekday, self.close_time)
 
+    def spans_a_close(self, start: datetime, end: datetime) -> bool:
+        """Whether a bar running ``start`` to ``end`` contains a weekly close (11B).
+
+        A bar that straddles the close is not a bar. Its open is the last price before the
+        weekend and its close is the first price after it, so its range IS the weekend gap:
+        an EMA fed that bar is wrong for the next fifty, and any detection from it encodes
+        a move that took two days and no trading.
+
+        The boundaries are exclusive on purpose. The last legitimate bar of the week ENDS
+        at the close -- 20:55 to 21:00 on a Friday is a real five minutes of trading -- and
+        treating it as spanning would throw away the week's final candle every week.
+
+        The limit, stated rather than papered over: a bar whose NOMINAL length runs past the
+        close even though its data stops there would be refused. A daily bar is the obvious
+        example -- MT5's Friday D1 runs 00:00 to 00:00 and holds only trading it saw, so
+        this would call it spanning. It is unreachable here, because the polled streams are
+        intraday and the higher timeframes are aggregated from closed M5 bars that never
+        span a close themselves. A deployment that starts POLLING a daily stream has to
+        revisit this.
+        """
+        return self.close_spanned_by(start, end) is not None
+
+    def close_spanned_by(self, start: datetime, end: datetime) -> datetime | None:
+        """The weekly close a bar straddles, or None. See :meth:`spans_a_close`.
+
+        Returns the instant rather than a bool so a caller can say WHICH close it refused a
+        bar for -- a log line naming Friday 21:00 is diagnosable and "invalid candle" is not.
+        """
+        boundary = self.next_close(to_utc(start))
+        return boundary if boundary < to_utc(end) else None
+
 
 @dataclass(frozen=True)
 class MarketStateResult:
