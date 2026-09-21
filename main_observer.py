@@ -49,6 +49,7 @@ from aureon.engine.market_engine import MarketEngine
 from aureon.engine.symbol_engines import SymbolEngines
 from aureon.evaluation.outcome_tracker import OutcomeTracker
 from aureon.evaluation.rules import get_rule
+from aureon.models.base import to_utc
 from aureon.models.detection import Detection
 from aureon.models.enums import MarketState, Timeframe
 from aureon.models.market import Candle
@@ -60,6 +61,7 @@ from aureon.services.heartbeat_service import HeartbeatService
 from aureon.services.market_snapshot import MarketSnapshot
 from aureon.services.market_state_service import MarketStateService
 from aureon.services.observer_state import ObserverState
+from aureon.services.ops_events import OpsRegister
 from aureon.storage import paths
 
 log = logging.getLogger("aureon.observer")
@@ -138,11 +140,14 @@ class Observer:
             timeframes=config.timeframes,
             on_detections=self._on_detections,
             on_candle_close=self._on_candle_close,
-            on_poll=self._check_alerts,
+            on_poll=self._on_poll,
         )
         self._last_candles: dict[tuple[str, Timeframe], Candle] = {}
         #: 11A F-3. Read once per connection; see ``_account_mode``.
         self._cached_account_mode: object | None = None
+        #: 11A F-15. Optional: an observer without one still observes, it just says nothing
+        #: about its own health. Set by ``main`` when a Firestore client exists.
+        self.ops: object | None = None
         # One snapshot per symbol/timeframe, fed by every detection and candle so
         # /status reports the SAME indicator values that were stored, never a
         # recomputation that could disagree with them (§59, §66).
@@ -277,6 +282,91 @@ class Observer:
             # observer records and needs no second scheduler (9C).
             self.alerts.expire()
         self._write_system_state(force=True)
+
+    def _on_poll(self) -> None:
+        """Everything that runs on the ~1s poll clock, in the order that matters.
+
+        Alerts first: a level crossed is a thing a human asked to be told and is worth a
+        moment's head start over the system talking about itself.
+        """
+        self._check_alerts()
+        self._report_ops()
+
+    def _report_ops(self) -> None:
+        """The conditions only the observer can see (11A, F-15).
+
+        Called on the poll clock, which is also where it belongs: "no candle has closed for two
+        intervals" and "this symbol has not ticked for thirty seconds" are both questions about
+        elapsed time, and a check that only ran on candle close could not notice that candle
+        closes had stopped.
+
+        Every threshold comes from config; the register owns only the once-and-once rule.
+        """
+        if self.ops is None:
+            return
+        try:
+            now = self.provider.now_utc()
+        except Exception:  # noqa: BLE001 - a provider that cannot say the time is stale anyway
+            return
+
+        for symbol in self.config.symbols:
+            for timeframe in self.config.timeframes:
+                open_now = self._market_is_open(symbol)
+                candle = self._last_candles.get((symbol, timeframe))
+                interval = timeframe.seconds * self.config.ops_observer_stale_intervals
+                overdue = (
+                    open_now
+                    and candle is not None
+                    and (now - candle.close_time).total_seconds() > interval
+                )
+                self._observe_ops(
+                    "observer_stale",
+                    active=bool(overdue),
+                    detail=(
+                        f"{symbol} {timeframe.value}: last close "
+                        f"{candle.close_time.isoformat()}"
+                        if candle is not None
+                        else ""
+                    ),
+                )
+
+            # Per symbol, because silver's feed going quiet says nothing about gold's.
+            dark = False
+            try:
+                last_tick = self.provider.last_tick_time(symbol)
+                if open_now and last_tick is not None:
+                    quiet = (now - to_utc(last_tick)).total_seconds()
+                    dark = quiet > self.config.ops_feed_stale_seconds
+            except Exception:  # noqa: BLE001 - a provider that will not answer IS the symptom
+                dark = open_now
+            self._observe_ops(
+                "symbol_feed_stale", active=dark, scope=symbol, detail=f"{symbol}"
+            )
+
+        try:
+            pending = self.outbox.pending_count()
+        except Exception:  # noqa: BLE001
+            pending = 0
+        self._observe_ops(
+            "outbox_backlog",
+            active=pending > self.config.ops_outbox_backlog,
+            detail=f"{pending} undelivered",
+        )
+
+    def _market_is_open(self, symbol: str) -> bool:
+        if self.market_state is None:
+            return False
+        try:
+            result = self.market_state.state_for(symbol)
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(result and result.state is MarketState.OPEN)
+
+    def _observe_ops(self, name: str, **kwargs: object) -> None:
+        try:
+            self.ops.observe(name, **kwargs)  # type: ignore[union-attr]
+        except Exception:  # noqa: BLE001 - reporting must never stop observation
+            log.debug("could not record ops event %s", name, exc_info=True)
 
     def _check_alerts(self) -> None:
         """Answer every armed alert the current quotes have crossed (9C).
@@ -839,6 +929,7 @@ def build_observer(config: AureonConfig) -> Observer:
     from aureon.storage.detection_repository import DetectionRepository
     from aureon.storage.evaluation_repository import EvaluationRepository
     from aureon.storage.firebase_service import get_client
+    from aureon.storage.ops_repository import OpsEventRepository
     from aureon.storage.session_repository import SessionRepository
     from aureon.storage.symbol_repository import SymbolRepository
     from aureon.storage.system_state_repository import (
@@ -863,7 +954,7 @@ def build_observer(config: AureonConfig) -> Observer:
         client, min_interval_seconds=config.state_heartbeat_seconds
     )
 
-    return Observer(
+    observer = Observer(
         config,
         provider,
         outbox=outbox,
@@ -894,6 +985,12 @@ def build_observer(config: AureonConfig) -> Observer:
         # already reading.
         alert_repository=PriceAlertRepository(client),
     )
+    # 11A F-15. Assigned after construction rather than passed in, so an Observer built by a
+    # test has no register and reports nothing -- which is what a test of observation wants.
+    observer.ops = OpsRegister(
+        OpsEventRepository(client), service=paths.SERVICE_OBSERVER
+    )
+    return observer
 
 
 def main(argv: list[str] | None = None) -> int:

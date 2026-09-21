@@ -387,6 +387,50 @@ What each part of the system does about it:
 logged into has not said it is a demo, and the asymmetry is not close: being wrong in that
 direction costs a refused order, being wrong the other way costs somebody's savings.
 
+## The ops register: `/ops`
+
+Aureon runs four processes on a box nobody is watching. The failure that costs money is almost
+never a crash — the supervisor handles those. It is a service that is **still running and no
+longer doing its job**: an observer whose candle loop stopped while the market is open, an
+outbox whose deliveries have been failing for a minute, a reconciliation that ended ambiguous
+and left a trade nobody has looked at.
+
+Ten named conditions now cover those, each posted **once when it starts and once when it
+clears**:
+
+| condition | what it means | threshold |
+|---|---|---|
+| `observer_stale` | no candle has closed while the market is OPEN — running, not observing | `AUREON_OPS_OBSERVER_STALE_INTERVALS` × timeframe (2) |
+| `executor_stale` | the executor's heartbeat stopped; confirmed requests will sit | heartbeat freshness |
+| `monitor_stale` | positions are not being reconciled against the broker | heartbeat freshness |
+| `firestore_unavailable` | outbox delivery failing; detections are queued on disk | `AUREON_OPS_FIRESTORE_UNAVAILABLE_SECONDS` (60) |
+| `outbox_backlog` | deliveries are slower than detections arrive | `AUREON_OPS_OUTBOX_BACKLOG` (50) |
+| `reconciliation_ambiguous` | a request is FAILED_RECONCILIATION — whether an order exists is UNKNOWN | any |
+| `archive_write_failed` | a candle did not reach the parquet archive; parity cannot be checked for that session | any |
+| `symbol_feed_stale` | **per symbol**: no tick while OPEN — the feed is dark | `AUREON_OPS_FEED_STALE_SECONDS` (30) |
+| `mt5_reconnect` | the terminal connection dropped and is being re-established | any |
+| `live_account_detected` | this process is on a real-money account | any |
+
+**Once, not every poll.** A condition that persists for six hours produces two lines, not six
+hours of identical ones. An operator who gets the latter mutes the channel, and a muted channel
+is strictly worse than no channel because it looks like coverage.
+
+**`/ops` distinguishes three states**, which is why cleared rows are kept rather than deleted:
+
+- 🔴 **active**, with how long — `since` records when the state *began*, so a three-hour-old
+  onset reads as three hours old.
+- 🟢 **clear**, with a count — "this flapped twice this morning and cleared" and "this fired
+  once and cleared" are different problems, and both read as fine without it.
+- **no row at all** — it has never happened since this deployment started. The footer says how
+  many of the ten are in that state, because a register with two rows could mean eight are
+  healthy or that eight are not wired up.
+
+`symbol_feed_stale` is the only per-symbol condition. One event covering both instruments would
+clear the moment either recovered — reporting healthy while silver was still dark.
+
+Nothing gates on an ops event. A condition that should stop execution stops it through the
+execution guard with a `FailureCode`, where it is testable; the register only reports.
+
 ## What the tools refuse to do
 
 Knowing this in advance is cheaper than fighting it at 02:00.

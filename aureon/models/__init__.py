@@ -110,6 +110,7 @@ from aureon.models.identity import (
     new_alert_id,
 )
 from aureon.models.market import Candle, QuoteSnapshot, SymbolInfo
+from aureon.models.ops import OpsEvent
 from aureon.models.profile import (
     MAX_PROFILE_BINS,
     PROFILE_SCOPES,
@@ -178,6 +179,7 @@ DOCUMENT_MODELS: tuple[type[AureonDocument], ...] = (
     Notification,
     Assessment,
     TradeNote,
+    OpsEvent,
 )
 
 __all__ = [
@@ -201,6 +203,7 @@ __all__ = [
     "HorizonConfirmation",
     "PairedOutcome",
     "ThresholdConfirmation",
+    "OpsEvent",
     "TradeNote",
     "TrendRead",
     "AuditRecord",

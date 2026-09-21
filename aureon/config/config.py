@@ -184,6 +184,24 @@ class AureonConfig(AureonModel):
     #: a terminal that will not say what it is logged into has not said it is a demo.
     allow_live_execution: bool = False
 
+    # ── 11A F-15: ops event thresholds ────────────────────────────────────────
+    #: How many closed-candle intervals may pass with nothing arriving, while the market is
+    #: OPEN, before `observer_stale` fires. Two rather than one: a single missed interval is a
+    #: slow broker or a poll landing a second early, and an alert on that would fire most days.
+    ops_observer_stale_intervals: float = 2.0
+    #: Seconds without a tick, while OPEN, before `symbol_feed_stale` fires for that symbol.
+    #: Thirty because gold and silver tick several times a second in any session that is
+    #: really open, so thirty seconds of silence is not quiet -- it is dark.
+    ops_feed_stale_seconds: float = 30.0
+    #: How long outbox delivery may keep failing before `firestore_unavailable` fires. A
+    #: minute, because a few seconds of failure is a retry working as designed and the outbox
+    #: exists precisely so that is survivable.
+    ops_firestore_unavailable_seconds: float = 60.0
+    #: Undelivered outbox rows before `outbox_backlog` fires. Fifty is roughly a busy hour of
+    #: detections: below it the queue is draining, above it deliveries are slower than
+    #: detections arrive and the gap will only grow.
+    ops_outbox_backlog: int = 50
+
     # ── Reviews ───────────────────────────────────────────────────────────────
     infer_window_minutes: int = 30
 
@@ -288,6 +306,14 @@ class AureonConfig(AureonModel):
             alert_channel_id=int(channel) if channel else None,
             notify_window_seconds=_env_float("AUREON_NOTIFY_WINDOW_SECONDS", 120.0),
             allow_live_execution=_env_true("AUREON_ALLOW_LIVE_EXECUTION"),
+            ops_observer_stale_intervals=_env_float(
+                "AUREON_OPS_OBSERVER_STALE_INTERVALS", 2.0
+            ),
+            ops_feed_stale_seconds=_env_float("AUREON_OPS_FEED_STALE_SECONDS", 30.0),
+            ops_firestore_unavailable_seconds=_env_float(
+                "AUREON_OPS_FIRESTORE_UNAVAILABLE_SECONDS", 60.0
+            ),
+            ops_outbox_backlog=_env_int("AUREON_OPS_OUTBOX_BACKLOG", 50),
             infer_window_minutes=_env_int("AUREON_INFER_WINDOW_MINUTES", 30),
             mt5_login=int(login) if login else None,
             mt5_password=_env_opt("AUREON_MT5_PASSWORD"),

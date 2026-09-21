@@ -81,6 +81,8 @@ NOTIFICATIONS = collection("notifications")
 ALERTS = collection("alerts")
 ASSESSMENTS = collection("assessments")
 TRADE_NOTES = collection("trade_notes")
+# 11A F-15: named operational conditions, and whether each is currently true.
+OPS_EVENTS = collection("ops_events")
 
 def _all_collections() -> tuple[str, ...]:
     """Every prefixed collection constant in this module, found rather than listed (11A, F-10).
@@ -239,6 +241,21 @@ def notification_path(kind: str, ref_id: str) -> str:
 
 def alert_path(alert_id: str) -> str:
     return f"{ALERTS}/{_require(alert_id, 'alert_id')}"
+
+
+def ops_event_id(name: str, scope: str | None = None) -> str:
+    """``{name}`` or ``{name}__{scope}`` (11A, F-15).
+
+    Derived from what the condition is ABOUT rather than auto-generated, so a service that
+    restarts mid-condition finds the existing document and does not re-announce. The double
+    underscore matches the convention `notification_id` and `evaluation_doc_id` already use.
+    """
+    base = _require(name, "name")
+    return f"{base}__{scope.upper()}" if scope else base
+
+
+def ops_event_path(name: str, scope: str | None = None) -> str:
+    return f"{OPS_EVENTS}/{ops_event_id(name, scope)}"
 
 
 def assessment_path(assessment_id: str) -> str:

@@ -26,6 +26,7 @@ test run and production and could never be checked in.
 | `aureon_beast_detections` | `detection_id` | `Detection` |
 | `aureon_beast_heartbeats` | `{service}` | `Heartbeat` |
 | `aureon_beast_notifications` | `{kind}__{ref_id}` | `Notification` |
+| `aureon_beast_ops_events` | `{name}[__{scope}]` | `OpsEvent` |
 | `aureon_beast_sessions` | `{market_date}__{session}` | `SessionSummary` |
 | `aureon_beast_settings` | `execution / notifications` | `ExecutionSettings, NotificationSettings` |
 | `aureon_beast_symbol_specs` | `{symbol}` | `SymbolInfo` |
@@ -426,6 +427,23 @@ A human sentence about one trade, kept out of the trade (§45, 9D).
 | `author` | `str` | yes | — |  |
 | `text` | `str` | yes | — |  |
 | `at` | `AwareDatetime \| null` | no | `None` |  |
+
+### OpsEvent
+
+One named condition, and whether it is currently true.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
+| `event_id` | `str` | yes | — | {name} or {name}__{scope}; see paths.ops_event_id. |
+| `name` | `str` | yes | — |  |
+| `scope` | `str \| null` | no | `None` |  |
+| `active` | `bool` | no | `False` |  |
+| `since` | `AwareDatetime \| null` | no | `None` |  |
+| `detail` | `str` | no | `''` |  |
+| `service` | `str` | no | `''` |  |
+| `onsets` | `int` | no | `0` |  |
+| `updated_at` | `AwareDatetime \| null` | no | `None` |  |
 
 ---
 

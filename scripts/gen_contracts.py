@@ -133,6 +133,7 @@ COLLECTION_DOCS: dict[str, tuple[str, str]] = {
     "notifications": ("{kind}__{ref_id}", "Notification"),
     "assessments": ("assessment_id", "Assessment"),
     "trade_notes": ("note_id", "TradeNote"),
+    "ops_events": ("{name}[__{scope}]", "OpsEvent"),
 }
 
 

@@ -269,26 +269,67 @@ def test_nothing_reaches_into_a_repositorys_private_client() -> None:
 
 #: The collection names, unprefixed. A bare occurrence of any of these as a string
 #: literal outside paths.py is almost certainly a forgotten prefix.
-BARE_COLLECTION_NAMES = frozenset(
-    {
-        "detections",
-        "detection_evaluations",
-        "sessions",
-        "trade_requests",
-        "trades",
-        "control_requests",
-        "audit_logs",
-        "heartbeats",
-        "system_state",
-        "settings",
-        "symbol_specs",
-        "daily_reviews",
-        "weekly_reviews",
-        # 9C: what Discord has already said, and what a human asked to be told.
-        "notifications",
-        "alerts",
-    }
-)
+def _bare_collection_names() -> frozenset[str]:
+    """Every collection's UNPREFIXED name, derived from the registry (11A, F-10).
+
+    This used to be a hand-written set, and it had drifted by two entries -- ``assessments``
+    and ``trade_notes``, added in 9D -- which means the bare-literal check below had silently
+    stopped covering the two newest collections. A boundary test that quietly narrows its own
+    scope is worse than no boundary test: it reports green over exactly the ground it stopped
+    looking at.
+
+    Derived, so the scope cannot narrow again. ``paths.ALL_COLLECTIONS`` is itself generated
+    from ``paths.py`` and cross-checked against the source by ``tests/unit/test_paths.py``.
+    """
+    from aureon.storage import paths
+
+    prefix = f"{paths.PREFIX}_"
+    return frozenset(name[len(prefix) :] for name in paths.ALL_COLLECTIONS)
+
+
+BARE_COLLECTION_NAMES = _bare_collection_names()
+
+
+def _innocent_string_nodes(tree: ast.AST) -> set[int]:
+    """String constants that cannot be a collection reference, by their POSITION.
+
+    Needed because a collection name and a field name legitimately collide. Widening the scan
+    to the full registry immediately produced four hits that were all innocent:
+    ``"trade_notes"`` and ``"trades_by_tag"`` are keys on a review DOCUMENT, and
+    ``getattr(context, "assessments", None)`` names a ``BotContext`` attribute.
+
+    Excluded by CONTEXT rather than by value, and the difference matters: a first attempt
+    excluded any string equal to a model field name, and that suppressed a genuine
+    ``client.collection("assessments")`` as well -- the check went quiet on exactly the kind of
+    bug it exists to find. Planting that call is what caught it.
+
+    Three positions are innocent, and nothing else:
+
+    * a **dict key** -- ``{"trade_notes": ...}`` builds a document, it does not name a
+      collection;
+    * a **string subscript** -- ``fields["trade_notes"]`` reads one back out of a dict; there
+      is no API in this codebase where a collection is reached by indexing;
+    * the **attribute-name argument** of ``getattr``/``setattr``/``hasattr``.
+
+    An argument to ``.collection(...)`` or ``.document(...)`` is never innocent, whatever the
+    string says.
+    """
+    innocent: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for key in node.keys:
+                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                    innocent.add(id(key))
+        elif isinstance(node, ast.Subscript):
+            if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+                innocent.add(id(node.slice))
+        elif isinstance(node, ast.Call):
+            name = node.func.id if isinstance(node.func, ast.Name) else None
+            if name in {"getattr", "setattr", "hasattr"} and len(node.args) >= 2:
+                second = node.args[1]
+                if isinstance(second, ast.Constant) and isinstance(second.value, str):
+                    innocent.add(id(second))
+    return innocent
 
 
 def test_no_bare_collection_literal_outside_paths() -> None:
@@ -318,11 +359,13 @@ def test_no_bare_collection_literal_outside_paths() -> None:
         if path.resolve() in exempt:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        innocent = _innocent_string_nodes(tree)
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.Constant)
                 and isinstance(node.value, str)
                 and node.value in BARE_COLLECTION_NAMES
+                and id(node) not in innocent
             ):
                 offenders.append(
                     f"{path.relative_to(REPO_ROOT)}:{node.lineno}: {node.value!r}"
@@ -340,10 +383,15 @@ def test_every_collection_constant_carries_the_prefix() -> None:
     assert paths.PREFIX, "a prefix must always resolve to something"
     for name in paths.ALL_COLLECTIONS:
         assert name.startswith(f"{paths.PREFIX}_"), f"{name} is not prefixed"
-    # And nothing is left unprefixed by accident.
+    # Round-tripping through ``collection()`` must be the identity. Not a tautology: it is
+    # what catches a constant built by string concatenation instead of the helper, which would
+    # be prefixed and still bypass the one place §83 says the name is assembled.
     assert set(paths.ALL_COLLECTIONS) == {
         paths.collection(bare) for bare in BARE_COLLECTION_NAMES
     }
+    assert len(BARE_COLLECTION_NAMES) == len(paths.ALL_COLLECTIONS), (
+        "two collections share an unprefixed name, so one of them is unreachable"
+    )
 
 
 # ── Reviews may only read COMPLETE horizons ───────────────────────────────────

@@ -27,6 +27,7 @@ from aureon.storage.detection_repository import DetectionRepository
 from aureon.storage.evaluation_reader import EvaluationReader
 from aureon.storage.note_repository import TradeNoteRepository
 from aureon.storage.notification_repository import NotificationRepository
+from aureon.storage.ops_repository import OpsEventRepository
 from aureon.storage.review_reader import ReviewReader
 from aureon.storage.settings_repository import (
     ExecutionSettingsRepository,
@@ -79,6 +80,10 @@ class BotContext:
     evaluations: EvaluationReader | None = None
     assessments: AssessmentRepository | None = None
     notes: TradeNoteRepository | None = None
+    #: 11A F-15. Writable, because Discord raises no conditions of its own but `/ops` is the
+    #: only place they are read, and a reader-only wrapper for a collection nothing in Discord
+    #: writes would be ceremony rather than a boundary.
+    ops_events: OpsEventRepository | None = None
 
     @property
     def authorized_user_ids(self) -> tuple[str, ...]:
@@ -117,4 +122,5 @@ def build_context(config: AureonConfig, client: Any) -> BotContext:
         evaluations=EvaluationReader(client),
         assessments=AssessmentRepository(client),
         notes=TradeNoteRepository(client),
+        ops_events=OpsEventRepository(client),
     )
