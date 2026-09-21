@@ -22,7 +22,13 @@ from aureon.execution.execution_guard import (
 from aureon.execution.fake_broker import DEFAULT_SYMBOL_INFO
 from aureon.models.base import utc_now
 from aureon.models.broker import AccountInfo
-from aureon.models.enums import FailureCode, FillingMode, MarketState, OrderType
+from aureon.models.enums import (
+    AccountMode,
+    FailureCode,
+    FillingMode,
+    MarketState,
+    OrderType,
+)
 from aureon.models.market import QuoteSnapshot
 from aureon.models.settings import ExecutionSettings
 from aureon.models.trade import TradeRequest
@@ -56,7 +62,13 @@ def silver_snapshot(**overrides) -> BrokerSnapshot:
     base = dict(
         symbol_info=info,
         quote=silver_quote(),
-        account=AccountInfo(login=1, balance=100_000, equity=100_000, margin_free=100_000),
+        account=AccountInfo(
+            login=1,
+            balance=100_000,
+            equity=100_000,
+            margin_free=100_000,
+            mode=AccountMode.DEMO,
+        ),
         open_positions=0,
         trades_today=0,
     )
@@ -80,7 +92,13 @@ def snapshot(**overrides) -> BrokerSnapshot:
     base = dict(
         symbol_info=DEFAULT_SYMBOL_INFO,
         quote=quote(),
-        account=AccountInfo(login=1, balance=100_000, equity=100_000, margin_free=100_000),
+        account=AccountInfo(
+            login=1,
+            balance=100_000,
+            equity=100_000,
+            margin_free=100_000,
+            mode=AccountMode.DEMO,
+        ),
         open_positions=0,
         trades_today=0,
     )
@@ -124,7 +142,7 @@ def test_the_guard_has_all_its_rules_registered() -> None:
 
     Pinning the count makes adding a rule a deliberate, visible act.
     """
-    assert len(RULES) == 17
+    assert len(RULES) == 18
 
 
 # ── §57: the operator's switch ────────────────────────────────────────────────
@@ -297,7 +315,10 @@ def test_a_valid_pending_entry_passes() -> None:
 
 
 def test_insufficient_margin_is_refused() -> None:
-    account = AccountInfo(login=1, balance=100.0, equity=100.0, margin_free=50.0)
+    account = AccountInfo(
+        login=1, balance=100.0, equity=100.0, margin_free=50.0,
+        mode=AccountMode.DEMO,
+    )
     result = verdict(snap=snapshot(account=account, margin_required=500.0))
     assert result.failure_code is FailureCode.INSUFFICIENT_MARGIN
 

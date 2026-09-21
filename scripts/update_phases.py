@@ -214,9 +214,9 @@ CATALOGUE: tuple[PhaseEvidence, ...] = (
         None,
         (
             Artefact(
-                label="outcomes by volume/volatility context",
+                label="outcomes by tick-volume/volatility context",
                 path="docs/PHASE2_BASELINE.md",
-                must_contain="### Outcomes by volume and volatility context — XAGUSD",
+                must_contain="### Outcomes by tick-volume and volatility context — XAGUSD",
                 produced_by="python scripts/gen_baseline.py",
             ),
         ),
