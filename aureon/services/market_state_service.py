@@ -22,7 +22,7 @@ Sunday 21:30 UTC different from Sunday 23:30 UTC.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 from aureon.models.base import to_utc
 from aureon.models.enums import MarketState
@@ -74,6 +74,33 @@ class WeeklySchedule:
         )
         delta = (opens_at - moment).total_seconds()
         return 0 < delta <= self.preopen_minutes * 60
+
+    def _next_weekly(self, moment: datetime, weekday: int, clock: time) -> datetime:
+        """The next occurrence of ``weekday`` at ``clock``, strictly after ``moment``.
+
+        Strictly: at exactly Sunday 22:00 the market is open, so "the next open" is a week
+        away, not now. The alternative reading would have a service that wakes at the open
+        immediately compute a wake deadline in the past.
+
+        No DST arithmetic, because the whole schedule is UTC. That is deliberate -- the
+        weekly boundary is a market-wide convention, and a broker whose clock observes
+        summer time would otherwise move the weekend twice a year.
+        """
+        candidate = moment.replace(
+            hour=clock.hour, minute=clock.minute, second=0, microsecond=0
+        )
+        candidate += timedelta(days=(weekday - candidate.weekday()) % 7)
+        if candidate <= moment:
+            candidate += timedelta(days=7)
+        return candidate
+
+    def next_open(self, moment: datetime) -> datetime:
+        """When the market next opens, for "closed until ..." and for the wake deadline."""
+        return self._next_weekly(to_utc(moment), self.open_weekday, self.open_time)
+
+    def next_close(self, moment: datetime) -> datetime:
+        """When the market next closes."""
+        return self._next_weekly(to_utc(moment), self.close_weekday, self.close_time)
 
 
 @dataclass(frozen=True)

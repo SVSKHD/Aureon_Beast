@@ -139,6 +139,18 @@ class AureonConfig(AureonModel):
     reconcile_grace_seconds: float = 120.0
     monitor_poll_seconds: float = 2.0
 
+    # ── Sleeping through the close (11B) ──────────────────────────────────────
+    #: How long CLOSED must hold on every symbol before a service parks its loops. A
+    #: single closed poll is a broker hiccup far more often than it is the weekend.
+    close_confirm_seconds: float = 300.0
+    #: How far before the scheduled open a sleeping service wakes itself. Being up *at*
+    #: the open is too late -- the observer still has a backfill to do.
+    preopen_seconds: float = 900.0
+    #: Heartbeat cadence while asleep. Slow, never absent.
+    sleep_heartbeat_seconds: float = 300.0
+    #: How often a sleeping service asks whether the market is open yet.
+    sleep_poll_seconds: float = 60.0
+
     # ── Evaluation (§84) ──────────────────────────────────────────────────────
     #: The rule for a SINGLE-symbol deployment, and the historical name of this
     #: setting. With more than one symbol it is not enough -- see evaluation_rules.
@@ -287,6 +299,10 @@ class AureonConfig(AureonModel):
             executor_poll_seconds=_env_float("AUREON_EXECUTOR_POLL_SECONDS", 2.0),
             reconcile_grace_seconds=_env_float("AUREON_RECONCILE_GRACE_SECONDS", 120.0),
             monitor_poll_seconds=_env_float("AUREON_MONITOR_POLL_SECONDS", 2.0),
+            close_confirm_seconds=_env_float("AUREON_CLOSE_CONFIRM_SECONDS", 300.0),
+            preopen_seconds=_env_float("AUREON_PREOPEN_SECONDS", 900.0),
+            sleep_heartbeat_seconds=_env_float("AUREON_SLEEP_HEARTBEAT_SECONDS", 300.0),
+            sleep_poll_seconds=_env_float("AUREON_SLEEP_POLL_SECONDS", 60.0),
             # AUREON_EVAL_RULE is the current name. The older
             # AUREON_EVALUATION_RULE_ID still wins when set, so an existing .env
             # pinning EMA_OUTCOME_V1 keeps getting V1 rather than silently switching
