@@ -701,13 +701,13 @@ def test_the_phase_done_when_end_to_end(
 
     text = embed_text(post["embed"])
     names = {f.name for f in post["embed"].fields}
-    assert {"EMA", "Volume", "Volatility", "Last wick"} <= names
+    assert {"EMA", "Tick volume", "Volatility", "Last wick"} <= names
     assert "range high" in text
     # Populated, not merely present: a row of em-dashes would satisfy the names alone.
     values = {f.name: f.value for f in post["embed"].fields}
     assert values["EMA"].startswith(tuple("0123456789"))
     assert "ATR14" in values["Volatility"]
-    assert "POC" in values["Volume"]
+    assert "POC" in values["Tick volume"]
     assert f"level {level:g}" in values["Price"]
     # The one line separating a readout from a recommendation, asserted where a human would
     # read it. Nothing checked an embed's footer until the helper could see one (decision 204).

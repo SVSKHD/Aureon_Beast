@@ -82,23 +82,31 @@ ALERTS = collection("alerts")
 ASSESSMENTS = collection("assessments")
 TRADE_NOTES = collection("trade_notes")
 
-ALL_COLLECTIONS: tuple[str, ...] = (
-    DETECTIONS,
-    DETECTION_EVALUATIONS,
-    SESSIONS,
-    TRADE_REQUESTS,
-    TRADES,
-    CONTROL_REQUESTS,
-    AUDIT_LOGS,
-    HEARTBEATS,
-    SYSTEM_STATE,
-    SETTINGS,
-    SYMBOL_SPECS,
-    DAILY_REVIEWS,
-    WEEKLY_REVIEWS,
-    NOTIFICATIONS,
-    ALERTS,
-)
+def _all_collections() -> tuple[str, ...]:
+    """Every prefixed collection constant in this module, found rather than listed (11A, F-10).
+
+    The hand-maintained tuple this replaces had drifted twice within one phase:
+    ``assessments`` and ``trade_notes`` were added in 9D and never listed, so every consumer
+    of the registry -- the contracts table, the emulator's cleanup, the docs check -- silently
+    did not know about two collections that were being written to in production shape.
+
+    A registry that has to be updated by hand will drift, and the drift is invisible: nothing
+    fails, the missing collection simply is not considered. So it is derived from the module's
+    own namespace, discriminating on the PREFIX rather than on naming convention -- doc-id
+    constants like ``LEGACY_SYSTEM_STATE_DOC`` are upper-case strings too, and they are not
+    collections.
+
+    Sorted, so the contracts file and every table built from this are stable across runs.
+    ``tests/unit/test_paths.py`` re-derives the same set by parsing the SOURCE for
+    ``= collection(...)``, which is an independent derivation: a constant defined AFTER this
+    function is called would be missed here and caught there.
+    """
+    found = {
+        value
+        for name, value in globals().items()
+        if name.isupper() and isinstance(value, str) and value.startswith(f"{PREFIX}_")
+    }
+    return tuple(sorted(found))
 
 # ── Fixed document ids ────────────────────────────────────────────────────────
 #: The whole-system document id, used until Phase 9A split ``system_state`` per symbol.
@@ -275,3 +283,10 @@ def weekly_review_path(
     iso_year: int, iso_week: int, symbol: str | None = None
 ) -> str:
     return f"{WEEKLY_REVIEWS}/{weekly_review_doc_id(iso_year, iso_week, symbol)}"
+
+
+
+#: Every collection this deployment writes (11A, F-10). Assigned at the END of the module so
+#: the scan in ``_all_collections`` sees every constant above it; anything added below this
+#: line would be missed, which is what the source-parsing test exists to catch.
+ALL_COLLECTIONS: tuple[str, ...] = _all_collections()

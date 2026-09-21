@@ -490,7 +490,7 @@ def profile_summary(scope: str, **overrides):
         value_area_low=2400.00,
         hvn=(2400.50, 2402.00),
         lvn=(2401.50,),
-        total_volume=12_345.0,
+        total_tick_volume=12_345.0,
     )
     return ProfileSummary(**(base | overrides))
 
@@ -559,8 +559,8 @@ def test_the_block_renders_its_rows_even_with_no_profile_at_all() -> None:
 
     panel = build_live_panel(state_with_context(volume_profile={}, volatility=None))
     text = "\n".join(panel.lines)
-    assert "current session profile —" in text
-    assert "asia profile —" in text
+    assert "current session tick-volume profile —" in text
+    assert "asia tick-volume profile —" in text
     assert "nearest HVN —  LVN —" in text
     assert "ATR14 —  regime —" in text
 

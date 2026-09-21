@@ -91,18 +91,18 @@ def five_candles() -> list[Candle]:
 def test_the_poc_is_the_busiest_bin() -> None:
     profile = profile_of(five_candles())
     assert profile.poc_price == pytest.approx(2400.00)
-    assert profile.total_volume == pytest.approx(500.0)
+    assert profile.total_tick_volume == pytest.approx(500.0)
     # Four bins touched, in price order, with the volumes the arithmetic gives.
     assert [b.price for b in profile.bins] == pytest.approx(
         [2400.00, 2400.10, 2400.20, 2400.30]
     )
-    assert [b.volume for b in profile.bins] == pytest.approx([400.0, 50.0, 30.0, 20.0])
+    assert [b.tick_volume for b in profile.bins] == pytest.approx([400.0, 50.0, 30.0, 20.0])
 
 
 def test_a_doji_puts_its_whole_volume_in_one_bin() -> None:
     """The one case where the even-spreading assumption is exactly right."""
     profile = profile_of([candle(minutes=0, low=2400.05, high=2400.05, volume=77)])
-    assert [b.volume for b in profile.bins] == pytest.approx([77.0])
+    assert [b.tick_volume for b in profile.bins] == pytest.approx([77.0])
     assert profile.poc_price == pytest.approx(2400.00)
 
 
@@ -113,7 +113,7 @@ def test_a_candle_spanning_bins_is_split_by_overlap_not_equally() -> None:
     plausible -- and would move the POC whenever a wide bar straddled a boundary.
     """
     profile = profile_of([candle(minutes=0, low=2400.00, high=2400.15, volume=90)])
-    volumes = {b.price: b.volume for b in profile.bins}
+    volumes = {b.price: b.tick_volume for b in profile.bins}
     assert volumes[2400.00] == pytest.approx(60.0)  # 0.10 of the 0.15 range
     assert volumes[2400.10] == pytest.approx(30.0)  # 0.05 of it
 
@@ -124,11 +124,11 @@ def test_the_value_area_holds_at_least_seventy_percent(
     profile = profile_of(five_candles())
     assert profile.value_area_low is not None
     inside = sum(
-        b.volume
+        b.tick_volume
         for b in profile.bins
         if profile.value_area_low <= b.price < profile.value_area_high
     )
-    assert inside >= profile.total_volume * VALUE_AREA_FRACTION
+    assert inside >= profile.total_tick_volume * VALUE_AREA_FRACTION
     # And it contains the POC, which a quantile of the price distribution need not.
     assert profile.value_area_low <= profile.poc_price < profile.value_area_high
 
@@ -148,11 +148,11 @@ def test_the_value_area_grows_outward_from_the_poc() -> None:
     assert profile.value_area_low == pytest.approx(2400.00)
     assert profile.value_area_high == pytest.approx(2400.30)
     inside = sum(
-        b.volume
+        b.tick_volume
         for b in profile.bins
         if profile.value_area_low <= b.price < profile.value_area_high
     )
-    assert inside == pytest.approx(profile.total_volume)
+    assert inside == pytest.approx(profile.total_tick_volume)
 
 
 def test_a_high_volume_node_is_a_local_peak_not_every_busy_bin() -> None:
@@ -271,7 +271,7 @@ def test_the_bin_list_is_capped_and_says_so_in_the_model() -> None:
     # Still price-ordered, and the total still describes the WHOLE scope.
     prices = [b.price for b in profile.bins]
     assert prices == sorted(prices)
-    assert profile.total_volume == pytest.approx(sum(c.tick_volume for c in candles))
+    assert profile.total_tick_volume == pytest.approx(sum(c.tick_volume for c in candles))
 
 
 # ── What a detection records ──────────────────────────────────────────────────
@@ -331,7 +331,7 @@ def test_a_profile_over_the_fixture_week_is_built_for_either_symbol(
             scope="day",
         )
         assert profile.symbol == symbol
-        assert profile.total_volume > 0
+        assert profile.total_tick_volume > 0
         assert profile.poc_price is not None
         assert 3 <= len(profile.bins) <= MAX_PROFILE_BINS
         assert profile.value_area_low < profile.poc_price + tuning.volume_bin_points * tuning.point

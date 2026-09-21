@@ -266,9 +266,9 @@ def test_a_detection_without_context_renders_the_rows_anyway(context) -> None:
     bare = detection().model_copy(update={"volume_profile_ref": None, "volatility": None})
     screen = build_notification(bare)
     names = [name for name, _ in screen.fields]
-    assert "Volume" in names and "Volatility" in names
+    assert "Tick volume" in names and "Volatility" in names
     values = dict(screen.fields)
-    assert "no profile yet" in values["Volume"]
+    assert "no profile yet" in values["Tick volume"]
     assert values["Volatility"] == "—"
 
 
@@ -489,3 +489,48 @@ def test_a_reminder_for_a_below_alert_prefills_sell(context) -> None:
     from aureon.discord.service import build_reminder
 
     assert build_reminder(fired_alert(side="below")).side == "sell"
+
+
+# ── 11A F-5: the volume label says what the number is ─────────────────────────
+
+
+def test_every_profile_line_a_human_reads_says_tick_volume() -> None:
+    """MT5's M5 candle reports ``tick_volume`` — the number of price CHANGES in the bar.
+
+    It says nothing about contracts traded, and nothing about where inside the bar's range
+    they happened. A row labelled "Volume" over a POC invites a reader to interpret it the way
+    a futures trader reads exchange volume at a price, which this data cannot support. Two
+    words of honesty are cheaper than the wrong conclusion.
+    """
+    from aureon.discord.service import TICK_VOLUME_NOTE, build_notification, build_reminder
+
+    detection_screen = build_notification(detection())
+    assert "Tick volume" in dict(detection_screen.fields)
+    assert "Volume" not in dict(detection_screen.fields)
+    assert TICK_VOLUME_NOTE in detection_screen.footer
+
+    reminder_screen = build_reminder(fired_alert())
+    assert "Tick volume" in dict(reminder_screen.fields)
+    assert TICK_VOLUME_NOTE in reminder_screen.footer
+
+
+def test_the_status_block_names_it_once_at_the_top() -> None:
+    """Once, not on each of three rows: a caveat repeated three times reads as noise and
+    gets skipped, which defeats the caveat."""
+    from aureon.discord.service import TICK_VOLUME_NOTE, _context_lines
+
+    lines = _context_lines(None, None)
+    assert lines[0] == f"— {TICK_VOLUME_NOTE} —"
+    assert sum(1 for line in lines if TICK_VOLUME_NOTE in line) == 1
+
+
+def test_the_model_field_is_named_for_what_it_holds() -> None:
+    """The docstrings already said "estimated tick volume" while the FIELD said ``volume``.
+    A reader writing a query reads the field name, not the docstring."""
+    from aureon.models.profile import ProfileBin, ProfileSummary, VolumeProfile
+
+    assert "tick_volume" in ProfileBin.model_fields
+    assert "volume" not in ProfileBin.model_fields
+    assert "total_tick_volume" in VolumeProfile.model_fields
+    assert "total_volume" not in VolumeProfile.model_fields
+    assert "total_tick_volume" in ProfileSummary.model_fields

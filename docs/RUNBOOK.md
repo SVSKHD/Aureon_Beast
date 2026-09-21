@@ -213,7 +213,7 @@ re-running one overwrites the same document.
 
 | command | what it does |
 |---|---|
-| `/status [symbol]` | the live panels on an open market, the completed review on a closed one. `symbol:` narrows every number — panels, open trades, pending requests — to one instrument, read from that symbol's own state document. Each panel ends with the §19 block: the POC and value area for the current session and for Asia, the HVN and LVN nearest price, and ATR14 with its volatility regime (9B) |
+| `/status [symbol]` | the live panels on an open market, the completed review on a closed one. `symbol:` narrows every number — panels, open trades, pending requests — to one instrument, read from that symbol's own state document. Each panel ends with the §19 block: the tick-volume POC and value area for the current session and for Asia, the HVN and LVN nearest price, and ATR14 with its volatility regime (9B) |
 | `/execute symbol side lot [detection]` | the market-order shortcut. One embed, one CONFIRM. The lot is typed — there is no default — and the filling mode is named on the screen rather than left to the broker |
 | `/execute-trade` | opens the confirmation wizard (order type, stops, execution mode). Nothing is sent until a human confirms, and only the requester may confirm |
 | `/close symbol:` | closes the one open position on that symbol. Two open positions on it, or none, and it says what it found and stops — Aureon does not choose which of your trades to end |
@@ -323,6 +323,69 @@ and from what evidence; the review says how it turned out.
 the `#tags` you used. They are copied into the review document rather than linked, so a
 review read next year still says what you said at the time. No number in the review, and
 nothing in `/monitor`, ever reads one.
+
+## Firebase key rotation
+
+The key is a service-account JSON that lives **outside the repo** — on the VPS at
+`/etc/aureon/firebase-key.json`, readable only by the service user — and `.env` records its
+path, never its contents.
+
+To rotate:
+
+1. Create a new key for the same service account in the Google console. Do not delete the
+   old one yet.
+2. Copy it to the box beside the current one (`firebase-key.new.json`), `chown` and `chmod`
+   it to match.
+3. `GOOGLE_APPLICATION_CREDENTIALS=/etc/aureon/firebase-key.new.json python
+   scripts/preflight.py --skip-mt5`. The `credentials` row names the service account and
+   project it resolved to, and the `firestore` row does a real write and read-back. Both
+   green, or stop.
+4. Move the new key over the old path, restart the four services, run preflight again.
+5. Only then delete the old key in the console.
+
+**What preflight tells you when it is wrong.** The `credentials` row is a diagnosis and the
+`firestore` row is the proof, and they are separate on purpose:
+
+- `no such file` — the path in `.env` does not exist. Check the path, not the key.
+- `missing client_email … this looks like an OAuth client secret` — the single most common
+  mistake. Both files are JSON and both come from the same console; only the
+  service-account key has `client_email`. Downloading the same file again will not help.
+- `not valid JSON` — usually a truncated copy or a PEM pasted over the JSON.
+- `GOOGLE_APPLICATION_CREDENTIALS is unset` — a WARN, not a failure: application default
+  credentials from `gcloud auth application-default login` are a legitimate developer setup.
+  On a box that runs unattended for a week, set the variable.
+- `no usable credentials` on the `firestore` row — the library found nothing at all. This is
+  a different action from a permission denial, which is why it is reported separately.
+- an emulator host is set — `credentials` reports SKIP, never PASS. A green row for a check
+  that never ran is how an emulator-only run comes to look like evidence about production.
+
+## Which account is the terminal on?
+
+`preflight` prints `mode=DEMO`, `mode=REAL`, `mode=CONTEST` or `mode=UNKNOWN` on the
+`mt5_account` row, from MT5's own `account_info().trade_mode`. A real or unidentified account
+is a **WARN, never a silent pass** — an operator scanning a green table would not notice.
+
+What each part of the system does about it:
+
+- **Observer and position monitor** run on a live account quite happily. They are read-only,
+  and the observer publishes `system_state.account_mode` so `/status` and the session
+  evidence file record which account the candles came from.
+- **Executor** starts in **reconcile-only** mode on a real-money account unless
+  `AUREON_ALLOW_LIVE_EXECUTION=true` is set on that box: startup reconciliation runs as
+  usual, every confirmed request is refused with `live_execution_not_allowed`, and one ops
+  message says which terminal is open. The refusal is the guard's *first* rule, ahead of
+  `trading_enabled` — when both are wrong at once you need to hear about the terminal, not
+  about a switch you turned off on purpose.
+- **`/trading enable`** refuses outright on a live account without that variable, rather
+  than arming a switch the executor is going to ignore. With the variable set it shows a
+  second screen naming the account and the word LIVE before offering the button.
+- **`demo_drills.py`** refuses any account that is not `DEMO` — contest included, since a
+  contest account is somebody's competition entry and one drill drops a connection
+  mid-send. `--i-know-this-is-real-money` overrides it, and is spelled that way on purpose.
+
+`UNKNOWN` is treated as real money everywhere. A terminal that will not say what it is
+logged into has not said it is a demo, and the asymmetry is not close: being wrong in that
+direction costs a refused order, being wrong the other way costs somebody's savings.
 
 ## What the tools refuse to do
 

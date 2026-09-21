@@ -32,7 +32,7 @@ from typing import Any
 
 from aureon.config.config import AureonConfig
 from aureon.models.base import utc_now
-from aureon.models.enums import Timeframe
+from aureon.models.enums import AccountMode, Timeframe
 from aureon.services.checks import CheckReport, CheckResult, Status
 from aureon.storage import paths
 
@@ -133,6 +133,7 @@ class Preflight:
             self.check_collection_prefix,
             self.check_outbox,
             self.check_archive_dir,
+            self.check_credentials,
             self.check_firestore,
             self.check_trading_enabled,
             self.check_mt5_init,
@@ -286,6 +287,33 @@ class Preflight:
             self._client = self._client_factory()
         return self._client
 
+    def check_credentials(self) -> CheckResult:
+        """Whether Firestore credentials are configured, and which way (11A, F-2).
+
+        Ahead of the round trip so a missing key file is reported as a missing key file. The
+        round trip behind this is still the proof; this is the diagnosis, because "permission
+        denied", "no credentials found" and "that is an OAuth client secret, not a
+        service-account key" all arrive as one opaque exception otherwise.
+        """
+        from aureon.services import credentials
+
+        verdict = credentials.inspect(emulator_host=self.config.firestore_emulator_host)
+        if verdict.not_applicable:
+            # SKIP, not PASS. A green row for a check that never ran is how an
+            # emulator-only run comes to look like evidence about production.
+            return CheckResult("credentials", Status.SKIP, verdict.detail)
+        if not verdict.ok:
+            return CheckResult(
+                "credentials", Status.FAIL, verdict.detail, remedy=verdict.remedy
+            )
+        if verdict.remedy is not None:
+            # Configured, but by the path that only works on a developer machine. Worth
+            # saying out loud on a box that is about to run unattended for a week.
+            return CheckResult(
+                "credentials", Status.WARN, verdict.detail, remedy=verdict.remedy
+            )
+        return CheckResult("credentials", Status.PASS, verdict.detail)
+
     def check_firestore(self) -> CheckResult:
         """A real write and a real read-back, against the prefix this session will use.
 
@@ -310,12 +338,25 @@ class Preflight:
             read_back = repository.read(PREFLIGHT_SERVICE)
         except Exception as exc:
             self._client = None
+            from aureon.services import credentials
+
+            if credentials.is_default_credentials_error(exc):
+                # The one failure mode worth naming separately: the library could not find
+                # credentials at all, which is a different action from a permission denial
+                # and from a wrong project (11A, F-2).
+                return CheckResult(
+                    "firestore",
+                    Status.FAIL,
+                    f"{paths.HEARTBEATS}: no usable credentials "
+                    f"({type(exc).__name__})",
+                    remedy=credentials.REMEDY,
+                )
             return CheckResult(
                 "firestore",
                 Status.FAIL,
                 f"{paths.HEARTBEATS}: {type(exc).__name__}: {exc}",
                 remedy=(
-                    "Check GOOGLE_APPLICATION_CREDENTIALS, AUREON_FIREBASE_PROJECT_ID, "
+                    f"Check {credentials.CREDENTIALS_ENV}, AUREON_FIREBASE_PROJECT_ID, "
                     "and that the rules permit a write to this prefix."
                 ),
             )
@@ -443,8 +484,12 @@ class Preflight:
             )
 
         login, server = account.get("login"), account.get("server")
+        # 11A F-3. Printed on every preflight, because "which account is this terminal on"
+        # is the question nobody thinks to ask until the answer is the expensive one.
+        mode = AccountMode.from_trade_mode(account.get("trade_mode"))
         detail = (
-            f"login={login} server={server} currency={account.get('currency', '?')} "
+            f"login={login} server={server} mode={mode.value.upper()} "
+            f"currency={account.get('currency', '?')} "
             f"trade_allowed={str(account.get('trade_allowed', False)).lower()}"
         )
         wanted_login, wanted_server = self.config.mt5_login, self.config.mt5_server
@@ -471,6 +516,22 @@ class Preflight:
                 remedy=(
                     "Set AUREON_MT5_LOGIN and AUREON_MT5_SERVER so this check has "
                     "something to verify rather than something to report."
+                ),
+            )
+        if mode.is_real_money:
+            # WARN rather than FAIL: observation on a live account is legitimate and
+            # read-only, and the executor refuses execution there on its own (F-3). But it
+            # never passes quietly -- an operator scanning a green table would not notice.
+            return CheckResult(
+                "mt5_account",
+                Status.WARN,
+                f"{detail} — REAL MONEY"
+                if mode is AccountMode.REAL
+                else f"{detail} — the terminal did not report its account mode",
+                remedy=(
+                    "Observation is read-only and safe here. The executor will refuse "
+                    "execution unless AUREON_ALLOW_LIVE_EXECUTION=true, and the demo "
+                    "drills refuse to run at all."
                 ),
             )
         return CheckResult("mt5_account", Status.PASS, detail)

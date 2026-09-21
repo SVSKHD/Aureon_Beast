@@ -141,6 +141,8 @@ class Observer:
             on_poll=self._check_alerts,
         )
         self._last_candles: dict[tuple[str, Timeframe], Candle] = {}
+        #: 11A F-3. Read once per connection; see ``_account_mode``.
+        self._cached_account_mode: object | None = None
         # One snapshot per symbol/timeframe, fed by every detection and candle so
         # /status reports the SAME indicator values that were stored, never a
         # recomputation that could disagree with them (§59, §66).
@@ -371,10 +373,53 @@ class Observer:
                 )
         try:
             self.state_repository.write(  # type: ignore[attr-defined]
-                SystemState(symbols=tuple(symbols)), force=force
+                SystemState(
+                    symbols=tuple(symbols), account_mode=self._account_mode()
+                ),
+                force=force,
             )
         except Exception:  # noqa: BLE001 - state reporting must not stop observation
             log.exception("system_state write failed")
+
+    def _account_mode(self) -> object:
+        """Which account this terminal is logged into (11A, F-3).
+
+        Read once and cached: it cannot change without a reconnect, and asking the terminal
+        on every throttled state write would be a round trip per candle for a value that is
+        fixed for the life of the connection.
+
+        A provider that cannot answer leaves it unset rather than guessing DEMO. The field
+        is for display and for evidence; nothing gates on it, because the executor reads its
+        own broker rather than trusting a document another process wrote.
+        """
+        if self._cached_account_mode is not None:
+            return self._cached_account_mode
+        reader = getattr(self.provider, "account_info", None)
+        if reader is None:
+            return None
+        try:
+            from aureon.models.enums import AccountMode
+
+            info = reader()
+            raw = info.get("account_mode") if isinstance(info, dict) else None
+            mode = (
+                AccountMode(raw)
+                if raw in {m.value for m in AccountMode}
+                else AccountMode.from_trade_mode(
+                    info.get("trade_mode") if isinstance(info, dict) else None
+                )
+            )
+        except Exception:  # noqa: BLE001 - state reporting must not stop observation
+            log.debug("could not read the account mode", exc_info=True)
+            return None
+        self._cached_account_mode = mode
+        if mode.is_real_money:
+            log.warning(
+                "observing on a %s account — observation is read-only; the executor "
+                "refuses execution unless AUREON_ALLOW_LIVE_EXECUTION=true",
+                mode.value,
+            )
+        return mode
 
     def _trend_read(self, symbol: str, timeframe) -> object:
         """What the last N closed candles did, computed HERE and published (9D).

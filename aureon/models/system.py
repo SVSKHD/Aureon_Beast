@@ -14,7 +14,13 @@ from pydantic import Field, model_validator
 
 from aureon.models.assessment import TrendRead
 from aureon.models.base import AureonDocument, AureonModel, UtcDatetime, to_utc, utc_now
-from aureon.models.enums import Freshness, MarketState, SessionName, Timeframe
+from aureon.models.enums import (
+    AccountMode,
+    Freshness,
+    MarketState,
+    SessionName,
+    Timeframe,
+)
 from aureon.models.market import QuoteSnapshot
 from aureon.models.profile import ProfileSummary, VolatilityContext
 
@@ -216,6 +222,14 @@ class SystemState(AureonDocument):
     trading_enabled: bool | None = Field(
         default=None, description="Mirror of settings/execution, for display only."
     )
+    #: Which kind of money the observer's terminal is logged into (11A, F-3).
+    #:
+    #: Published so `/status` and the ops channel can say it without opening a terminal, and
+    #: so a session's evidence file records which account its candles came from. Display
+    #: only: the executor reads the account mode from its OWN broker connection, because a
+    #: guard that trusted a value another process wrote would be trusting a document instead
+    #: of a terminal.
+    account_mode: AccountMode | None = None
     notes: str | None = None
 
     def freshness(

@@ -18,7 +18,7 @@ passes.** Partial passes do not count.
 | 7 | Reviews — machine observation vs human execution | `/status` on a CLOSED market renders the weekly review; baseline numbers reconcile | ✅ done | ✅ [review reconciliation](PHASE2_BASELINE.md) |
 | 8 | Aureon Vue — read-only dashboard | Dashboard matches `/status` at the same second; STALE banner on observer stop; non-allowlisted account sees nothing; rules tests pass | ⬜ not started | — |
 | 9A | Two symbols in one deployment — XAUUSD + XAGUSD observed, stored, measured and reported identically; `/execute` | Both symbols run in one observer; `/execute xagusd buy 0.1` shows one embed and executes only after CONFIRM; `/status symbol:XAGUSD` renders live and weekly modes | 🟡 code + emulator suite green; **real-session leg outstanding** | ✅ [XAGUSD baseline](PHASE2_BASELINE.md)<br>⬜ missing: verified XAGUSD session (`scripts/session_run.py --symbol XAGUSD, then scripts/session_verify.py --symbol XAGUSD`) |
-| 9B | Session volume profile and volatility as context — no new directional detections, no trades | Replayed fixture weeks (both symbols) yield profile-tagged detections; `/status` shows the block; the baseline gets an "outcomes by volume/volatility context" table per symbol | 🟡 code + fixture evidence; **real-session leg outstanding** | ✅ [outcomes by volume/volatility context](PHASE2_BASELINE.md) |
+| 9B | Session tick-volume profile and volatility as context — no new directional detections, no trades | Replayed fixture weeks (both symbols) yield profile-tagged detections; `/status` shows the block; the baseline gets an "outcomes by tick-volume/volatility context" table per symbol | 🟡 code + fixture evidence; **real-session leg outstanding** | ✅ [outcomes by tick-volume/volatility context](PHASE2_BASELINE.md) |
 | 9C | Alerts and notifications — `/remind price`, and detections announced in a channel with [Monitor] / [Execute] | An armed level fires **once** on the first quote beyond it, direct to whoever armed it, rendered from the snapshot frozen at the crossing; an enabled detection is announced once however many sweeps or restarts follow; [Execute] opens a lot modal and reaches the same CONFIRM as `/execute` | 🟡 code + emulator suite green; **real-session leg outstanding** | ✅ emulator: exactly-once across two bots and across a restart; [Execute] writes a REQUESTED document and the executor refuses it<br>⬜ missing: a real Discord gateway (no token or guild in this environment) |
 | 9D | `/monitor` — the measured record on a detection — and `/note` | `/monitor` on a bullish London cross returns a bias with its evidence, a cohort of n≥30 with what was dropped to reach it, per-horizon confirmation with 95% intervals, and TP/SL quantiles, and stores the assessment; below thirty it says "insufficient history (n=…)" and publishes no rate; the weekly review shows `assessment_hit_rate` and the trader's notes | 🟡 code + emulator suite green; **real-session leg outstanding** | ✅ emulator: the observer's published trend read rendered by `/monitor`; the readout stored and scored; `/note` leaving a CLOSED trade byte for byte<br>⬜ missing: a cohort built from a REAL evaluated history rather than a synthetic one (needs the verified sessions 9A and 9B still owe) |
 | — | **Corrections slice** (§12 identity, EMA 20/50, outcome V2, context tags, live snapshot, safety gaps, collection prefix, live-vs-replay tooling) | pytest green with and without the emulator; baseline carries a 20/50 section; `/status` shows the full snapshot; boundary tests cover identity components, bare collection literals and raw Firestore access | ✅ code done; **real-session leg outstanding** | ⬜ missing: verified real session (`scripts/session_run.py, then scripts/session_verify.py`) |
@@ -49,17 +49,20 @@ spec's ambiguities by section number. The frozen spec itself is still not in thi
 repository, so anything the decisions doc does not cover was inferred and logged
 as a new decision row (16–27).
 
-Two rows want confirmation against the real section text before the phase that
-depends on them:
+One row still wants confirmation against the real section text:
 
 - **row 17** — the `DailyReview` / `WeeklyReview` field sets, modelled as a
   superset because §61/§63 were unavailable. Phase 7 has now been built on that
   superset, so the fields are exercised and reconciled but still unratified: a
   §61/§63 that names *fewer* fields would leave harmless extras, one that names a
   field this superset lacks would be a gap. Still worth confirming.
-- **row 16** — `agent_version` excluded from `detection_id`. Confirm against §12
-  before Phase 2 writes detections to a real project, since changing it later
-  re-keys history.
+
+Row 16 — the caveat about the agent version and the detection id — is **resolved and no
+longer a caveat**. The corrections slice put `agent_version` back into the identity hash (decision 120,
+`DETECTION_ID_COMPONENTS`), which is why a tuning change or an agent bump forks the population
+instead of silently re-keying it. The note asking somebody to confirm it stayed here for four
+phases after the thing it described had been fixed, which is the drift `docs/DOCS_CHECK.md` and
+`tests/unit/test_docs_consistency.py` now exist to catch (11A, F-11).
 
 Everything else in Phase 1 is pinned by a test, so a correction surfaces as a
 failing test rather than as silent drift.

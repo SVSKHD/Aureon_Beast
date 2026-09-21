@@ -39,7 +39,7 @@ from aureon.execution.broker_capabilities import (
 )
 from aureon.models.base import utc_now
 from aureon.models.broker import AccountInfo
-from aureon.models.enums import Direction, FailureCode, MarketState
+from aureon.models.enums import AccountMode, Direction, FailureCode, MarketState
 from aureon.models.market import QuoteSnapshot, SymbolInfo
 from aureon.models.settings import ExecutionSettings
 from aureon.models.trade import TradeRequest
@@ -89,6 +89,8 @@ class GuardContext:
     market_state: MarketState
     broker: BrokerSnapshot
     now: datetime
+    #: From the environment, never from Firestore (11A F-3). See ``AureonConfig``.
+    allow_live_execution: bool = False
 
     @property
     def limits(self):
@@ -111,6 +113,42 @@ class GuardContext:
 
 
 Rule = Callable[[GuardContext], GuardResult | None]
+
+
+# ── 11A F-3: whose money is this ──────────────────────────────────────────────
+
+
+def rule_live_execution_allowed(ctx: GuardContext) -> GuardResult | None:
+    """Refuse a real-money account unless the box says that is intended (11A, F-3).
+
+    FIRST of all the rules, ahead of even ``trading_enabled``. When both conditions hold --
+    the switch is off AND the terminal is live -- an operator needs to hear about the
+    terminal: the switch is something they turned off on purpose, and the account is
+    something they may not have noticed. Reporting the switch first would send them to
+    Discord to flip it, which is exactly the wrong next action.
+
+    ``UNKNOWN`` is refused alongside ``REAL``. A provider that does not report
+    ``trade_mode``, or a broker double that says nothing, has not said it is a demo, and the
+    asymmetry is not close: being wrong here costs a refused order, being wrong the other
+    way costs somebody's savings to a system whose tests have never seen a real fill.
+
+    Missing account info is refused too, for the same reason.
+    """
+    if ctx.allow_live_execution:
+        return None
+    account = ctx.broker.account
+    mode = account.mode if account is not None else AccountMode.UNKNOWN
+    if not mode.is_real_money:
+        return None
+    where = ""
+    if account is not None:
+        where = f" (login {account.login}, server {account.server or '?'})"
+    return GuardResult.block(
+        "live_execution_allowed",
+        FailureCode.LIVE_EXECUTION_NOT_ALLOWED,
+        f"the terminal reports a {mode.value} account{where} and "
+        "AUREON_ALLOW_LIVE_EXECUTION is not 'true'",
+    )
 
 
 # ── §57: the operator's switch ────────────────────────────────────────────────
@@ -416,6 +454,7 @@ def rule_within_daily_trade_limit(ctx: GuardContext) -> GuardResult | None:
 # Cheap, unambiguous refusals come first so the reported reason is the most useful one:
 # "trading is disabled" is more helpful than "spread too wide" when both are true.
 RULES: tuple[Rule, ...] = (
+    rule_live_execution_allowed,
     rule_trading_enabled,
     rule_symbol_allowed,
     rule_confirmation_fresh,
@@ -442,6 +481,7 @@ def check(
     *,
     market_state: MarketState,
     broker: BrokerSnapshot,
+    allow_live_execution: bool = False,
     now: datetime | None = None,
 ) -> GuardResult:
     """Run every rule. The first refusal wins (§56, §57, §41).
@@ -455,6 +495,10 @@ def check(
         settings=settings,
         market_state=market_state,
         broker=broker,
+        # Defaults to False at every call site that does not pass it (11A F-3): a new
+        # caller that forgets this argument refuses a live account rather than permitting
+        # one, which is the only direction a default here may fail in.
+        allow_live_execution=allow_live_execution,
         now=now or utc_now(),
     )
     for rule in RULES:

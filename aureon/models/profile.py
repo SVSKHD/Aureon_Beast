@@ -58,7 +58,13 @@ class ProfileBin(AureonModel):
     model_config = ConfigDict(extra="forbid")
 
     price: float = Field(description="The bin's LOWER edge, in price.")
-    volume: float = Field(ge=0, description="Estimated tick volume in this bin.")
+    tick_volume: float = Field(
+        ge=0,
+        description=(
+            "Estimated MT5 TICK volume in this bin -- the number of price changes, not "
+            "contracts traded (11A, F-5)."
+        ),
+    )
 
 
 class VolumeProfile(AureonModel):
@@ -94,7 +100,7 @@ class VolumeProfile(AureonModel):
     hvn: tuple[float, ...] = ()
     lvn: tuple[float, ...] = ()
 
-    total_volume: float = Field(default=0.0, ge=0)
+    total_tick_volume: float = Field(default=0.0, ge=0)
     bins: tuple[ProfileBin, ...] = Field(
         default=(), description=f"At most {MAX_PROFILE_BINS}, coarsest-first."
     )
@@ -117,7 +123,7 @@ class VolumeProfile(AureonModel):
 
     @property
     def is_empty(self) -> bool:
-        return not self.bins or self.total_volume <= 0
+        return not self.bins or self.total_tick_volume <= 0
 
 
 class ProfileSummary(AureonModel):
@@ -137,7 +143,7 @@ class ProfileSummary(AureonModel):
     value_area_low: float | None = None
     hvn: tuple[float, ...] = ()
     lvn: tuple[float, ...] = ()
-    total_volume: float = Field(default=0.0, ge=0)
+    total_tick_volume: float = Field(default=0.0, ge=0)
 
     @model_validator(mode="after")
     def _known_scope(self) -> ProfileSummary:
@@ -154,7 +160,7 @@ class ProfileSummary(AureonModel):
             value_area_low=profile.value_area_low,
             hvn=profile.hvn,
             lvn=profile.lvn,
-            total_volume=profile.total_volume,
+            total_tick_volume=profile.total_tick_volume,
         )
 
 

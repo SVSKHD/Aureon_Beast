@@ -75,8 +75,8 @@ def test_the_asia_scope_holds_only_asias_candles() -> None:
 
     asia = track.profile("asia")
     london = track.profile("london")
-    assert asia.total_volume == pytest.approx(400.0)
-    assert london.total_volume == pytest.approx(400.0)
+    assert asia.total_tick_volume == pytest.approx(400.0)
+    assert london.total_tick_volume == pytest.approx(400.0)
     # Different prices, so the profiles do not overlap: a leak would show as a shared bin.
     assert {b.price for b in asia.bins} & {b.price for b in london.bins} == set()
 
@@ -87,13 +87,13 @@ def test_asia_is_retained_after_its_session_ends() -> None:
     feed(track, asia_candles(4))
     feed(track, london_candles(4))
     assert track.session is SessionName.LONDON
-    assert track.profile("asia").total_volume == pytest.approx(400.0)
+    assert track.profile("asia").total_tick_volume == pytest.approx(400.0)
 
 
 def test_the_day_scope_covers_every_session_so_far() -> None:
     track = tracker()
     feed(track, [*asia_candles(4), *london_candles(2)])
-    assert track.profile("day").total_volume == pytest.approx(600.0)
+    assert track.profile("day").total_tick_volume == pytest.approx(600.0)
 
 
 def test_the_previous_session_scope_is_the_one_that_just_ended() -> None:
@@ -101,7 +101,7 @@ def test_the_previous_session_scope_is_the_one_that_just_ended() -> None:
     feed(track, asia_candles(4))
     assert track.profile("previous_session").is_empty  # nothing has ended yet
     feed(track, london_candles(2))
-    assert track.profile("previous_session").total_volume == pytest.approx(400.0)
+    assert track.profile("previous_session").total_tick_volume == pytest.approx(400.0)
 
 
 def test_an_unknown_scope_is_refused_rather_than_silently_empty() -> None:
@@ -115,8 +115,8 @@ def test_the_state_panel_carries_the_session_asia_and_the_day() -> None:
     panel = track.profiles()
     assert set(panel) == {"current_session", "asia", "day"}
     assert panel["current_session"].scope == "london"
-    assert panel["asia"].total_volume == pytest.approx(400.0)
-    assert panel["day"].total_volume == pytest.approx(800.0)
+    assert panel["asia"].total_tick_volume == pytest.approx(400.0)
+    assert panel["day"].total_tick_volume == pytest.approx(800.0)
 
 
 def test_an_off_session_panel_falls_back_to_asia_rather_than_labelling_a_profile_off() -> None:
@@ -139,8 +139,8 @@ def test_a_new_broker_day_clears_the_day_and_the_sessions() -> None:
     ]
     feed(track, next_day)
 
-    assert track.profile("day").total_volume == pytest.approx(300.0)
-    assert track.profile("asia").total_volume == pytest.approx(300.0)
+    assert track.profile("day").total_tick_volume == pytest.approx(300.0)
+    assert track.profile("asia").total_tick_volume == pytest.approx(300.0)
     # Yesterday's prices are gone from both, which is what "retained until day end" means.
     assert all(b.price > 2490.0 for b in track.profile("asia").bins)
 

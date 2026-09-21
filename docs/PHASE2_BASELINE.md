@@ -379,7 +379,7 @@ Read the columns literally:
 
 235 detections, none evaluable: this agent emits `direction=None`, so there is no favourable side to measure (§16, decision 48).
 
-### Outcomes by volume and volatility context — XAUUSD
+### Outcomes by tick-volume and volatility context — XAUUSD
 
 Horizon `c5`, threshold `3`, COMPLETE horizons only. Every row
 gives both sides, because a `with` rate means nothing until the `without` rate is
@@ -691,7 +691,7 @@ rescaling them (decision 121). Until then, read silver's top thresholds as
 "not measured here" rather than as "silver does not move" — and remember the
 fixture is a random walk, so none of this is evidence about the metal.
 
-### Outcomes by volume and volatility context — XAGUSD
+### Outcomes by tick-volume and volatility context — XAGUSD
 
 Horizon `c5`, threshold `0.1`, COMPLETE horizons only. Every row
 gives both sides, because a `with` rate means nothing until the `without` rate is

@@ -37,6 +37,7 @@ from aureon.models.base import to_utc, utc_now
 from aureon.models.control import ControlRequest
 from aureon.models.detection import Detection
 from aureon.models.enums import (
+    AccountMode,
     ControlRequestKind,
     FillingMode,
     Freshness,
@@ -57,6 +58,15 @@ log = logging.getLogger(__name__)
 #: What a field with no value renders as, everywhere a human reads one. A blank would be
 #: indistinguishable from a zero at a glance, and a zero is a price.
 UNKNOWN = "—"
+
+#: Appended to every volume-profile line a human reads (11A, F-5).
+#:
+#: MT5's M5 candle reports ``tick_volume`` -- the number of price CHANGES in the bar -- and
+#: says nothing about contracts traded or about where inside its range they happened. A line
+#: saying "POC 2398.00" over a label reading "Volume" invites a reader to interpret it the way
+#: a futures trader reads exchange volume at a price, which it is not and cannot be from this
+#: data. Two words of honesty are cheaper than the wrong conclusion.
+TICK_VOLUME_NOTE = "tick-volume profile (MT5), not exchange traded volume"
 
 
 # ── Authorization (§71) ───────────────────────────────────────────────────────
@@ -890,7 +900,7 @@ def build_notification(detection: Detection) -> NotificationScreen:
         symbol=detection.symbol,
         detection_id=detection.detection_id,
         side=detection.direction.value if detection.direction else None,
-        footer=f"{RESEARCH_ONLY} · {detection.detection_id}",
+        footer=f"{RESEARCH_ONLY} · {TICK_VOLUME_NOTE} · {detection.detection_id}",
     )
 
     ema = detection.indicators.ema or {}
@@ -914,7 +924,7 @@ def build_notification(detection: Detection) -> NotificationScreen:
             + (f" · {detection.session.trend}" if getattr(detection.session, "trend", None)
                else ""),
         ),
-        ("Volume", _volume_line(detection)),
+        ("Tick volume", _volume_line(detection)),
         ("Volatility", _volatility_line(detection)),
     ]
     wick = _wick_line(detection)
@@ -1172,6 +1182,84 @@ def _next_move_line(assessment: Any) -> str:
     )
 
 
+@dataclass(frozen=True)
+class LiveEnableGate:
+    """Whether ``/trading enable`` may proceed on this account, and what to show first.
+
+    Two conditions, both required, and they are deliberately not the same thing (11A F-3):
+
+    * ``AUREON_ALLOW_LIVE_EXECUTION=true`` on the box -- a line somebody wrote on the
+      machine while looking at which terminal was open;
+    * a second confirmation screen naming the login, server, balance and the word LIVE --
+      so the person pressing the button has read what they are arming.
+
+    Without the flag there is no second screen to reach: enabling would arm a switch the
+    executor is going to ignore anyway, and a Discord message saying "enabled" over an
+    executor in reconcile-only mode is the worst of both.
+    """
+
+    allowed: bool
+    needs_live_confirmation: bool
+    message: str
+    #: The LIVE screen's own lines, when one is needed. Built here rather than in the view
+    #: for the reason every other screen is: the content is a decision, and it is tested
+    #: without a Discord client.
+    fields: tuple[tuple[str, str], ...] = ()
+
+
+def plan_trading_enable(state: Any, *, allow_live_execution: bool) -> LiveEnableGate:
+    """What ``/trading enable`` should do, given the account the observer published.
+
+    Reads the published ``account_mode`` rather than a terminal: Discord holds no broker and
+    no provider (CLAUDE.md). That is a weaker source than the executor's own read, and it is
+    the right one for this job -- this gate decides what a HUMAN is shown, and the executor
+    re-decides what it will actually do from its own connection.
+
+    An unpublished mode is treated as real money, like everywhere else: the observer not
+    having said yet is not the same as it having said "demo".
+    """
+    mode = getattr(state, "account_mode", None) or AccountMode.UNKNOWN
+    if not mode.is_real_money:
+        return LiveEnableGate(
+            allowed=True, needs_live_confirmation=False, message=ENABLE_DETAILS
+        )
+
+    known = mode is AccountMode.REAL
+    where = "a REAL-money account" if known else "an account it could not identify"
+    if not allow_live_execution:
+        return LiveEnableGate(
+            allowed=False,
+            needs_live_confirmation=False,
+            message=(
+                f"The observer reports {where}, and `AUREON_ALLOW_LIVE_EXECUTION` is not "
+                "`true` on the executor's box.\n\n"
+                "Enabling here would arm a switch the executor is going to ignore — it "
+                "starts in reconcile-only mode on a live account and refuses every "
+                "request with `live_execution_not_allowed`. Set the variable on the box "
+                "first, deliberately, then come back."
+            ),
+        )
+
+    quote = getattr(state, "symbols", ()) or ()
+    first = quote[0] if quote else None
+    return LiveEnableGate(
+        allowed=True,
+        needs_live_confirmation=True,
+        message=(
+            "**This is a LIVE account.** Orders confirmed after this will move real "
+            "money.\n\n" + ENABLE_DETAILS
+        ),
+        fields=(
+            ("Account", mode.value.upper()),
+            (
+                "Symbol",
+                getattr(first, "symbol", UNKNOWN) if first is not None else UNKNOWN,
+            ),
+            ("Observer state", str(getattr(first, "market_state", UNKNOWN))),
+        ),
+    )
+
+
 def assessment_info_line(assessment: Any, *, now: datetime | None = None) -> str | None:
     """One line about the last `/monitor` readout for this symbol (9D-4, §64).
 
@@ -1266,7 +1354,7 @@ def build_reminder(alert: PriceAlert) -> ReminderScreen:
         requested_by=alert.requested_by,
         note=alert.note,
         side="buy" if alert.side == "above" else "sell",
-        footer=f"{RESEARCH_ONLY} · {alert.alert_id}",
+        footer=f"{RESEARCH_ONLY} · {TICK_VOLUME_NOTE} · {alert.alert_id}",
     )
 
     fired_at = alert.fired_at.isoformat() if alert.fired_at else UNKNOWN
@@ -1299,7 +1387,7 @@ def build_reminder(alert: PriceAlert) -> ReminderScreen:
             f"{_fmt(snapshot.get('session_low'))}–{_fmt(snapshot.get('session_high'))}",
         ),
         ("Detections today", str(snapshot.get("detections_today") or 0)),
-        ("Volume", _snapshot_volume_line(snapshot)),
+        ("Tick volume", _snapshot_volume_line(snapshot)),
         ("Volatility", _snapshot_volatility_line(snapshot)),
         ("Last wick", _event(snapshot.get("last_wick"), "classification")),
         ("Last sweep", _event(snapshot.get("last_sweep"), "direction", "level_type")),
@@ -1488,12 +1576,14 @@ def _context_lines(state: Any, quote: Any) -> list[str]:
     volatility = getattr(state, "volatility", None)
     price = getattr(quote, "bid", None)
 
-    lines = []
+    # Named once at the top of the block rather than on each line: three rows each carrying
+    # the same caveat reads as noise and gets skipped, which defeats the caveat (11A, F-5).
+    lines = [f"— {TICK_VOLUME_NOTE} —"]
     for scope in ("current_session", "asia"):
         summary = profiles.get(scope)
         label = scope.replace("_", " ")
         if summary is None:
-            lines.append(f"{label} profile {UNKNOWN}")
+            lines.append(f"{label} tick-volume profile {UNKNOWN}")
             continue
         lines.append(
             f"{label} ({summary.scope}) POC {_fmt(summary.poc_price)}"

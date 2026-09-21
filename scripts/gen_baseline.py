@@ -354,7 +354,7 @@ def build() -> str:
     )
     lines += _v2_section(v2)
 
-    # ── 9B: outcomes split by volume and volatility context ──────────────────
+    # ── 9B: outcomes split by tick-volume and volatility context ─────────────
     lines += _context_outcomes_section(v2, XAU_OUTCOME_V2, "XAUUSD")
 
     # ── Historical: the pair that shipped before 20/50 ────────────────────────
@@ -772,7 +772,7 @@ def _context_outcomes_section(result: BackfillResult, rule, symbol: str) -> list
     threshold = comparisons[0].threshold_key
     lines = [
         "",
-        f"### Outcomes by volume and volatility context — {symbol}",
+        f"### Outcomes by tick-volume and volatility context — {symbol}",
         "",
         f"Horizon `{horizon}`, threshold `{threshold}`, COMPLETE horizons only. Every row",
         "gives both sides, because a `with` rate means nothing until the `without` rate is",

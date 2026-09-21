@@ -17,22 +17,23 @@ test run and production and could never be checked in.
 
 | collection | document id | model |
 |---|---|---|
-| `aureon_beast_detections` | `detection_id` | `Detection` |
+| `aureon_beast_alerts` | `alert_id` | `PriceAlert` |
+| `aureon_beast_assessments` | `assessment_id` | `Assessment` |
+| `aureon_beast_audit_logs` | `audit_id` | `AuditRecord` |
+| `aureon_beast_control_requests` | `control_id` | `ControlRequest` |
+| `aureon_beast_daily_reviews` | `{market_date}[_{symbol}]` | `DailyReview` |
 | `aureon_beast_detection_evaluations` | `{detection_id}__{rule_id}` | `DetectionEvaluation` |
-| `aureon_beast_sessions` | `{market_date}__{session}` | _(Phase 2)_ |
+| `aureon_beast_detections` | `detection_id` | `Detection` |
+| `aureon_beast_heartbeats` | `{service}` | `Heartbeat` |
+| `aureon_beast_notifications` | `{kind}__{ref_id}` | `Notification` |
+| `aureon_beast_sessions` | `{market_date}__{session}` | `SessionSummary` |
+| `aureon_beast_settings` | `execution / notifications` | `ExecutionSettings, NotificationSettings` |
+| `aureon_beast_symbol_specs` | `{symbol}` | `SymbolInfo` |
+| `aureon_beast_system_state` | `{symbol}_{timeframe}` | `SystemState` |
+| `aureon_beast_trade_notes` | `note_id` | `TradeNote` |
 | `aureon_beast_trade_requests` | `request_id` | `TradeRequest` |
 | `aureon_beast_trades` | `trade_id` | `Trade` |
-| `aureon_beast_control_requests` | `control_id` | `ControlRequest` |
-| `aureon_beast_audit_logs` | `audit_id` | `AuditRecord` |
-| `aureon_beast_heartbeats` | `{service}` | `Heartbeat` |
-| `aureon_beast_system_state` | `{symbol}_{timeframe}` | `SystemState` |
-| `aureon_beast_settings` | `execution` | `ExecutionSettings` |
-| `aureon_beast_daily_reviews` | `{market_date}` | `DailyReview` |
-| `aureon_beast_weekly_reviews` | `{iso_year}-W{iso_week}` | `WeeklyReview` |
-| `aureon_beast_alerts` | `alert_id` | `PriceAlert` |
-| `aureon_beast_notifications` | `{kind}__{ref_id}` | `Notification` |
-| `aureon_beast_assessments` | `assessment_id` | `Assessment` |
-| `aureon_beast_trade_notes` | `note_id` | `TradeNote` |
+| `aureon_beast_weekly_reviews` | `{iso_year}-W{iso_week}[_{symbol}]` | `WeeklyReview` |
 
 Tick data is never stored in Firestore. There is no `pending_orders`
 collection (decision 9): a pending order *is* the `PENDING` trade request.
@@ -224,6 +225,7 @@ One document describing the whole system's health (§59, §61-§63).
 | `symbols` | `tuple[SymbolState]` | no | `()` |  |
 | `heartbeats` | `dict[str, AwareDatetime]` | no | `dict()` |  |
 | `trading_enabled` | `bool \| null` | no | `None` | Mirror of settings/execution, for display only. |
+| `account_mode` | `AccountMode \| null` | no | `None` |  |
 | `notes` | `str \| null` | no | `None` |  |
 
 ### ExecutionSettings
@@ -569,6 +571,7 @@ Account state, for the margin and exposure guards (§56).
 | `margin_level` | `float \| null` | no | `None` |  |
 | `leverage` | `int \| null` | no | `None` |  |
 | `server` | `str \| null` | no | `None` |  |
+| `mode` | `AccountMode` | no | `'unknown'` |  |
 | `raw` | `dict[str, object]` | no | `dict()` |  |
 
 ### BrokerPosition
@@ -825,7 +828,7 @@ One price bin and the volume estimated to have traded in it.
 | field | type | required | default | notes |
 |---|---|---|---|---|
 | `price` | `float` | yes | — | The bin's LOWER edge, in price. |
-| `volume` | `float` | yes | — | Estimated tick volume in this bin. |
+| `tick_volume` | `float` | yes | — | Estimated MT5 TICK volume in this bin -- the number of price changes, not contracts traded (11A, F-5). |
 
 ### ProfileSummary
 
@@ -839,7 +842,7 @@ A profile without its bins, for ``SystemState`` and ``/status`` (9B).
 | `value_area_low` | `float \| null` | no | `None` |  |
 | `hvn` | `tuple[float]` | no | `()` |  |
 | `lvn` | `tuple[float]` | no | `()` |  |
-| `total_volume` | `float` | no | `0.0` |  |
+| `total_tick_volume` | `float` | no | `0.0` |  |
 
 ### VolumeProfile
 
@@ -858,7 +861,7 @@ Estimated volume by price over one scope (9B, §19).
 | `value_area_low` | `float \| null` | no | `None` | The band around the POC holding 70% of estimated volume (§19). |
 | `hvn` | `tuple[float]` | no | `()` |  |
 | `lvn` | `tuple[float]` | no | `()` |  |
-| `total_volume` | `float` | no | `0.0` |  |
+| `total_tick_volume` | `float` | no | `0.0` |  |
 | `bins` | `tuple[ProfileBin]` | no | `()` | At most 200, coarsest-first. |
 
 ### VolumeProfileRef
@@ -1101,6 +1104,7 @@ Why a request failed (§56, §57, §41, §78).
 |---|---|
 | `TRADING_DISABLED` | `trading_disabled` |
 | `NOT_AUTHORIZED` | `not_authorized` |
+| `LIVE_EXECUTION_NOT_ALLOWED` | `live_execution_not_allowed` |
 | `MARKET_CLOSED` | `market_closed` |
 | `SPREAD_LIMIT` | `spread_limit` |
 | `STALE_QUOTE` | `stale_quote` |

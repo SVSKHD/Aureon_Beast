@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from aureon.config import AureonConfig
 from aureon.execution.drills import (
     CATALOGUE,
     DrillContext,
@@ -253,3 +254,73 @@ def test_the_send_log_is_scoped_to_one_drill() -> None:
     assert ctx.sends() == []
     broker.calls.append("send_market_order")
     assert ctx.sends() == ["send_market_order"]
+
+
+# ── 11A F-3: the refusal that never fired ─────────────────────────────────────
+
+
+def terminal_reporting(mode: str):
+    """A stand-in for ``MT5Broker`` that reports one account mode."""
+    from aureon.execution.fake_broker import FakeBroker
+    from aureon.models.enums import AccountMode
+
+    inner = FakeBroker(mode=AccountMode(mode))
+
+    class _Terminal:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def connect(self) -> None:
+            pass
+
+        def account_info(self):
+            return inner.account_info()
+
+    return _Terminal
+
+
+@pytest.mark.parametrize("mode", ["real", "contest", "unknown"])
+def test_the_drills_refuse_a_terminal_that_is_not_a_demo(monkeypatch, mode: str) -> None:
+    """This guard was dead code until 11A.
+
+    It read ``getattr(account, "is_demo", True)`` and ``AccountInfo`` has never had an
+    ``is_demo`` field, so the expression was always True and the refusal could not fire --
+    on a script where four drills place real orders and one drops a connection mid-send.
+
+    CONTEST is refused alongside REAL and UNKNOWN: a contest account is somebody's
+    competition entry, and a terminal that will not say what it is has not said "demo".
+    """
+    import aureon.execution.mt5_broker as mt5_broker
+    from scripts import demo_drills
+
+    monkeypatch.setattr(mt5_broker, "MT5Broker", terminal_reporting(mode))
+
+    with pytest.raises(SystemExit) as raised:
+        demo_drills.build_broker_factory(
+            "mt5", config=AureonConfig(), allow_real=False
+        )
+    assert mode.upper() in str(raised.value)
+    assert "--i-know-this-is-real-money" in str(raised.value)
+
+
+def test_a_demo_terminal_is_accepted(monkeypatch) -> None:
+    import aureon.execution.mt5_broker as mt5_broker
+    from scripts import demo_drills
+
+    monkeypatch.setattr(mt5_broker, "MT5Broker", terminal_reporting("demo"))
+    factory = demo_drills.build_broker_factory(
+        "mt5", config=AureonConfig(), allow_real=False
+    )
+    assert factory() is not None
+
+
+def test_the_override_is_honoured_because_somebody_typed_it(monkeypatch) -> None:
+    """``--i-know-this-is-real-money`` exists so the refusal is a speed bump rather than a
+    wall. It is spelled that way on purpose."""
+    import aureon.execution.mt5_broker as mt5_broker
+    from scripts import demo_drills
+
+    monkeypatch.setattr(mt5_broker, "MT5Broker", terminal_reporting("real"))
+    assert demo_drills.build_broker_factory(
+        "mt5", config=AureonConfig(), allow_real=True
+    )() is not None

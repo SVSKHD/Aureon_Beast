@@ -50,7 +50,14 @@ from datetime import datetime, timedelta
 from aureon.execution.broker_interface import BrokerError, BrokerInterface
 from aureon.models.base import to_utc, utc_now
 from aureon.models.broker import AccountInfo, BrokerDeal, BrokerOrder, BrokerPosition
-from aureon.models.enums import DealEntry, Direction, FailureCode, FillingMode, OrderType
+from aureon.models.enums import (
+    AccountMode,
+    DealEntry,
+    Direction,
+    FailureCode,
+    FillingMode,
+    OrderType,
+)
 from aureon.models.market import QuoteSnapshot, SymbolInfo
 from aureon.models.trade import BrokerOrderRequest, BrokerOrderResult
 
@@ -110,6 +117,7 @@ class FakeBroker(BrokerInterface):
         margin_free: float = 100_000.0,
         symbols: Mapping[str, SymbolInfo] | None = None,
         prices: Mapping[str, tuple[float, float]] | None = None,
+        mode: AccountMode = AccountMode.DEMO,
     ) -> None:
         self._info = symbol_info or DEFAULT_SYMBOL_INFO
         #: Per-symbol specs (9A). Empty means "one instrument", the pre-9A behaviour.
@@ -125,6 +133,11 @@ class FakeBroker(BrokerInterface):
         self.ask = ask
         self.balance = balance
         self.margin_free = margin_free
+        #: What this double claims to be logged into (11A F-3). DEMO by default, and stated
+        #: EXPLICITLY rather than inherited: ``AccountInfo.mode`` defaults to UNKNOWN, which
+        #: the guards read as real money, so a double that stayed silent would refuse every
+        #: order in every test. A test wanting the guard to bite passes ``mode=REAL``.
+        self.mode = mode
 
         # Survives a simulated restart: the tests keep the broker and rebuild the
         # executor around it.
@@ -174,7 +187,10 @@ class FakeBroker(BrokerInterface):
             balance=self.balance,
             equity=self.balance,
             margin_free=self.margin_free,
-            server="FakeBroker-Demo",
+            # Named for what it is claiming, so a ledger dump from a mode=REAL test does not
+            # read as though it came from a demo.
+            server=f"FakeBroker-{self.mode.value.capitalize()}",
+            mode=self.mode,
         )
 
     def symbol_info(self, symbol: str) -> SymbolInfo:

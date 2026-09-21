@@ -156,11 +156,25 @@ class EnableTradingView(discord.ui.View):
     real money and deserves a pause.
     """
 
-    def __init__(self, context: BotContext, actor: str, *, timeout: float = 60.0) -> None:
+    def __init__(
+        self,
+        context: BotContext,
+        actor: str,
+        *,
+        timeout: float = 60.0,
+        live: bool = False,
+    ) -> None:
         super().__init__(timeout=timeout)
         self.context = context
         self.actor = actor
         self.enabled = False
+        #: 11A F-3. Only relabels the button. The DECISION was made by
+        #: ``plan_trading_enable`` before this view was built -- a live account without the
+        #: environment flag never gets a view at all -- so this cannot become the place
+        #: where the gate is enforced, or forgotten.
+        self.live = live
+        if live:
+            self.enable.label = "Enable on LIVE account"
 
     @discord.ui.button(label="Enable trading", style=discord.ButtonStyle.danger)
     async def enable(

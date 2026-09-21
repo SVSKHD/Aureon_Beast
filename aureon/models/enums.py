@@ -198,6 +198,48 @@ class LinkType(StrEnum):
     INFERRED = "inferred"
 
 
+class AccountMode(StrEnum):
+    """Which kind of money the terminal is logged into (11A, F-3).
+
+    MT5 reports this as ``account_info().trade_mode``: 0 demo, 1 contest, 2 real. It is
+    read and carried as a NAME rather than compared as an integer at the call sites, because
+    "2" appearing in a conditional is the least reviewable possible way to express "this is
+    somebody's savings".
+
+    ``UNKNOWN`` is a real answer and the one the guards must treat as dangerous: a terminal
+    that will not say what it is logged into has not said it is a demo.
+    """
+
+    DEMO = "demo"
+    CONTEST = "contest"
+    REAL = "real"
+    UNKNOWN = "unknown"
+
+    @classmethod
+    def from_trade_mode(cls, value: object) -> AccountMode:
+        """Map MT5's integer, treating anything unrecognised as UNKNOWN.
+
+        Deliberately not ``cls(value)`` with a default of DEMO: a broker that starts
+        reporting 3 for something new would otherwise be read as a demo account, which is
+        the one direction this mapping must never fail in.
+        """
+        mapping = {0: cls.DEMO, 1: cls.CONTEST, 2: cls.REAL}
+        try:
+            return mapping.get(int(value), cls.UNKNOWN)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return cls.UNKNOWN
+
+    @property
+    def is_real_money(self) -> bool:
+        """True for anything that is not demonstrably a practice account.
+
+        UNKNOWN counts as real money. The cost of being wrong in this direction is a
+        refused order; the cost of being wrong in the other is an order on somebody's
+        savings placed by a system whose own tests have never run against real fills.
+        """
+        return self in {AccountMode.REAL, AccountMode.UNKNOWN}
+
+
 class FailureCode(StrEnum):
     """Why a request failed (§56, §57, §41, §78).
 
@@ -208,6 +250,12 @@ class FailureCode(StrEnum):
     # Operator / settings gates (§57)
     TRADING_DISABLED = "trading_disabled"
     NOT_AUTHORIZED = "not_authorized"
+    #: The terminal is logged into a real-money account and nobody has said that is
+    #: intended (11A, F-3). Separate from TRADING_DISABLED because the two need different
+    #: remedies: one is a switch a human flips in Discord, the other is an environment
+    #: variable on the box, and telling an operator to flip the wrong one wastes the
+    #: minutes in which they could have noticed which terminal is open.
+    LIVE_EXECUTION_NOT_ALLOWED = "live_execution_not_allowed"
 
     # Market condition gates (§41, §56)
     MARKET_CLOSED = "market_closed"

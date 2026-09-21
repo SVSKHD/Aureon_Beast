@@ -18,7 +18,7 @@ from discord import app_commands
 from aureon.discord.bot import requires_authorization
 from aureon.discord.context import BotContext
 from aureon.discord.embeds import notice_embed
-from aureon.discord.service import ENABLE_DETAILS, trading_change_summary
+from aureon.discord.service import plan_trading_enable, trading_change_summary
 from aureon.discord.views import EnableTradingView
 
 log = logging.getLogger(__name__)
@@ -66,13 +66,44 @@ class TradingCommands:
 
     @requires_authorization
     async def enable(self, interaction: discord.Interaction) -> None:
-        """Shows the §57 details and requires a confirming press."""
+        """Shows the §57 details and requires a confirming press.
+
+        On a live account there is a second gate (11A, F-3): without
+        ``AUREON_ALLOW_LIVE_EXECUTION`` on the executor's box this refuses outright rather
+        than arming a switch the executor will ignore, and with it the screen names the
+        account and says LIVE before offering the button.
+        """
         await interaction.response.defer(thinking=True, ephemeral=True)
         actor = str(interaction.user.id)
-        view = EnableTradingView(self.context, actor)
+        context = self.context
+
+        state = None
+        try:
+            state = await context.run(context.system_state.read)
+        except Exception:  # noqa: BLE001 - an unreadable state is treated as unknown
+            log.exception("/trading enable could not read system_state")
+
+        gate = plan_trading_enable(
+            state, allow_live_execution=context.config.allow_live_execution
+        )
+        if not gate.allowed:
+            await interaction.followup.send(
+                embed=notice_embed("Not enabled", gate.message, bad=True),
+                ephemeral=True,
+            )
+            return
+
+        title = "Enable trading on a LIVE account?" if gate.needs_live_confirmation else (
+            "Enable trading?"
+        )
+        embed = notice_embed(title, gate.message, bad=gate.needs_live_confirmation)
+        for name, value in gate.fields:
+            embed.add_field(name=name, value=value or "—", inline=True)
         await interaction.followup.send(
-            embed=notice_embed("Enable trading?", ENABLE_DETAILS),
-            view=view,
+            embed=embed,
+            view=EnableTradingView(
+                context, actor, live=gate.needs_live_confirmation
+            ),
             ephemeral=True,
         )
 

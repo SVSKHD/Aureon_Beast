@@ -43,9 +43,14 @@ class FakeTerminal:
         symbol_info: Any = None,
         tick_at: datetime | None = NOW,
         connect_error: Exception | None = None,
+        trade_mode: object = 0,
     ) -> None:
         self.login = login
         self.server = server
+        #: MT5's own integer: 0 demo, 1 contest, 2 real (11A F-3). Defaults to 0 because
+        #: this double is named BrokerX-*Demo*; a test wanting the live-account row asks
+        #: for 2, and one wanting a terminal that will not say passes ``None``.
+        self.trade_mode = trade_mode
         self._symbol_info = symbol_info or DEFAULT_SYMBOL_INFO
         self._tick_at = tick_at
         self._connect_error = connect_error
@@ -66,6 +71,7 @@ class FakeTerminal:
             "currency": "USD",
             "leverage": 100,
             "trade_allowed": True,
+            "trade_mode": self.trade_mode,
         }
 
     def symbol_info(self, symbol: str) -> Any:
@@ -450,6 +456,7 @@ def test_a_clean_run_is_ready_and_exits_zero(tmp_path) -> None:
         "collection_prefix",
         "outbox",
         "archive_dir",
+        "credentials",
         "firestore",
         "trading_enabled",
         "mt5_init",
@@ -491,3 +498,120 @@ def test_the_rendered_table_carries_every_check_and_its_remedy(tmp_path) -> None
 
 def test_an_empty_report_renders_without_raising() -> None:
     assert "READY" in CheckReport().summary()
+
+
+# ── 11A F-2: credentials ──────────────────────────────────────────────────────
+
+
+def test_the_emulator_skips_the_credentials_check_rather_than_passing_it(
+    tmp_path,
+) -> None:
+    """SKIP, never PASS. A green row for a check that never ran is how an emulator-only
+    run comes to look like evidence about production."""
+    config = AureonConfig(
+        mt5_login=5150, mt5_server="BrokerX-Demo", firestore_emulator_host="127.0.0.1:8080"
+    )
+    result = build(tmp_path, config=config).check_credentials()
+    assert result.status is Status.SKIP
+    assert "no credentials needed" in result.detail
+
+
+def test_a_missing_key_file_fails_with_the_remedy(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(tmp_path / "absent.json"))
+    result = build(tmp_path).check_credentials()
+    assert result.status is Status.FAIL
+    assert "no such file" in result.detail
+    assert "gcloud auth application-default login" in result.remedy
+
+
+def test_an_oauth_client_secret_is_named_as_the_wrong_file(tmp_path, monkeypatch) -> None:
+    """The single most common wrong file: both are JSON, both come from the same console,
+    and only one of them works. Telling somebody "invalid credentials" sends them to
+    re-download the same file."""
+    key = tmp_path / "client_secret.json"
+    key.write_text('{"installed": {"client_id": "x"}, "project_id": "p"}')
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(key))
+
+    result = build(tmp_path).check_credentials()
+    assert result.status is Status.FAIL
+    assert "client_email" in result.detail
+    assert "OAuth client secret" in result.detail
+
+
+def test_a_key_that_is_not_json_says_so(tmp_path, monkeypatch) -> None:
+    key = tmp_path / "key.json"
+    key.write_text("-----BEGIN PRIVATE KEY-----\nnope\n")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(key))
+    assert "not valid JSON" in build(tmp_path).check_credentials().detail
+
+
+def test_a_real_looking_key_passes_and_reports_who_it_is(tmp_path, monkeypatch) -> None:
+    key = tmp_path / "key.json"
+    key.write_text(
+        '{"client_email": "aureon@p.iam.gserviceaccount.com", '
+        '"private_key": "-----BEGIN PRIVATE KEY-----", "project_id": "aureon-prod"}'
+    )
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(key))
+
+    result = build(tmp_path).check_credentials()
+    assert result.status is Status.PASS
+    assert "aureon@p.iam.gserviceaccount.com" in result.detail
+    assert "aureon-prod" in result.detail
+
+
+def test_no_variable_at_all_warns_rather_than_failing(tmp_path, monkeypatch) -> None:
+    """Application default credentials from `gcloud auth` are a legitimate developer setup,
+    and the round trip behind this is what decides. But a box about to run unattended for a
+    week should hear which path it is on."""
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    result = build(tmp_path).check_credentials()
+    assert result.status is Status.WARN
+    assert "application default credentials" in result.detail
+
+
+def test_a_credentials_error_from_the_round_trip_prints_the_remedy(tmp_path) -> None:
+    """The round trip's own translation: "no credentials found" is a different action from
+    a permission denial, and both arrive as one opaque exception."""
+
+    class _NoCredentials(InMemoryFirestore):
+        def document(self, path: str):
+            class DefaultCredentialsError(Exception):
+                pass
+
+            raise DefaultCredentialsError("could not automatically determine credentials")
+
+    result = build(tmp_path, client=_NoCredentials()).check_firestore()
+    assert result.status is Status.FAIL
+    assert "no usable credentials" in result.detail
+    assert "GOOGLE_APPLICATION_CREDENTIALS" in result.remedy
+
+
+# ── 11A F-3: the account mode is on the table ─────────────────────────────────
+
+
+def test_a_demo_terminal_passes_and_says_so(tmp_path) -> None:
+    preflight = build(tmp_path, terminal=FakeTerminal(trade_mode=0))
+    preflight.check_mt5_init()
+    result = preflight.check_mt5_account()
+    assert result.status is Status.PASS
+    assert "mode=DEMO" in result.detail
+
+
+def test_a_live_terminal_warns_and_never_passes_quietly(tmp_path) -> None:
+    """Observation on a live account is legitimate and read-only. It is never a silent
+    green row: an operator scanning a passing table would not notice."""
+    preflight = build(tmp_path, terminal=FakeTerminal(trade_mode=2))
+    preflight.check_mt5_init()
+    result = preflight.check_mt5_account()
+    assert result.status is Status.WARN
+    assert "mode=REAL" in result.detail
+    assert "REAL MONEY" in result.detail
+    assert "AUREON_ALLOW_LIVE_EXECUTION" in result.remedy
+
+
+def test_a_terminal_that_will_not_say_is_treated_as_live(tmp_path) -> None:
+    preflight = build(tmp_path, terminal=FakeTerminal(trade_mode=None))
+    preflight.check_mt5_init()
+    result = preflight.check_mt5_account()
+    assert result.status is Status.WARN
+    assert "mode=UNKNOWN" in result.detail

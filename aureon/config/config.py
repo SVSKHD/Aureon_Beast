@@ -62,6 +62,18 @@ def _env_csv(key: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
+def _env_true(key: str) -> bool:
+    """True only for the exact string ``"true"``, case-insensitively (11A, F-3).
+
+    Strict on purpose, and only used for flags that unlock something dangerous. The usual
+    permissive parsing -- "1", "yes", "on", any non-empty value -- means a stray
+    ``AUREON_ALLOW_LIVE_EXECUTION=false`` or a leftover ``=0`` reads as permission. A flag
+    whose whole job is to be hard to set by accident should be hard to set by accident.
+    """
+    raw = _env_opt(key)
+    return raw is not None and raw.strip().lower() == "true"
+
+
 def _env_map(key: str) -> dict[str, str]:
     """``KEY=A:x,B:y`` -> ``{"A": "x", "B": "y"}``.
 
@@ -159,6 +171,18 @@ class AureonConfig(AureonModel):
     #: long enough to survive a restart or a slow Firestore write, short enough that a bot
     #: which was down for an hour does not wake up and post an hour of history at once.
     notify_window_seconds: float = 120.0
+
+    # ── 11A F-3: the live-account gate ────────────────────────────────────────
+    #: Whether the executor may place orders on a REAL-money account.
+    #:
+    #: An environment variable on the box, NOT a Firestore setting, and that is the whole
+    #: point. ``trading_enabled`` is a switch a human flips in Discord in a hurry; this is
+    #: a line somebody had to write on the machine, while looking at which terminal is
+    #: open. Making it flippable from the phone would collapse the two decisions into one.
+    #:
+    #: Fails closed, and ``UNKNOWN`` counts as real money (``AccountMode.is_real_money``):
+    #: a terminal that will not say what it is logged into has not said it is a demo.
+    allow_live_execution: bool = False
 
     # ── Reviews ───────────────────────────────────────────────────────────────
     infer_window_minutes: int = 30
@@ -263,6 +287,7 @@ class AureonConfig(AureonModel):
             link_window_minutes=_env_int("AUREON_LINK_WINDOW_MINUTES", 90),
             alert_channel_id=int(channel) if channel else None,
             notify_window_seconds=_env_float("AUREON_NOTIFY_WINDOW_SECONDS", 120.0),
+            allow_live_execution=_env_true("AUREON_ALLOW_LIVE_EXECUTION"),
             infer_window_minutes=_env_int("AUREON_INFER_WINDOW_MINUTES", 30),
             mt5_login=int(login) if login else None,
             mt5_password=_env_opt("AUREON_MT5_PASSWORD"),
