@@ -87,6 +87,10 @@ OPS_EVENTS = collection("ops_events")
 # parquet, because tick-scale data never goes to Firestore (CLAUDE.md).
 MARKET_DAYS = collection("market_days")
 MARKET_DAY_FRAMES = collection("market_day_frames")
+# 12 T-6: structures tracked over time, with their history in a per-setup sub-collection. The
+# only collection here with a sub-collection: a setup's events are unbounded in principle and
+# an array on the parent would grow until a write failed.
+SETUPS = collection("setups")
 
 def _all_collections() -> tuple[str, ...]:
     """Every prefixed collection constant in this module, found rather than listed (11A, F-10).
@@ -231,6 +235,30 @@ def market_day_frame_path(symbol: str, market_date: str, timeframe: object) -> s
 
 def system_state_path(symbol: str, timeframe: object) -> str:
     return f"{SYSTEM_STATE}/{system_state_doc_id(symbol, timeframe)}"
+
+
+#: The sub-collection under each setup. Not a top-level collection: an event is meaningless
+#: without its setup, and nesting it means deleting a setup cannot leave orphans behind. It is
+#: deliberately NOT in ``ALL_COLLECTIONS`` -- that registry lists top-level collections, and the
+#: emulator cleanup and the contracts table both walk it as such.
+SETUP_EVENTS_SUBCOLLECTION = "events"
+
+
+def setup_path(setup_id: str) -> str:
+    return f"{SETUPS}/{_require(setup_id, 'setup_id')}"
+
+
+def setup_events_path(setup_id: str) -> str:
+    return f"{setup_path(setup_id)}/{SETUP_EVENTS_SUBCOLLECTION}"
+
+
+def setup_event_path(setup_id: str, event_id: str) -> str:
+    """``setups/{setup_id}/events/{event_id}`` (12, T-6).
+
+    The event id is deterministic over (setup, candle close, event type), which is what makes
+    the write idempotent -- a replay of the same candle addresses the same document.
+    """
+    return f"{setup_events_path(setup_id)}/{_require(event_id, 'event_id')}"
 
 
 def execution_settings_path() -> str:

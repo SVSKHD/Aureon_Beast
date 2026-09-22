@@ -279,9 +279,16 @@ class _FakeDoc:
             raise FakeAlreadyExists(self._path)
         self.set(payload)
 
-    def get(self, transaction: Any | None = None) -> _FakeSnapshot:
-        # `transaction` accepted and ignored: reads inside a transaction see the same
-        # store, which is exactly the no-isolation caveat above.
+    def get(
+        self, field_paths: Any | None = None, transaction: Any | None = None
+    ) -> _FakeSnapshot:
+        # The real signature is get(field_paths=None, transaction=None, ...), and getting it
+        # wrong here would hide a caller that passed the transaction POSITIONALLY -- which the
+        # real client reads as a field-path mask and rejects with "'Transaction' object is not
+        # iterable". The setup repository did exactly that, and only the emulator caught it.
+        #
+        # `transaction` is accepted and ignored: reads inside a transaction see the same store,
+        # which is exactly the no-isolation caveat above.
         return _FakeSnapshot(
             self._store.docs.get(self._path), self._path.rsplit("/", 1)[-1]
         )
@@ -298,6 +305,14 @@ class _FakeTransaction:
 
     def set(self, ref: _FakeDoc, payload: dict[str, Any]) -> None:
         ref.set(payload)
+
+    def create(self, ref: _FakeDoc, payload: dict[str, Any]) -> None:
+        """Create-if-absent inside a transaction, raising as the real client does.
+
+        The setup repository's event write uses it (12, T-6): the deterministic event id plus a
+        create is what makes a re-processed candle a no-op instead of a duplicate row.
+        """
+        ref.create(payload)
 
     def delete(self, ref: _FakeDoc) -> None:
         ref.delete()
@@ -356,10 +371,16 @@ class _FakeCollection:
         return self
 
     def stream(self) -> list[_FakeSnapshot]:
+        # DIRECT children only. A prefix match alone would also return the documents of every
+        # sub-collection -- so a query over `setups` would hand back its `events` rows as if
+        # they were setups (12, T-6). Real Firestore does not do that, and a double that did
+        # would make every test of a collection read pass while the read returned the wrong
+        # documents.
         rows = [
             (path.rsplit("/", 1)[-1], data)
             for path, data in self._store.docs.items()
             if path.startswith(f"{self._path}/")
+            and "/" not in path[len(self._path) + 1 :]
         ]
         for field, op, value in self._filters:
             test = _OPS[op]

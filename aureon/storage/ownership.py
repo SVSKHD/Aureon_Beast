@@ -226,6 +226,15 @@ OWNERSHIP: tuple[Ownership, ...] = (
         readers=(DISCORD, REVIEW, TOOLS),
     ),
     Ownership(
+        paths.SETUPS,
+        "structures tracked over time, with their state machine and a per-setup `events` "
+        "sub-collection holding how each one got there (12, T-6). Written only by the observer: "
+        "Discord's card keeps its message id on the notification document instead, so this "
+        "collection stays the observer's",
+        writers=(OBSERVER,),
+        readers=(DISCORD, REVIEW, TOOLS),
+    ),
+    Ownership(
         paths.MARKET_DAY_FRAMES,
         "the bars themselves, M5/M15/H1, so a process with no terminal can rebuild a chart "
         "or a higher-timeframe bias. M1 stays in parquet (11D)",

@@ -58,6 +58,14 @@ class Notification(AureonDocument):
     status: NotificationStatus = NotificationStatus.SENT
     #: Why a FAILED notification failed, for the operator rather than for a retry.
     failure_message: str | None = None
+    #: The Discord message this notification became, so a card can be EDITED rather than posted
+    #: again (12, T-11). It lives here rather than on the thing the card is about -- a setup --
+    #: because Discord owns this collection and does not own ``setups`` (§71), and because "what
+    #: have we already said about this" is the question this document exists to answer.
+    #:
+    #: A string, not an int: Discord snowflakes exceed 2^53 and a JSON round trip through a
+    #: float would silently corrupt one.
+    message_id: str | None = None
 
 
 class PriceAlert(AureonDocument):

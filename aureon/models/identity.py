@@ -197,3 +197,140 @@ def evaluation_doc_id(detection_id_value: str, rule_id: str) -> str:
     if "__" in rule_id:
         raise ValueError(f"rule_id must not contain '__': {rule_id!r}")
     return f"{detection_id_value}__{rule_id}"
+
+
+# ── Setups (12, T-6) ──────────────────────────────────────────────────────────
+
+#: The setup id's component order, frozen the way ``DETECTION_ID_COMPONENTS`` is, so a test can
+#: assert the tuple rather than only that the hash is stable.
+SETUP_ID_COMPONENTS: tuple[str, ...] = (
+    "account_scope",
+    "symbol",
+    "timeframe",
+    "family",
+    "direction_context",
+    "market_date",
+    "anchor_kind",
+    "anchor_price_bin",
+    "setup_version",
+)
+
+
+def price_bin(price: float, *, bin_size: float) -> str:
+    """A price rendered as a canonical bin index, for use inside an id.
+
+    The reason a setup's identity cannot use the raw price: a level is a region, not a number.
+    A sweep that reaches 2412.50 and another that reaches 2412.52 are the same level being
+    tested twice, and an id over the raw float would make them two setups -- so the population
+    a review counts would grow with the broker's tick size rather than with the market.
+
+    ``bin_size`` comes from the symbol's tuning, never from a default here. Decision 141: a
+    threshold in points is different money per instrument, and gold's 0.01 tick against silver's
+    0.001 means one number cannot serve both. Passing it in is what forces the caller to have
+    asked which instrument this is.
+
+    Rendered as an integer index rather than a rounded float, because ``round()`` gives
+    ``2412.5`` and ``2412.50`` different reprs on different Python builds, and an id that varied
+    with the interpreter would break live-vs-replay parity for a reason nobody could find.
+    """
+    if bin_size <= 0:
+        raise ValueError(f"bin_size must be positive; got {bin_size!r}")
+    # floor division on the quotient: a price exactly on a boundary belongs to the upper bin,
+    # consistently, on both sides of zero.
+    import math
+
+    return str(int(math.floor(price / bin_size)))
+
+
+def setup_id_components(
+    *,
+    account_scope: str,
+    symbol: str,
+    timeframe: str,
+    family: str,
+    direction_context: str,
+    market_date: str,
+    anchor_kind: str,
+    anchor_price_bin: str,
+    setup_version: str,
+) -> tuple[str, ...]:
+    """The exact tuple hashed into a ``setup_id`` (12, T-6).
+
+    Nine components, and each one answers a question about what makes two setups the same:
+
+    * ``market_date`` is the BROKER date, so a level tested on Tuesday and again on Wednesday is
+      two setups. It has to be: the day's own extremes and value area are different, and a setup
+      that spanned the boundary would carry a context nobody could reconstruct.
+    * ``direction_context`` is a component, so a level being tested from above and from below is
+      two setups rather than one that keeps changing its mind.
+    * ``setup_version`` is a component for exactly the reason ``agent_version`` is one in a
+      detection id (§12): when the family's rules change, the new population must be separable
+      from the old rather than overwriting it. A version bump forks history; it does not edit it.
+    """
+    return (
+        account_scope,
+        symbol,
+        timeframe,
+        family,
+        direction_context,
+        market_date,
+        anchor_kind,
+        anchor_price_bin,
+        setup_version,
+    )
+
+
+def setup_id(
+    *,
+    account_scope: str,
+    symbol: str,
+    timeframe: str,
+    family: str,
+    direction_context: str,
+    market_date: str,
+    anchor_kind: str,
+    anchor_price_bin: str,
+    setup_version: str,
+) -> str:
+    """Stable id for a setup (12, T-6).
+
+    Deterministic for the same reason every id here is: the observer re-derives it on every
+    candle to find the setup it is already tracking, and a replay over the archived day must
+    produce the same ids as the live session did or the parity check is meaningless.
+    """
+    return _digest(
+        *setup_id_components(
+            account_scope=account_scope,
+            symbol=symbol,
+            timeframe=timeframe,
+            family=family,
+            direction_context=direction_context,
+            market_date=market_date,
+            anchor_kind=anchor_kind,
+            anchor_price_bin=anchor_price_bin,
+            setup_version=setup_version,
+        )
+    ).hex()
+
+
+def setup_event_id(
+    *, setup_id: str, candle_close: datetime, event_type: str
+) -> str:
+    """Stable id for one event in a setup's history (12, T-6).
+
+    Three components and no counter. That is what makes the write idempotent: the observer
+    re-processing the same closed candle -- after a restart, or during a replay -- derives the
+    same id and the repository's create-if-absent finds the row already there.
+
+    A sequence number would have been the obvious alternative and is wrong here: two processes
+    (or one process twice) would allocate the same number to different events, or different
+    numbers to the same event, and neither failure is visible in the document.
+
+    One consequence is worth stating: a setup cannot record the SAME event type twice at the
+    same candle close. That is intended -- "the price came within range of the level" is a fact
+    about that candle, not a countable occurrence -- and anything that genuinely needs a count
+    puts it in the context snapshot.
+    """
+    if not setup_id:
+        raise ValueError("setup_id must be non-empty to derive an event id")
+    return _digest(setup_id, _canonical_timestamp(candle_close), event_type).hex()
