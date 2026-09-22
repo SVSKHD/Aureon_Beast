@@ -122,6 +122,65 @@ def test_discord_never_imports_a_writable_observation_repository() -> None:
     )
 
 
+def test_nothing_gates_on_multi_timeframe_alignment() -> None:
+    """MTF alignment is RECORDED, never acted on (11D, and restated by 12 T-12).
+
+    Whether alignment predicts anything is a question for the evaluation rules, and nobody has
+    answered it. A filter built on the assumption that it does would be a threshold nobody
+    researched -- the failure ``symbol_tuning`` documents at length -- and it would be invisible,
+    because the detections it suppressed would never exist to be counted.
+
+    So: no ``if`` anywhere in the observation or execution path may branch on an alignment value.
+    Reading one to STORE it is fine and is what the observer does; comparing one is not.
+
+    AST rather than a grep, because ``alignment=...`` as a keyword (building a context) and
+    ``if alignment is ALIGNED`` (gating on one) are the same characters and opposite acts.
+
+    What counts as gating is a branch that compares something against a **named member** of
+    ``MtfAlignment``. Two narrowings, both found by running the first version:
+
+    * ``found.mtf_alignment is not wanted.mtf_alignment`` in ``setup_reference`` compares two
+      context summaries to each other. That is cohort SELECTION -- "are these the same shape" --
+      and it decides which past setups a research block is measured over, not whether anything
+      happens. No member is named, so it does not match.
+    * ``if source is HistorySource.MIXED`` in the Discord service is a different enum that
+      happens to share a member name. Requiring the qualifier to be ``MtfAlignment`` (or one of
+      the bare aliases ``mtf`` exports) tells them apart.
+
+    The first version of this test flagged all three, and the third was real: ``TrendPullback``
+    refused to open unless alignment was ALIGNED. That gate is gone.
+    """
+    gated: list[str] = []
+    aliases = {"ALIGNED", "AGAINST", "MIXED"}
+    for path in _python_files(*OBSERVER_SIDE, "execution", "positions", "discord"):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        # The bare aliases only mean an alignment where they were imported from ``mtf``.
+        bare = aliases if "from aureon.engine.mtf import" in source else set()
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.If, ast.IfExp, ast.While)):
+                continue
+            for inner in ast.walk(node.test):
+                named = None
+                if isinstance(inner, ast.Attribute):
+                    qualifier = inner.value
+                    if (
+                        isinstance(qualifier, ast.Name)
+                        and qualifier.id == "MtfAlignment"
+                        and inner.attr in aliases
+                    ):
+                        named = f"MtfAlignment.{inner.attr}"
+                elif isinstance(inner, ast.Name) and inner.id in bare:
+                    named = inner.id
+                if named:
+                    gated.append(
+                        f"{path.relative_to(REPO_ROOT)}:{node.lineno} branches on {named}"
+                    )
+    assert not gated, (
+        "multi-timeframe alignment is recorded, never gated on:\n" + "\n".join(gated)
+    )
+
+
 def test_every_observation_package_is_named_in_the_list() -> None:
     """Pinned as a literal, because THE LIST IS THE GUARD.
 

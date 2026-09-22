@@ -378,3 +378,85 @@ def test_a_real_report_names_its_days_and_flags_immaturity(tmp_path) -> None:
     assert "SYNTHETIC" not in text
     assert AureonConfig is not None  # imported for the CLI path above
     assert main is not None
+
+
+def test_no_module_anywhere_mutates_a_tuning_table() -> None:
+    """12 T-13/T-14: tuning stays MANUAL, and that is now checked across the whole tree.
+
+    The test above pins ``tune_report.py`` and ``tuning_report.py``, which were the only two
+    files that could plausibly have grown an ``--apply`` when it was written. Phase 12 added
+    three more tables -- the setup families' distances, their per-symbol overrides -- and a
+    module that could write to any of them from anywhere would be the same failure in a new
+    place: a live system retuned by running something, with nothing afterwards to say it
+    happened.
+
+    The rule is a threshold change is an ``agent_version`` (or ``setup_version``) bump, made by
+    a human, in a commit, with the version beside it. §12 puts the version in the id precisely so
+    the populations stay separable; a value changed without one leaves the old detections at ids
+    the new agent would never produce.
+
+    Checked against the AST across ``aureon/`` and ``scripts/``: a SUBSCRIPT assignment into a
+    table, or a call to one of the dict mutators on it. Reading a table is what every caller
+    does and is not a hit.
+    """
+    import ast
+    from pathlib import Path
+
+    REPO_ROOT = Path(__file__).resolve().parents[2]
+    AUREON = REPO_ROOT / "aureon"
+
+    tables = {"OVERRIDES", "SYMBOL_OVERRIDES", "SETUP_OVERRIDES", "SETUP_SYMBOL_OVERRIDES"}
+    mutators = {"update", "setdefault", "pop", "clear", "popitem"}
+    offenders: list[str] = []
+
+    for path in (*(AUREON.rglob("*.py")), *((REPO_ROOT / "scripts").rglob("*.py"))):
+        if path.resolve() == (AUREON / "config" / "symbol_tuning.py").resolve():
+            # Where the tables are DEFINED. A literal is not a mutation, and this file is the
+            # one place a human edits them.
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Assign, ast.AugAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    if (
+                        isinstance(target, ast.Subscript)
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id in tables
+                    ):
+                        offenders.append(
+                            f"{path.relative_to(REPO_ROOT)}:{node.lineno} assigns into "
+                            f"{target.value.id}"
+                        )
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                receiver = node.func.value
+                if (
+                    isinstance(receiver, ast.Name)
+                    and receiver.id in tables
+                    and node.func.attr in mutators
+                ):
+                    offenders.append(
+                        f"{path.relative_to(REPO_ROOT)}:{node.lineno} calls "
+                        f"{receiver.id}.{node.func.attr}()"
+                    )
+
+    assert not offenders, (
+        "a tuning table is mutated at runtime; a retune must be a human commit with a "
+        "version bump beside it:\n" + "\n".join(offenders)
+    )
+
+
+def test_every_tuning_table_is_covered_by_the_rule_above() -> None:
+    """The table NAMES are a literal in that test, so a fifth table would be unguarded.
+
+    Pinned here rather than derived, for the reason the widening order is pinned in T-9: the
+    list is the claim. A new tuning table is a deliberate addition and so is protecting it.
+    """
+    from aureon.config import symbol_tuning
+
+    found = {
+        name
+        for name in dir(symbol_tuning)
+        if name.isupper() and "OVERRIDE" in name and isinstance(getattr(symbol_tuning, name), dict)
+    }
+    assert found == {"OVERRIDES", "SETUP_OVERRIDES", "SETUP_SYMBOL_OVERRIDES"}, found

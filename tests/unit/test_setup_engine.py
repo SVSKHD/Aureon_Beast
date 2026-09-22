@@ -429,10 +429,14 @@ def test_an_aligned_trend_pulls_back_and_resumes(pullback, firestore) -> None:
     ]
 
 
-def test_an_unaligned_trend_opens_nothing(pullback) -> None:
-    """MIXED covers "nobody has a view" as well as disagreement (11D).
+def test_an_unaligned_trend_still_opens_and_records_the_alignment(pullback) -> None:
+    """Alignment is RECORDED, never gated on (11D, enforced by 12 T-12).
 
-    Opening on an absence of evidence is how a population fills with setups nothing produced.
+    This test asserted the opposite until T-12's boundary check found the gate. Refusing to open
+    on anything but ALIGNED was a filter on a threshold nobody researched -- and an invisible
+    one, because the setups it suppressed would never exist to be counted. The question "did
+    aligned trend pullbacks do better?" is answerable only if the unaligned ones are in the
+    record too.
     """
     pullback.on_closed_candle(
         inputs(
@@ -443,7 +447,11 @@ def test_an_unaligned_trend_opens_nothing(pullback) -> None:
             ema_slow=2410.0,
         )
     )
-    assert pullback.tracked == {}
+    assert pullback.tracked, "an unaligned trend pullback was suppressed"
+    opened = next(iter(pullback.tracked.values()))
+    assert opened.context_summary.mtf_alignment is MtfAlignment.MIXED, (
+        "the alignment must be recorded on the setup, or the question is unanswerable"
+    )
 
 
 def test_a_sideways_market_opens_nothing(pullback) -> None:

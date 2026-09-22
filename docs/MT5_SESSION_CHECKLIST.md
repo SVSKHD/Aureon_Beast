@@ -7,7 +7,11 @@ any of the numbers are trusted.
 
 It needs Windows and a running MT5 terminal, so it cannot be automated here. The tooling
 it depends on **is** automated and tested: the observer archives the candles it processed,
-and `scripts/compare_live_vs_replay.py` replays exactly those and diffs the result.
+and `scripts/compare_live_vs_replay.py` replays exactly those and diffs the result. Its
+`--mtf` mode (12, T-12) answers the other half: it reads several archived days to rebuild
+the rolling buffer and checks that each detection's recorded higher-timeframe context
+reproduces. Zero disagreements earns `SESSION VERIFIED (MTF)`; a window too shallow to seed
+an H4 reports `unreadable`, which means widen `--mtf-days` rather than debug the engine.
 
 ## The short version
 
@@ -124,6 +128,7 @@ evidence needs to be re-readable a month later.
       | `archive` | the file the whole of §82 rests on is simply absent |
       | `archive_gaps` | an hour missing mid-session still produces a full-looking outcome table, with that hour's horizons quietly INVALID |
       | `live_vs_replay` | `compare_live_vs_replay.py`; the only check that can tell an engine difference from a broker one |
+      | `mtf_replay` | `compare_live_vs_replay.py --mtf`; the higher-timeframe context, rebuilt from several archived days and diffed as of each detection's own candle. SKIPs unless a runner is wired in. Checks M15/M30/H1/H4; **D1 is excluded** — a broker day's length depends on the session and the calendar, so a D1 mismatch would be a statement about the calendar rather than about the aggregation (12, T-12) |
       | `detections_stored` | the observer can emit detections that never leave the outbox |
       | `outbox_drained` | and if they did not, every count in the document is a lower bound |
       | `observer_ran_to_the_close` | a process that died at lunchtime leaves an archive that looks normal and stops |
