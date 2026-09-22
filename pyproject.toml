@@ -21,9 +21,15 @@ dependencies = [
 [project.optional-dependencies]
 discord = ["discord.py>=2.3"]
 mt5 = ["MetaTrader5>=5.0.45"]
+# 12 T-10. The chart renderer. An extra rather than a core dependency: the observer, the
+# executor and the review service never draw anything, and a plotting stack in the process that
+# places orders is weight with no purpose. matplotlib is imported lazily inside the renderer, so
+# a deployment without this extra still starts -- it just serves the "chart unavailable" image.
+charts = ["matplotlib>=3.8"]
 dev = [
     "pytest>=8.0",
     "discord.py>=2.3",  # the Phase 6 tests import the embeds/bot adapters
+    "matplotlib>=3.8",  # 12 T-10: the chart renderer and its golden-image tests
 
     "pytest-asyncio>=0.23",
     "ruff>=0.3",

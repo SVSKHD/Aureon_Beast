@@ -71,6 +71,10 @@ OBSERVER_SIDE = (
     "evaluation",
     "reviews",
     "services",
+    # ``visuals`` joined with T-10. A chart is a picture of observations, and the package that
+    # draws it has no business holding anything that can act on them -- least of all because its
+    # main caller is Discord, which is forbidden the broker outright (§71).
+    "visuals",
 )
 
 # Only these two modules may touch MetaTrader5 at all (CLAUDE.md).
@@ -78,6 +82,32 @@ MT5_PERMITTED = {
     AUREON / "data" / "mt5_provider.py",
     AUREON / "execution" / "mt5_broker.py",
 }
+
+
+def test_every_observation_package_is_named_in_the_list() -> None:
+    """Pinned as a literal, because THE LIST IS THE GUARD.
+
+    Every rule below iterates ``OBSERVER_SIDE``. A package quietly dropped from the tuple is not
+    a failing test -- it is a guard switched off, silently, with every test in this file still
+    green. A plant removing ``visuals`` survived every other check here, which is how this test
+    came to exist.
+
+    Adding a package is a one-line change to this literal, made on purpose. Removing one should
+    be the same.
+    """
+    assert set(OBSERVER_SIDE) == {
+        "agents",
+        "engine",
+        "outbox",
+        "data",
+        "evaluation",
+        "reviews",
+        "services",
+        "visuals",
+    }
+    # And every name must be a package that actually exists, or the rule iterates nothing.
+    for package in OBSERVER_SIDE:
+        assert (AUREON / package).is_dir(), f"{package} is not a package under aureon/"
 
 
 def test_observer_side_never_imports_execution() -> None:
