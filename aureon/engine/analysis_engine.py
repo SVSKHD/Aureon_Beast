@@ -37,8 +37,9 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
+from statistics import median
 
 import pandas as pd
 
@@ -140,6 +141,47 @@ class CrossCounts:
             "bullish_crosses_session": self.bullish_session,
             "bearish_crosses_session": self.bearish_session,
         }
+
+
+#: How many bars "the recent median tick volume" is taken over. One session of M5, so
+#: "expansion" means expansion against today rather than against the whole window -- a median
+#: over 600 bars would be yesterday's number and would call an ordinary bar expansive on a quiet
+#: morning.
+MEDIAN_VOLUME_BARS = 96
+
+#: The RSI period the rsi agent uses. Named here so the setup engine's read and the agent's
+#: cannot drift apart; if it ever becomes configurable, both come from the same place.
+RSI_PERIOD = 14
+
+
+@dataclass(frozen=True)
+class IndicatorRead:
+    """What the indicators said at one closed candle, including the bar before it.
+
+    Every field optional, because a window shorter than the slow period genuinely has no EMA and
+    a read that invented one would hand the setup engine a number with no history behind it.
+    """
+
+    ema_fast: float | None = None
+    ema_slow: float | None = None
+    previous_ema_fast: float | None = None
+    previous_ema_slow: float | None = None
+    rsi: float | None = None
+    previous_rsi: float | None = None
+    atr: float | None = None
+    median_tick_volume: float | None = None
+
+
+def _last(series, *, back: int = 0) -> float | None:
+    """The value ``back`` bars from the end, or ``None`` if it is not there or not a number."""
+    import math
+
+    if len(series) <= back:
+        return None
+    value = series.iloc[-1 - back]
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    return float(value)
 
 
 class AnalysisEngine:
@@ -347,6 +389,53 @@ class AnalysisEngine:
             }
         )
 
+    def indicator_read(self, symbol: str, timeframe: Timeframe) -> IndicatorRead:
+        """The indicator values at the last closed candle in this stream (12, T-7).
+
+        Exists because the setup engine has to run on EVERY closed candle, including the ones
+        that produce no detection -- an expiry, an invalidation and a proximity all happen with
+        nothing detected. Reading the values off a detection therefore does not work: on a quiet
+        candle there is nothing to read them off, and using the last detection's values would
+        hand the setup engine numbers from ten minutes ago.
+
+        Computed from this engine's own window with this engine's own periods, so the setup
+        engine and the agents cannot disagree about what EMA(20) is. The previous bar's values
+        come along because two of the four families are about a CHANGE (the fast slope turning,
+        RSI crossing 50), and a change needs two readings.
+        """
+        from aureon.engine.indicators import ema
+        from aureon.engine.indicators import rsi as rsi_series
+        from aureon.engine.volatility import atr
+
+        key = (symbol, timeframe)
+        window = list(self._windows.get(key, ()))
+        if not window:
+            return IndicatorRead()
+
+        frame = self._frame(key)
+        fast_period, slow_period = self.mtf_periods or (20, 50)
+        read = IndicatorRead(atr=atr(window))
+        closes = frame["close"]
+        if len(closes) > slow_period:
+            fast = ema(closes, fast_period)
+            slow = ema(closes, slow_period)
+            read = replace(
+                read,
+                ema_fast=_last(fast),
+                ema_slow=_last(slow),
+                previous_ema_fast=_last(fast, back=1),
+                previous_ema_slow=_last(slow, back=1),
+            )
+        if len(closes) > RSI_PERIOD:
+            values = rsi_series(closes, RSI_PERIOD)
+            read = replace(
+                read, rsi=_last(values), previous_rsi=_last(values, back=1)
+            )
+        volumes = [candle.tick_volume for candle in window[-MEDIAN_VOLUME_BARS:]]
+        if volumes:
+            read = replace(read, median_tick_volume=float(median(volumes)))
+        return read
+
     def _mtf_context(self, key: tuple[str, Timeframe]):
         """The higher-timeframe reads at this candle's close, or ``None`` (11D).
 
@@ -488,6 +577,22 @@ class AnalysisEngine:
         return frame
 
     # ── Introspection ─────────────────────────────────────────────────────────
+
+    def window(self, symbol: str, timeframe: Timeframe):
+        """The rolling window as a DataFrame, for a caller that needs the same bars the agents saw.
+
+        Public because the setup engine's levels must come from THIS window: ``LevelTracker`` is a
+        pure function of its input, so a caller with its own tracker and this frame derives
+        exactly the levels the agents derived. A caller that fetched its own bars would derive
+        pivots from a different window, and a setup could then anchor to a level no detection ever
+        saw.
+        """
+        key = (symbol, timeframe)
+        if key not in self._windows:
+            import pandas as pd
+
+            return pd.DataFrame(columns=list(WINDOW_COLUMNS))
+        return self._frame(key)
 
     def window_length(self, symbol: str, timeframe: Timeframe) -> int:
         return len(self._windows.get((symbol, timeframe), ()))

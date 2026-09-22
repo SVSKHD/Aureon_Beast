@@ -55,6 +55,7 @@ class MarketEngine:
         timeframes: Sequence[Timeframe],
         on_detections: Callable[[list[Detection]], None] | None = None,
         on_candle_close: Callable[[Candle], None] | None = None,
+        on_analysis: Callable[[Candle, list[Detection]], None] | None = None,
         on_poll: Callable[[], None] | None = None,
         before_poll: Callable[[], None] | None = None,
         parked: Callable[[], bool] | None = None,
@@ -68,6 +69,12 @@ class MarketEngine:
         self.timeframes = list(timeframes)
         self.on_detections = on_detections
         self.on_candle_close = on_candle_close
+        #: Called for EVERY closed candle with its detections, after the two callbacks above
+        #: (12, T-7). Neither of those serves the setup engine: ``on_candle_close`` has no
+        #: detections, and ``on_detections`` does not fire on a candle that produced none --
+        #: which is most of them, and exactly the candles on which a setup expires, invalidates
+        #: or comes into proximity of a level.
+        self.on_analysis = on_analysis
         #: Called once per poll, after any candles were processed (9C). The observer uses
         #: it to answer price alerts from the quotes it is already reading -- on the poll
         #: clock rather than the candle clock, because "the first quote across the level"
@@ -165,6 +172,10 @@ class MarketEngine:
                     # Handed over per candle, not per poll: a crash mid-poll must
                     # not lose detections from candles already processed.
                     self.on_detections(detections)
+            if self.on_analysis is not None:
+                # Last, so whatever it does sees the state the two callbacks above already
+                # updated -- the session extremes, the day cache and the outbox.
+                self.on_analysis(candle, detections)
         return produced
 
     @property

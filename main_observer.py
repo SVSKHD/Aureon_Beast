@@ -61,9 +61,15 @@ from aureon.engine.market_engine import MarketEngine
 from aureon.engine.symbol_engines import SymbolEngines
 from aureon.evaluation.outcome_tracker import OutcomeTracker
 from aureon.evaluation.rules import get_rule
-from aureon.models.base import to_utc
+from aureon.models.base import to_utc, utc_now
 from aureon.models.detection import Detection
-from aureon.models.enums import MarketState, Timeframe
+from aureon.models.enums import (
+    MarketState,
+    MtfAlignment,
+    SetupState,
+    Timeframe,
+    TrendBias,
+)
 from aureon.models.market import Candle
 from aureon.models.system import SymbolState, SystemState
 from aureon.outbox.local_outbox import LocalOutbox
@@ -203,12 +209,23 @@ class Observer:
             timeframes=config.timeframes,
             on_detections=self._on_detections,
             on_candle_close=self._on_candle_close,
+            on_analysis=self._on_analysis,
             on_poll=self._on_poll,
             before_poll=self.gate.tick,
             parked=lambda: self.gate.parked,
             pace=self.gate.pace,
         )
         self._last_candles: dict[tuple[str, Timeframe], Candle] = {}
+        #: 12 T-7. One setup engine per symbol, or none at all: an observer with no Firestore
+        #: client tracks no setups and still observes. Set by ``build_observer``.
+        self.setups: dict[str, object] = {}
+        #: One per symbol, built on first use. See ``_levels_for``.
+        self._level_trackers: dict[str, object] = {}
+        #: What the setup engines read as "now". Set from each candle's close.
+        self._setup_clock = utc_now()
+        #: 12 T-7. One per symbol, beside the setup engine. Each holds an ``OutcomeTracker`` over
+        #: the SAME frozen rule the detections use, so there is one definition of an outcome.
+        self.setup_evaluators: dict[str, object] = {}
         #: 11A F-3. Read once per connection; see ``_account_mode``.
         self._cached_account_mode: object | None = None
         #: 11A F-15. Optional: an observer without one still observes, it just says nothing
@@ -352,6 +369,127 @@ class Observer:
             # observer records and needs no second scheduler (9C).
             self.alerts.expire()
         self._write_system_state(force=True)
+
+    # ── Setups (12, T-7) ──────────────────────────────────────────────────────
+
+    def _on_analysis(self, candle: Candle, detections: list[Detection]) -> None:
+        """Run the setup engine over this closed candle.
+
+        Called for every candle, including the ones that produced nothing: an expiry, an
+        invalidation and a proximity all happen with no detection, and a hook that only fired on
+        detections would miss exactly those.
+
+        Wrapped whole, because a setup engine that raised would otherwise take the candle loop
+        with it -- and the candle loop is the one thing in this process that must not stop. A
+        setup is context; a missed candle is a hole in the archive and in the parity check.
+        """
+        engine = self.setups.get(candle.symbol)
+        if engine is None or candle.timeframe is not Timeframe.M5:
+            return
+        # The engine's clock, set from the DATA rather than from the wall clock, so a replay
+        # stamps what the live session stamped. See ``_wire_setups``.
+        self._setup_clock = candle.close_time
+        try:
+            events = engine.on_closed_candle(self._setup_inputs(candle, detections))
+        except Exception:  # noqa: BLE001 - see the docstring
+            log.exception("the setup engine raised on %s", candle.open_time.utc)
+            return
+        self._evaluate_setups(candle, engine, events)
+
+    def _evaluate_setups(self, candle: Candle, engine: object, events: list) -> None:
+        """Advance the open measurements, then start one for anything that just confirmed.
+
+        That order matters and is the same one the detection evaluations use: a setup confirming
+        on this candle is measured FROM this candle's close, so it must not also be advanced by
+        it -- a horizon that counted its own opening bar would report an excursion the market had
+        not made yet.
+        """
+        evaluator = self.setup_evaluators.get(candle.symbol)
+        if evaluator is None:
+            return
+        try:
+            evaluator.on_closed_candle(candle)
+        except Exception:  # noqa: BLE001 - measurement must not stop observation
+            log.exception("the setup evaluator raised on %s", candle.open_time.utc)
+        tracked = getattr(engine, "tracked", {})
+        for event in events:
+            if event.to_state is not SetupState.CONFIRMED:
+                continue
+            setup = tracked.get(event.setup_id)
+            if setup is None:
+                continue
+            try:
+                evaluator.on_confirmed(setup, candle)
+            except Exception:  # noqa: BLE001
+                log.exception("could not begin evaluating setup %s", event.setup_id)
+
+    def _setup_inputs(self, candle: Candle, detections: list[Detection]):
+        """Assemble what the setup engine needs from what this candle already computed.
+
+        Everything here is a read of state the observer holds anyway -- the analysis engine's
+        indicators, its levels, its MTF context, and the snapshot that feeds ``/status``. Nothing
+        is recomputed, and nothing is fetched: a second source for any of these numbers would be
+        a second answer, and the two would disagree on the candle where it mattered.
+        """
+        from aureon.services.setup_engine import SetupInputs
+
+        analysis = self.engines.for_symbol(candle.symbol)
+        read = analysis.indicator_read(candle.symbol, candle.timeframe)
+        snapshot = self._snapshot(candle.symbol, candle.timeframe)
+        mtf = analysis.mtf_context(candle.symbol, candle.timeframe)
+        # The alignment on the CONTEXT is direction-free: a detection's alignment depends on its
+        # own direction (11D), and a setup has its own. MIXED is the honest default here.
+        alignment = MtfAlignment.MIXED
+        profile = getattr(snapshot, "volume_profile", None)
+        volatility = getattr(snapshot, "volatility", None)
+        return SetupInputs(
+            candle=candle,
+            market_date=candle.open_time.market_date,
+            session=session_for(candle.open_time.market),
+            detections=tuple(detections),
+            levels=self._levels_for(candle),
+            atr=read.atr,
+            ema_fast=read.ema_fast,
+            ema_slow=read.ema_slow,
+            previous_ema_fast=read.previous_ema_fast,
+            previous_ema_slow=read.previous_ema_slow,
+            rsi=read.rsi,
+            previous_rsi=read.previous_rsi,
+            trend=getattr(snapshot, "session_trend", None) or TrendBias.SIDEWAYS,
+            mtf_alignment=alignment if mtf is None else alignment,
+            volatility_regime=getattr(volatility, "regime", None),
+            price_vs_va=getattr(profile, "price_vs_va", None),
+            value_area_high=getattr(profile, "value_area_high", None),
+            value_area_low=getattr(profile, "value_area_low", None),
+            poc_price=getattr(profile, "poc_price", None),
+            median_tick_volume=read.median_tick_volume,
+        )
+
+    def _levels_for(self, candle: Candle):
+        """The levels the agents are using for this symbol, derived from the SAME window.
+
+        ``LevelTracker.levels_for`` is a pure function of its window and its swing strength, so a
+        tracker built here from the symbol's own tuning derives exactly the levels the agents
+        derived -- provided it is handed the engine's window rather than a fresh fetch. A
+        different window would give different pivots, and a setup could then anchor to a level no
+        detection ever saw.
+        """
+        from aureon.engine.levels import Levels, LevelTracker
+
+        tracker = self._level_trackers.get(candle.symbol)
+        if tracker is None:
+            tracker = LevelTracker()
+            self._level_trackers[candle.symbol] = tracker
+        frame = self.engines.for_symbol(candle.symbol).window(
+            candle.symbol, candle.timeframe
+        )
+        if frame is None or len(frame) < 2:
+            return Levels()
+        try:
+            return tracker.levels_for(frame, self.config.market_tz)
+        except Exception:  # noqa: BLE001 - a level derivation must not stop the loop
+            log.exception("could not derive levels for %s", candle.symbol)
+            return Levels()
 
     # ── The broker-day cache (11D) ────────────────────────────────────────────
 
@@ -1342,7 +1480,51 @@ def build_observer(config: AureonConfig) -> Observer:
     # 11D, and assigned the same way for the same reason: a test of observation should not
     # have to stand up a day cache to watch a candle close.
     observer.market_days = MarketDayRepository(client)
+    _wire_setups(observer, config, client)
     return observer
+
+
+def _wire_setups(observer: Observer, config: AureonConfig, client: object) -> None:
+    """One setup engine per configured symbol (12, T-7).
+
+    Per symbol rather than one shared engine, for the reason every other per-symbol thing in this
+    process is: the engine caches the day's open setups, and one cache across two instruments
+    would let silver's candles advance gold's setups. The point comes from the symbol's own
+    tuning, because the id's anchor bin falls back to it when ATR is unknown.
+
+    ``now`` is the CANDLE's close, not the wall clock. A replay of an archived day must stamp the
+    same ``opened_at`` the live session did, or every replayed setup differs from its original in
+    a field nobody meant to compare -- and the live-vs-replay check would report a difference
+    that is only the clock.
+    """
+    from aureon.config.symbol_tuning import tuning_for
+    from aureon.evaluation.rules import get_rule
+    from aureon.services.setup_engine import SetupEngine
+    from aureon.services.setup_evaluation import SetupEvaluator
+    from aureon.storage.setup_repository import (
+        SetupEvaluationRepository,
+        SetupRepository,
+    )
+
+    repository = SetupRepository(client)
+    evaluations = SetupEvaluationRepository(client)
+    for symbol in config.symbols:
+        point = tuning_for(symbol).point
+        observer.setups[symbol] = SetupEngine(
+            account_scope=config.account_scope,
+            symbol=symbol,
+            timeframe=config.timeframes[0],
+            repository=repository,
+            point=point,
+            market_tz=config.market_tz,
+            now=lambda: observer._setup_clock,
+        )
+        observer.setup_evaluators[symbol] = SetupEvaluator(
+            rule=get_rule(config.rule_id_for(symbol)),
+            market_tz=config.market_tz,
+            point=point,
+            repository=evaluations,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

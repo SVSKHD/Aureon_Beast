@@ -31,6 +31,7 @@ test run and production and could never be checked in.
 | `aureon_beast_ops_events` | `{name}[__{scope}]` | `OpsEvent` |
 | `aureon_beast_sessions` | `{market_date}__{session}` | `SessionSummary` |
 | `aureon_beast_settings` | `execution / notifications` | `ExecutionSettings, NotificationSettings` |
+| `aureon_beast_setup_evaluations` | `**not documented — add it to COLLECTION_DOCS**` | `?` |
 | `aureon_beast_setups` | `**not documented — add it to COLLECTION_DOCS**` | `?` |
 | `aureon_beast_symbol_specs` | `{symbol}` | `SymbolInfo` |
 | `aureon_beast_system_state` | `{symbol}_{timeframe}` | `SystemState` |

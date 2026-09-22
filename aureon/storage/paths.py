@@ -91,6 +91,10 @@ MARKET_DAY_FRAMES = collection("market_day_frames")
 # only collection here with a sub-collection: a setup's events are unbounded in principle and
 # an array on the parent would grow until a write failed.
 SETUPS = collection("setups")
+# 12 T-7: what a setup did after it confirmed, under one rule. Separate from the setup for the
+# reason §21 separates a detection from its evaluation: the setup is edited as it advances, and an
+# outcome on it would be future information sitting on a record of the present.
+SETUP_EVALUATIONS = collection("setup_evaluations")
 
 def _all_collections() -> tuple[str, ...]:
     """Every prefixed collection constant in this module, found rather than listed (11A, F-10).
@@ -250,6 +254,19 @@ def setup_path(setup_id: str) -> str:
 
 def setup_events_path(setup_id: str) -> str:
     return f"{setup_path(setup_id)}/{SETUP_EVENTS_SUBCOLLECTION}"
+
+
+def setup_evaluation_doc_id(setup_id: str, rule_id: str) -> str:
+    """``{setup_id}__{rule_id}``, the same double-underscore shape as a detection's (12, T-7).
+
+    One document per (setup, rule), so re-running the rule is an upsert and running a SECOND rule
+    over the same setups adds documents rather than overwriting the first rule's answers.
+    """
+    return f"{_require(setup_id, 'setup_id')}__{_require(rule_id, 'rule_id')}"
+
+
+def setup_evaluation_path(setup_id: str, rule_id: str) -> str:
+    return f"{SETUP_EVALUATIONS}/{setup_evaluation_doc_id(setup_id, rule_id)}"
 
 
 def setup_event_path(setup_id: str, event_id: str) -> str:

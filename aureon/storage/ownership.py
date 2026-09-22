@@ -235,6 +235,14 @@ OWNERSHIP: tuple[Ownership, ...] = (
         readers=(DISCORD, REVIEW, TOOLS),
     ),
     Ownership(
+        paths.SETUP_EVALUATIONS,
+        "what a setup did after it CONFIRMED, under one frozen rule, measured by the same "
+        "tracker the detections use (12, T-7). Separate from the setup because the setup is "
+        "edited as it advances and an outcome on it would be future information",
+        writers=(OBSERVER,),
+        readers=(DISCORD, REVIEW, TOOLS),
+    ),
+    Ownership(
         paths.MARKET_DAY_FRAMES,
         "the bars themselves, M5/M15/H1, so a process with no terminal can rebuild a chart "
         "or a higher-timeframe bias. M1 stays in parquet (11D)",

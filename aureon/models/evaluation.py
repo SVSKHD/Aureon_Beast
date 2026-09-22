@@ -15,16 +15,24 @@ stored result meant.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import ConfigDict, Field, model_validator
 
 from aureon.models.base import AureonDocument, AureonModel, UtcDatetime
 from aureon.models.enums import (
+    DirectionContext,
     HorizonKind,
     HorizonStatus,
     PathClassification,
     ReferencePrice,
+    SetupFamily,
     ThresholdUnit,
+    Timeframe,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from aureon.models.setup import SetupContextSummary
 
 
 def threshold_key(value: float) -> str:
@@ -241,6 +249,50 @@ class HorizonResult(AureonModel):
         if self.status is not HorizonStatus.COMPLETE:
             return None
         return self.reached.get(threshold_key(threshold))
+
+
+class SetupEvaluation(AureonDocument):
+    """What a setup did after it confirmed, under one rule (12, T-7).
+
+    Stored at ``setup_evaluations/{setup_id}__{rule_id}``, and separate from the setup for the
+    reason §21 separates a detection from its evaluation: the setup document is edited as it
+    advances, and an outcome written onto it would be future information sitting on a record of
+    the present.
+
+    The ``horizons`` are the SAME ``HorizonResult`` the detections use, produced by the same
+    tracker under the same frozen rule. One definition of an outcome in the system; a second
+    measurement here would differ from it on the first gap over a weekend, with no way to tell
+    which was right.
+
+    The family, direction and context ride along as a copy rather than as a reference to the
+    setup. A review grouping thousands of these must not read thousands of setups to know which
+    family each was, and the values are frozen at the moment of confirmation anyway.
+    """
+
+    setup_id: str
+    rule_id: str
+    evaluation_rule_id: str | None = Field(
+        default=None, description="Alias of rule_id, for review documents (§84)."
+    )
+    family: SetupFamily
+    direction_context: DirectionContext
+    symbol: str
+    timeframe: Timeframe
+    market_date: str
+    setup_version: str
+    reference_price: ReferencePrice
+    reference_value: float | None = None
+    horizons: tuple[HorizonResult, ...] = ()
+    context_summary: SetupContextSummary = Field(
+        default_factory=lambda: _default_context_summary()
+    )
+    updated_at: UtcDatetime | None = None
+
+
+def _default_context_summary():
+    from aureon.models.setup import SetupContextSummary as _Summary
+
+    return _Summary()
 
 
 class DetectionEvaluation(AureonDocument):

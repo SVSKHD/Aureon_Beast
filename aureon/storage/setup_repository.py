@@ -44,6 +44,7 @@ from typing import Any
 
 from aureon.models.base import to_utc, utc_now
 from aureon.models.enums import TERMINAL_SETUP_STATES, SetupState, assert_setup_transition
+from aureon.models.evaluation import SetupEvaluation
 from aureon.models.setup import Setup, SetupEvent
 from aureon.storage import paths
 
@@ -293,3 +294,59 @@ def latest_state(events: Sequence[SetupEvent]) -> SetupState | None:
         if not event.event_type.is_watch_event:
             return event.to_state
     return None
+
+
+class SetupEvaluationRepository:
+    """Reads and writes ``{prefix}_setup_evaluations`` (12, T-7).
+
+    An upsert by document id, not a transaction. Two processes cannot race here: the observer is
+    the only writer, the id is deterministic over (setup, rule), and a horizon that advances twice
+    produces the same numbers the second time. The same reasoning ``EvaluationRepository`` uses for
+    detection evaluations.
+    """
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def get(self, setup_id: str, rule_id: str) -> SetupEvaluation | None:
+        snapshot = self._client.document(
+            paths.setup_evaluation_path(setup_id, rule_id)
+        ).get()
+        if not getattr(snapshot, "exists", False):
+            return None
+        return SetupEvaluation.model_validate(snapshot.to_dict())
+
+    def write(
+        self, evaluation: SetupEvaluation, *, now: datetime | None = None
+    ) -> SetupEvaluation:
+        stamped = evaluation.model_copy(
+            update={"updated_at": to_utc(now or utc_now())}
+        )
+        self._client.document(
+            paths.setup_evaluation_path(stamped.setup_id, stamped.rule_id)
+        ).set(stamped.model_dump(mode="json"))
+        return stamped
+
+    def for_market_date(self, *, symbol: str, market_date: str) -> list[SetupEvaluation]:
+        """Every evaluation for one symbol's day, for a review.
+
+        Filtered on the stored ``symbol`` and ``market_date`` rather than by parsing the document
+        id: the id's shape is a storage detail, and a reader that parsed it would break the first
+        time a rule id contained an underscore.
+        """
+        query = (
+            self._client.collection(paths.SETUP_EVALUATIONS)
+            .where("symbol", "==", symbol.upper())
+            .where("market_date", "==", market_date)
+        )
+        found: list[SetupEvaluation] = []
+        for document in query.stream():
+            try:
+                found.append(SetupEvaluation.model_validate(document.to_dict()))
+            except Exception:  # noqa: BLE001 - one bad row must not hide the rest
+                log.warning(
+                    "unreadable setup evaluation %s",
+                    getattr(document, "id", "?"),
+                    exc_info=True,
+                )
+        return found
