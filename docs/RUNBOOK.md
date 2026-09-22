@@ -557,23 +557,67 @@ To rotate:
 `firestore` row is the proof, and they are separate on purpose:
 
 - `no such file` — the path in `.env` does not exist. Check the path, not the key.
-- `missing client_email … this looks like an OAuth client secret` — the single most common
-  mistake. Both files are JSON and both come from the same console; only the
-  service-account key has `client_email`. Downloading the same file again will not help.
+- `"type": "authorized_user", not "service_account"` — what `gcloud auth
+  application-default login` writes, copied in by mistake. Not a key.
+- `carries an OAuth client block — this is an OAuth client secret` — the single most common
+  mistake. Both files are JSON and both come from the same console; only one of them works.
+  Downloading the same file again will not help.
+- `missing private_key` (or another field) — a service-account key with something removed,
+  usually by a copy that went through an editor.
 - `not valid JSON` — usually a truncated copy or a PEM pasted over the JSON.
+- `the key is for Firestore project X and AUREON_FIREBASE_PROJECT_ID says Y` — **the one
+  credential mistake that produces no error at all.** The key authenticates, the write
+  succeeds, and the whole session lands in another project's database, which looks exactly
+  like a first run because collections are created on demand. Fix one or the other; do not
+  start a session on a mismatch.
 - `GOOGLE_APPLICATION_CREDENTIALS is unset` — a WARN, not a failure: application default
   credentials from `gcloud auth application-default login` are a legitimate developer setup.
   On a box that runs unattended for a week, set the variable.
-- `no usable credentials` on the `firestore` row — the library found nothing at all. This is
-  a different action from a permission denial, which is why it is reported separately.
-- an emulator host is set — `credentials` reports SKIP, never PASS. A green row for a check
-  that never ran is how an emulator-only run comes to look like evidence about production.
+- `no usable credentials` on the `firestore` row — the library found nothing at all.
+- `permission denied writing to this prefix` on the `firestore` row — the credentials are
+  **fine** and the identity they name may not write. Grant that service account
+  `roles/datastore.user` on the database; the remedy on the row names it. Handed the generic
+  advice you would go looking for a better key file and find nothing wrong with the one you
+  have, which is why this is a separate diagnosis.
+- an emulator host is set — `credentials` reports `EMULATOR at …` and SKIP, never PASS, and
+  names the prefix it is writing to. A green row for a check that never ran is how an
+  emulator-only run comes to look like evidence about production.
+
+Every message on these two rows says Firestore, or names a Firestore variable. None of them
+says "credentials" unqualified: the same `.env` holds the MT5 login, and that is the one an
+operator reaches for first.
+
+The `config` row prints `env_file=` — the file the launcher actually loaded, or `none`. That
+is the row to read first when a value looks wrong, because the commonest surprise is not a
+wrong value but a file that was never read: a `--env-file` typo, or a service started from
+another directory. It says `none` rather than `.env`, deliberately — printing a plausible
+filename for a file nobody read is the failure the line exists to prevent.
 
 ## Which account is the terminal on?
 
+**Aureon attaches to the terminal you logged in.** That is the normal setup and the intended
+one: start MT5, log in, and every service attaches to that account. Leave
+`AUREON_MT5_LOGIN`, `AUREON_MT5_PASSWORD`, `AUREON_MT5_SERVER` and
+`AUREON_MT5_TERMINAL_PATH` blank. The `mt5_account` row then reads
+
+    PASS   mt5_account   using attached terminal account: login=… server=… mode=DEMO currency=USD trade_allowed=true
+
+Those four variables are **overrides**, for two situations: more than one terminal on the box
+(pin the path), or a machine where somebody could plausibly leave the wrong account logged in
+(pin the login and/or the server, and the row FAILS on a mismatch instead of reporting what it
+found). One of them is enough — setting only `AUREON_MT5_SERVER` verifies the server. A
+password is needed only if Aureon must perform the login itself; prefer logging in by hand and
+leaving it blank, because it is a secret in a file.
+
+Until 12 T-3 this row WARNed when no login was configured, with a remedy telling you to set the
+variables. That was backwards: it made the normal configuration look incomplete and asked for a
+password nothing needed.
+
 `preflight` prints `mode=DEMO`, `mode=REAL`, `mode=CONTEST` or `mode=UNKNOWN` on the
 `mt5_account` row, from MT5's own `account_info().trade_mode`. A real or unidentified account
-is a **WARN, never a silent pass** — an operator scanning a green table would not notice.
+is a **WARN, never a silent pass** — an operator scanning a green table would not notice, and
+that outranks the attach case: no login configured must never turn a real-money terminal into a
+PASS.
 
 What each part of the system does about it:
 

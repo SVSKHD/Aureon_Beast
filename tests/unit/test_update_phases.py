@@ -48,6 +48,7 @@ TABLE = """# Phases
 | 11B | Sleep and wake | 48 simulated hours | partial |
 | 12 T-1 | One-command launcher | stack up, one child down stops it | partial |
 | 12 T-2 | ARCHITECTURE.md as built | a reader can answer both questions | partial |
+| 12 T-3 | Preflight diagnosis | every branch has a test | partial |
 | — | **Corrections slice** (identity, EMA) | suite green | partial |
 | — | **Defect register D-1…D-15** | each item green | closed |
 
@@ -264,7 +265,7 @@ def test_the_committed_table_reports_what_is_genuinely_missing() -> None:
     # 12 T-1: the five real services have never started together here (MetaTrader5 is
     # Windows-only), and the launcher's row has to keep saying so.
     assert "⬜" in cells["12 T-1"], cells["12 T-1"]
-    assert len(CATALOGUE) == 17
+    assert len(CATALOGUE) == 18
 
 
 # ── 11C F-1: both symbols, or neither counts ─────────────────────────────────

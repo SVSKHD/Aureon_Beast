@@ -359,6 +359,31 @@ CATALOGUE: tuple[PhaseEvidence, ...] = (
         ),
     ),
     PhaseEvidence(
+        "12 T-3",
+        None,
+        (
+            Artefact(
+                label="credential diagnosis",
+                path="aureon/services/credentials.py",
+                must_contain="def is_permission_error",
+            ),
+            Artefact(
+                label="one test per failure branch",
+                path="tests/unit/test_credentials_diagnosis.py",
+                must_contain="roles/datastore.user",
+                link=False,
+            ),
+            Artefact(
+                # The MT5 rows cannot pass on this OS at all, so the honest cell says the
+                # attach policy is untested against a real terminal.
+                label="a preflight run against a real terminal",
+                path="evidence/preflight_attached_*.md",
+                must_contain="mt5_account",
+                produced_by="python scripts/preflight.py on the Windows VPS, MT5 logged in",
+            ),
+        ),
+    ),
+    PhaseEvidence(
         "—",
         "Corrections slice",
         (
