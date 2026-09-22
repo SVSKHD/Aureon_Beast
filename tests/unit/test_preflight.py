@@ -318,12 +318,89 @@ def test_a_terminal_on_another_account_or_server_fails(
     assert expected in result.detail
 
 
-def test_a_config_that_names_no_account_has_nothing_to_verify(tmp_path) -> None:
+def test_no_configured_login_means_attached_and_that_is_a_PASS(tmp_path) -> None:
+    """12 T-3 reverses this row's old verdict, deliberately.
+
+    It used to WARN with a remedy telling the operator to set AUREON_MT5_LOGIN and
+    AUREON_MT5_SERVER. That was the wrong way round: attaching to the terminal the operator
+    logged in IS the intended configuration, so the normal setup was being reported as an
+    incomplete one, and the remedy asked for a password in a file that does not need one.
+
+    It passes now, and it still prints the account -- "which account is this terminal on" is the
+    question the row exists to answer either way.
+    """
     preflight = build(tmp_path, config=AureonConfig())
     preflight.check_mt5_init()
     result = preflight.check_mt5_account()
+    assert result.status is Status.PASS
+    assert "using attached terminal account" in result.detail
+    for field in ("login=5150", "server=BrokerX-Demo", "mode=DEMO", "currency=USD"):
+        assert field in result.detail
+    assert "trade_allowed=true" in result.detail
+
+
+def test_an_attached_REAL_account_still_warns(tmp_path) -> None:
+    """The one case where "no login configured" must not become a green row.
+
+    Planted the other way round -- the attach branch placed before the real-money branch -- a
+    live terminal with no MT5 variables set passes silently, which is the single most expensive
+    row on this table to get wrong.
+    """
+    preflight = build(
+        tmp_path, config=AureonConfig(), terminal=FakeTerminal(trade_mode=2)
+    )
+    preflight.check_mt5_init()
+    result = preflight.check_mt5_account()
     assert result.status is Status.WARN
-    assert not result.blocking
+    assert "REAL MONEY" in result.detail
+    assert "using attached terminal account" in result.detail
+
+
+def test_an_attached_terminal_that_will_not_say_its_mode_still_warns(tmp_path) -> None:
+    preflight = build(
+        tmp_path, config=AureonConfig(), terminal=FakeTerminal(trade_mode=None)
+    )
+    preflight.check_mt5_init()
+    result = preflight.check_mt5_account()
+    assert result.status is Status.WARN
+    assert "mode=UNKNOWN" in result.detail
+
+
+def test_a_configured_login_is_VERIFIED_and_the_detail_says_so(tmp_path) -> None:
+    """With an override set, the row is a verification rather than a report."""
+    preflight = build(tmp_path)
+    preflight.check_mt5_init()
+    result = preflight.check_mt5_account()
+    assert result.status is Status.PASS
+    assert "verified against the config" in result.detail
+    assert "using attached terminal account" not in result.detail
+
+
+@pytest.mark.parametrize(
+    ("config", "terminal", "expected"),
+    [
+        (AureonConfig(mt5_login=5150), FakeTerminal(login=9999), "login is 9999"),
+        (
+            AureonConfig(mt5_server="BrokerX-Demo"),
+            FakeTerminal(server="BrokerX-Live"),
+            "server is 'BrokerX-Live'",
+        ),
+    ],
+    ids=["login-only-override", "server-only-override"],
+)
+def test_a_single_override_is_enough_to_fail_a_mismatch(
+    tmp_path, config, terminal, expected
+) -> None:
+    """Pinning only the login, or only the server, still verifies that one.
+
+    The point of the overrides is exactly this: a box where somebody could leave the wrong
+    account logged in gets one variable and a FAIL instead of a report.
+    """
+    preflight = build(tmp_path, config=config, terminal=terminal)
+    preflight.check_mt5_init()
+    result = preflight.check_mt5_account()
+    assert result.status is Status.FAIL
+    assert expected in result.detail
 
 
 # ── symbol_tradable ──────────────────────────────────────────────────────────
@@ -507,13 +584,19 @@ def test_the_emulator_skips_the_credentials_check_rather_than_passing_it(
     tmp_path,
 ) -> None:
     """SKIP, never PASS. A green row for a check that never ran is how an emulator-only
-    run comes to look like evidence about production."""
+    run comes to look like evidence about production.
+
+    12 T-3 makes the row say it loudly and name the prefix, because this is the line that decides
+    what every PASS above it is a claim about.
+    """
     config = AureonConfig(
         mt5_login=5150, mt5_server="BrokerX-Demo", firestore_emulator_host="127.0.0.1:8080"
     )
     result = build(tmp_path, config=config).check_credentials()
     assert result.status is Status.SKIP
-    assert "no credentials needed" in result.detail
+    assert "EMULATOR" in result.detail
+    assert f"{paths.PREFIX}_*" in result.detail
+    assert "nothing here says anything about production" in result.detail
 
 
 def test_a_missing_key_file_fails_with_the_remedy(tmp_path, monkeypatch) -> None:
@@ -534,8 +617,10 @@ def test_an_oauth_client_secret_is_named_as_the_wrong_file(tmp_path, monkeypatch
 
     result = build(tmp_path).check_credentials()
     assert result.status is Status.FAIL
-    assert "client_email" in result.detail
+    # 12 T-3: diagnosed by the OAuth block it HAS rather than by the three fields it lacks.
+    # Naming the file kind is a shorter route to the right file than listing missing fields.
     assert "OAuth client secret" in result.detail
+    assert "not a service-account key" in result.detail
 
 
 def test_a_key_that_is_not_json_says_so(tmp_path, monkeypatch) -> None:
@@ -615,3 +700,135 @@ def test_a_terminal_that_will_not_say_is_treated_as_live(tmp_path) -> None:
     result = preflight.check_mt5_account()
     assert result.status is Status.WARN
     assert "mode=UNKNOWN" in result.detail
+
+
+# ── 12 T-3: the config row names the file its values came from ─────────────────
+
+
+def test_the_config_row_names_the_env_file_that_was_loaded(tmp_path, monkeypatch) -> None:
+    """The commonest configuration surprise is a file that was never read.
+
+    A `--env-file` typo, or a service started from another directory, produces a table of
+    plausible defaults and no hint that nothing was loaded. Every other row describes a value;
+    this one describes where the values came from.
+    """
+    from aureon.services.supervisor import ENV_FILE_VAR
+
+    monkeypatch.setenv(ENV_FILE_VAR, "/etc/aureon/production.env")
+    result = build(tmp_path).check_config()
+    assert result.status is Status.PASS
+    assert "env_file=/etc/aureon/production.env" in result.detail
+
+
+def test_the_config_row_says_none_rather_than_guessing_at_dot_env(
+    tmp_path, monkeypatch
+) -> None:
+    """``none``, not ``.env``.
+
+    The launcher sets the variable to the empty string when it found no file. Printing a
+    plausible filename for a file nobody read is exactly the failure this line exists to
+    prevent -- planted as a default of ``.env`` and this is the test that fails.
+    """
+    from aureon.services.supervisor import ENV_FILE_VAR
+
+    monkeypatch.setenv(ENV_FILE_VAR, "")
+    assert "env_file=none" in build(tmp_path).check_config().detail
+
+    monkeypatch.delenv(ENV_FILE_VAR, raising=False)
+    assert "env_file=none" in build(tmp_path).check_config().detail
+
+
+# ── 12 T-3: the firestore row tells a permission failure from the rest ────────
+
+
+class Refusing:
+    """A client whose every write raises what a real one raises."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def document(self, *_: object, **__: object) -> object:
+        raise self._exc
+
+    def collection(self, *_: object, **__: object) -> object:
+        raise self._exc
+
+
+def test_a_permission_denial_names_the_role_to_grant(tmp_path) -> None:
+    """A different action from a missing key: the key is fine and the identity cannot write.
+
+    Handed the generic remedy, an operator goes looking for a better key file and finds nothing
+    wrong with the one they have.
+    """
+
+    class PermissionDenied(Exception):
+        pass
+
+    preflight = build(tmp_path, client=Refusing(PermissionDenied("caller lacks permission")))
+    result = preflight.check_firestore()
+    assert result.status is Status.FAIL
+    assert "permission denied" in result.detail.lower()
+    assert "roles/datastore.user" in (result.remedy or "")
+
+
+def test_a_network_failure_is_not_reported_as_a_permission_problem(tmp_path) -> None:
+    """A wrong diagnosis costs more than a vague one: it sends the operator to IAM for an
+    outage that is a network problem."""
+
+    class Unavailable(Exception):
+        pass
+
+    preflight = build(
+        tmp_path, client=Refusing(Unavailable("503 failed to connect to all addresses"))
+    )
+    result = preflight.check_firestore()
+    assert result.status is Status.FAIL
+    assert "permission" not in result.detail.lower()
+    assert "roles/datastore.user" not in (result.remedy or "")
+
+
+def test_the_generic_firestore_remedy_says_firestore_and_never_mt5(tmp_path) -> None:
+    """The two sets of credentials live in the same ``.env``.
+
+    An operator told "check your credentials" reaches for whichever they touched last, and on
+    this system that is usually the terminal login.
+    """
+
+    class Broken(Exception):
+        pass
+
+    preflight = build(tmp_path, client=Refusing(Broken("something went wrong")))
+    result = preflight.check_firestore()
+    remedy = result.remedy or ""
+    assert "Firestore, not MT5" in remedy
+    assert "AUREON_FIREBASE_PROJECT_ID" in remedy
+
+
+def test_a_key_for_the_wrong_project_fails_the_credentials_row(tmp_path, monkeypatch) -> None:
+    """The one credential mistake that produces no error at all.
+
+    It authenticates, it writes, and the session lands in another project's database -- which
+    looks exactly like a first run, because collections are created on demand.
+    """
+    import json
+
+    key = tmp_path / "key.json"
+    key.write_text(
+        json.dumps(
+            {
+                "type": "service_account",
+                "project_id": "somebody-elses-project",
+                "client_email": "a@b.iam.gserviceaccount.com",
+                "private_key": "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(key))
+    config = AureonConfig(
+        mt5_login=5150, mt5_server="BrokerX-Demo", firebase_project_id="aureon-prod"
+    )
+    result = build(tmp_path, config=config).check_credentials()
+    assert result.status is Status.FAIL
+    assert "somebody-elses-project" in result.detail
+    assert "aureon-prod" in result.detail

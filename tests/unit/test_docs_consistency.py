@@ -126,6 +126,164 @@ def test_no_collection_is_documented_that_does_not_exist() -> None:
     assert not stale, f"documented but no longer defined in paths.py: {sorted(stale)}"
 
 
+def test_every_collection_appears_in_the_architecture_doc() -> None:
+    """The ownership table has to cover the whole registry (12, T-2).
+
+    ARCHITECTURE.md answers "which process writes ``trades``", and a collection missing from it
+    answers that question with silence -- which reads exactly like "nothing writes it". The
+    table is generated from ``aureon/storage/ownership.py``, so the remedy is one command.
+
+    Written with ``{prefix}`` rather than a literal prefix, because the table must not change
+    between a test run and production (the same reasoning as decision 111 for CONTRACTS.md).
+    """
+    doc = (DOCS / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    missing = [
+        name
+        for name in paths.ALL_COLLECTIONS
+        if f"`{{prefix}}_{name[len(f'{paths.PREFIX}_'):]}`" not in doc
+    ]
+    assert not missing, (
+        "these collections are in paths.ALL_COLLECTIONS and not in ARCHITECTURE.md — run "
+        f"`python scripts/gen_architecture.py`: {missing}"
+    )
+
+
+def test_the_architecture_doc_states_what_it_is_not() -> None:
+    """It must not be mistaken for the frozen spec the ``§`` references cite.
+
+    The whole reason 11A refused to write this file was that a plausible document nobody wrote
+    would be treated as authoritative. Writing it from the code answers that only as long as the
+    document keeps saying which of the two it is; a later edit that dropped the disclaimer would
+    quietly turn it into the thing 11A refused to produce.
+    """
+    doc = (DOCS / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    assert "as built" in doc.lower()
+    assert "never been in this repository" in doc, (
+        "ARCHITECTURE.md must keep saying that the frozen spec it does not contain has never "
+        "been in the repository"
+    )
+
+
+def _invariants_section() -> str:
+    """Just the numbered list under ``## The invariants``.
+
+    Scoped rather than searched document-wide, which is what the first version of the test below
+    did -- and a plant that removed ``assert_transition`` from the invariant itself survived,
+    because the word still appeared in the Setups section three paragraphs later. A whole-document
+    substring search cannot tell "this rule is listed" from "this word occurs somewhere".
+    """
+    doc = (DOCS / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    start = doc.find("## The invariants")
+    assert start >= 0, "ARCHITECTURE.md has no `## The invariants` section"
+    end = doc.find("\n## ", start + 1)
+    section = doc[start : end if end > 0 else len(doc)]
+    assert section.count("\n1. ") == 1, "the invariants section is not a numbered list"
+    return section.lower()
+
+
+def test_the_architecture_doc_lists_every_invariant_claude_md_states() -> None:
+    """CLAUDE.md's non-negotiables and the doc's invariant list must not drift apart.
+
+    Matched on a distinctive fragment of each rule rather than on whole sentences, because the
+    two documents legitimately phrase them differently -- but a rule dropped from one of them is
+    a rule the next contributor reads in only one place.
+    """
+    section = _invariants_section()
+    for fragment in (
+        "a detection never creates a trade",
+        "assert_transition",
+        "brokerinterface",
+        "metatrader5",
+        "tz-aware",
+        "immutable",
+        "aureon/storage",
+        "tick data never goes to firestore",
+        "tick_volume",
+        "history_source",
+        "never computes an indicator",
+        "aureon/storage/paths.py",
+    ):
+        assert fragment in section, (
+            f"the invariants section of ARCHITECTURE.md does not state the rule about "
+            f"{fragment!r}"
+        )
+
+
+#: One required fragment per non-negotiable in ``CLAUDE.md``, in the same order. Declared rather
+#: than derived from the bullet text: the first version of the test below picked "distinctive
+#: tokens" out of each bullet by punctuation, which extracted the word "packages" from "reviews
+#: packages." and failed on a rule the document states perfectly well. A heuristic whose failure
+#: mode is a false alarm is worse than no test, because the next person deletes it.
+#:
+#: The count is asserted too, so a non-negotiable added to CLAUDE.md fails here until somebody
+#: writes the invariant it corresponds to.
+NON_NEGOTIABLE_FRAGMENTS: tuple[str, ...] = (
+    "a detection never creates a trade",
+    "human confirm",
+    "assert_transition",
+    "brokerinterface",
+    "tz-aware",
+    "immutable",
+    "aureon/storage",
+    "never computes an indicator",
+)
+
+
+def test_every_non_negotiable_in_claude_md_is_named_in_the_invariants() -> None:
+    """A rule in CLAUDE.md and not in the document is a rule with no stated reason.
+
+    CLAUDE.md is the file a contributor is told to read first and its non-negotiables are
+    deliberately terse; the invariants section is where each one is explained and, where
+    applicable, linked to the test that enforces it.
+    """
+    rules = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    start = rules.find("## Non-negotiables")
+    assert start >= 0, "CLAUDE.md has no `## Non-negotiables` section"
+    end = rules.find("\n## ", start + 1)
+    bullets = [
+        line.strip("- ").strip()
+        for line in rules[start : end if end > 0 else len(rules)].splitlines()
+        if line.startswith("- ")
+    ]
+    assert len(bullets) == len(NON_NEGOTIABLE_FRAGMENTS), (
+        f"CLAUDE.md now has {len(bullets)} non-negotiables and this test knows "
+        f"{len(NON_NEGOTIABLE_FRAGMENTS)}. Add the new rule to the invariants section of "
+        "ARCHITECTURE.md and name its fragment here."
+    )
+
+    section = _invariants_section()
+    for bullet, fragment in zip(bullets, NON_NEGOTIABLE_FRAGMENTS, strict=True):
+        assert fragment in section, (
+            f"the invariants section of ARCHITECTURE.md does not cover this CLAUDE.md rule: "
+            f"{bullet[:100]!r} (expected to find {fragment!r})"
+        )
+
+
+def test_the_architecture_doc_describes_claim_before_post_the_way_the_code_does_it() -> None:
+    """A doc that reversed this would describe a different system, and nothing would fail.
+
+    The direction is a real tradeoff -- claiming first can LOSE a message, posting first can
+    DUPLICATE one -- and the code claims first deliberately. A plant that reversed the doc's
+    description survived every other test in this file, so the two are pinned to each other here.
+    """
+    doc = (DOCS / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    module = (
+        REPO_ROOT / "aureon" / "storage" / "notification_repository.py"
+    ).read_text(encoding="utf-8")
+
+    assert "Claim before posting, not after" in module, (
+        "the notification repository no longer documents its ordering; this test is pinning "
+        "the document to nothing"
+    )
+    assert "claims first" in doc, (
+        "ARCHITECTURE.md must say Aureon CLAIMS first. The code does "
+        "(aureon/storage/notification_repository.py), and a document describing the opposite "
+        "describes a system with a duplicate-alert failure mode instead of a lost-embed one."
+    )
+    # And it must keep saying what that costs, or it reads as a free win.
+    assert "crash window" in doc.lower()
+
+
 # ── Banned phrases ────────────────────────────────────────────────────────────
 
 
@@ -148,25 +306,19 @@ def test_no_document_contains_a_superseded_phrase(phrase: str) -> None:
 # ── CLAUDE.md's reading list is real ──────────────────────────────────────────
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "docs/ARCHITECTURE.md has never been in the repository, and CLAUDE.md has told every "
-        "contributor to read it since Phase 0. The frozen spec has to be SUPPLIED by the "
-        "operator -- reconstructing it from memory would produce a plausible document that "
-        "nobody wrote and everybody would then treat as authoritative, which is worse than "
-        "the gap. strict=True so this turns RED the moment the file lands: that is the signal "
-        "to delete this marker, not to keep it."
-    ),
-)
 def test_every_file_the_standing_rules_tell_you_to_read_exists() -> None:
     """The one that would have caught ``docs/ARCHITECTURE.md``.
 
-    CLAUDE.md has opened with "Read docs/ARCHITECTURE.md (frozen, §94), docs/CONTRACTS.md and
-    docs/PHASE1_DECISIONS.md before any change" since Phase 0, and ARCHITECTURE.md has never
-    been in the repository. Ten package docstrings point at it as well. An instruction to read
-    a file that is not there is worse than no instruction: it reads as though the spec exists
-    and somebody else has consulted it.
+    It carried a ``xfail(strict=True)`` from 11A until 12 T-2, with the reason that the frozen
+    spec had to be supplied rather than reconstructed from memory. T-2 resolved it the other
+    way: the file now exists and is written **from the code**, which is a different thing from
+    a reconstruction -- every claim in it is checkable against a named file, and the ownership
+    table is generated. What it explicitly does NOT claim to be is the frozen spec, and it says
+    so in its own first paragraph, because the ``§`` references throughout the codebase still
+    point at a document the operator holds.
+
+    The marker is gone rather than relaxed. A strict xfail that starts passing is a signal to
+    delete it, which is exactly what it said it was.
     """
     rules = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     referenced = set(re.findall(r"\bdocs/[A-Za-z0-9_]+\.md\b", rules))

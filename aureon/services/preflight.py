@@ -23,6 +23,7 @@ observer performs seconds later.
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -173,6 +174,7 @@ class Preflight:
         offset = self.now().astimezone(ZoneInfo(self.config.market_tz)).utcoffset()
         hours = (offset.total_seconds() / 3600) if offset else 0.0
         detail = (
+            f"env_file={self._env_file()} "
             f"account_scope={self.config.account_scope} "
             f"symbols={','.join(self.config.symbols)} "
             f"tf={','.join(t.value for t in self.config.timeframes)} "
@@ -191,6 +193,23 @@ class Preflight:
                 ),
             )
         return CheckResult("config", Status.PASS, detail)
+
+    def _env_file(self) -> str:
+        """Which ``.env`` the launcher loaded, or ``none`` (12, T-3).
+
+        Printed because the commonest configuration surprise is not a wrong value but a file that
+        was never read -- a `--env-file` typo, or a service started from a different directory.
+        Every other row on the table describes a value; this one describes where the values came
+        from, and without it "symbols=XAUUSD" is indistinguishable from "symbols defaulted
+        because nothing was loaded".
+
+        ``none`` rather than ``.env`` when unset: the launcher sets the variable to the empty
+        string when it found no file, and printing a plausible filename for a file nobody read is
+        the failure this line exists to prevent.
+        """
+        from aureon.services.supervisor import ENV_FILE_VAR
+
+        return os.environ.get(ENV_FILE_VAR, "").strip() or "none"
 
     def check_collection_prefix(self) -> CheckResult:
         """Which database this session will write into.
@@ -297,7 +316,11 @@ class Preflight:
         """
         from aureon.services import credentials
 
-        verdict = credentials.inspect(emulator_host=self.config.firestore_emulator_host)
+        verdict = credentials.inspect(
+            emulator_host=self.config.firestore_emulator_host,
+            project_id=self.config.firebase_project_id,
+            collection_prefix=paths.PREFIX,
+        )
         if verdict.not_applicable:
             # SKIP, not PASS. A green row for a check that never ran is how an
             # emulator-only run comes to look like evidence about production.
@@ -340,6 +363,17 @@ class Preflight:
             self._client = None
             from aureon.services import credentials
 
+            if credentials.is_permission_error(exc):
+                # The credentials resolved and the identity they name cannot write. A different
+                # action from a missing key, and the generic remedy would send an operator
+                # looking for a better key file (12, T-3).
+                return CheckResult(
+                    "firestore",
+                    Status.FAIL,
+                    f"{paths.HEARTBEATS}: permission denied writing to this prefix "
+                    f"({type(exc).__name__})",
+                    remedy=credentials.PERMISSION_REMEDY,
+                )
             if credentials.is_default_credentials_error(exc):
                 # The one failure mode worth naming separately: the library could not find
                 # credentials at all, which is a different action from a permission denial
@@ -356,8 +390,9 @@ class Preflight:
                 Status.FAIL,
                 f"{paths.HEARTBEATS}: {type(exc).__name__}: {exc}",
                 remedy=(
-                    f"Check {credentials.CREDENTIALS_ENV}, AUREON_FIREBASE_PROJECT_ID, "
-                    "and that the rules permit a write to this prefix."
+                    f"Firestore, not MT5: check {credentials.CREDENTIALS_ENV}, "
+                    f"{credentials.PROJECT_ENV}, and that the rules permit a write to this "
+                    "prefix."
                 ),
             )
         if not written or read_back is None:
@@ -468,11 +503,27 @@ class Preflight:
         )
 
     def check_mt5_account(self) -> CheckResult:
-        """The terminal is logged into the account the config names.
+        """Which account the terminal is on, and whether it is the one the config names.
 
-        The failure this prevents is the expensive one: a terminal left logged into a
-        different server produces a perfectly plausible session whose candles came from
-        somewhere else, and nothing downstream records which server they came from.
+        The failure this prevents is the expensive one: a terminal left logged into a different
+        server produces a perfectly plausible session whose candles came from somewhere else, and
+        nothing downstream records which server they came from.
+
+        ## Attaching is the DEFAULT, not a fallback (12, T-3)
+
+        ``mt5.initialize()`` with no credentials attaches to whatever terminal is running and
+        already logged in, and that is how Aureon is meant to run: the operator logs the terminal
+        in once, and the services attach. ``AUREON_MT5_LOGIN``/``PASSWORD``/``SERVER``/
+        ``TERMINAL_PATH`` are **optional overrides**, for a box with more than one terminal or a
+        login that must be pinned.
+
+        Until T-3 this row returned WARN when no login was configured, with a remedy telling the
+        operator to set the variables. That was the wrong way round: it made the normal
+        configuration look like an incomplete one, and the remedy asked for a password in a
+        `.env` file that did not need one. It now PASSES and names the attached account, which is
+        the information the row exists to carry. What it must never do is pass *quietly* -- the
+        account is printed either way, because "which account is this terminal on" is the question
+        nobody thinks to ask until the answer is the expensive one.
         """
         if self._provider is None:
             return self._skipped_mt5("mt5_account")
@@ -508,33 +559,36 @@ class Preflight:
                     "names. Every candle this session records would come from there."
                 ),
             )
-        if wanted_login is None and wanted_server is None:
+        attached = wanted_login is None and wanted_server is None
+        if attached and not mode.is_real_money:
+            # The normal configuration: no MT5 variables set, attached to the terminal the
+            # operator logged in. PASS, and say which account it is.
             return CheckResult(
                 "mt5_account",
-                Status.WARN,
-                f"{detail} — config names no login/server to compare against",
-                remedy=(
-                    "Set AUREON_MT5_LOGIN and AUREON_MT5_SERVER so this check has "
-                    "something to verify rather than something to report."
-                ),
+                Status.PASS,
+                f"using attached terminal account: {detail}",
             )
         if mode.is_real_money:
             # WARN rather than FAIL: observation on a live account is legitimate and
             # read-only, and the executor refuses execution there on its own (F-3). But it
             # never passes quietly -- an operator scanning a green table would not notice.
+            #
+            # This outranks the attach case above deliberately: "no login configured" must not
+            # turn a real-money terminal into a PASS.
+            prefix = "using attached terminal account: " if attached else ""
             return CheckResult(
                 "mt5_account",
                 Status.WARN,
-                f"{detail} — REAL MONEY"
+                f"{prefix}{detail} — REAL MONEY"
                 if mode is AccountMode.REAL
-                else f"{detail} — the terminal did not report its account mode",
+                else f"{prefix}{detail} — the terminal did not report its account mode",
                 remedy=(
                     "Observation is read-only and safe here. The executor will refuse "
                     "execution unless AUREON_ALLOW_LIVE_EXECUTION=true, and the demo "
                     "drills refuse to run at all."
                 ),
             )
-        return CheckResult("mt5_account", Status.PASS, detail)
+        return CheckResult("mt5_account", Status.PASS, f"verified against the config: {detail}")
 
     def check_symbol_tradable(self) -> CheckResult:
         """The symbol exists, is visible, and the broker will accept an order on it."""

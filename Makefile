@@ -50,11 +50,16 @@ baseline: ## regenerate docs/PHASE2_BASELINE.md
 phases: ## rewrite the Evidence column of docs/PHASES.md from what is on disk
 	python scripts/update_phases.py
 
+architecture: ## regenerate the ownership table in docs/ARCHITECTURE.md
+	python scripts/gen_architecture.py
+
 lint:
-	ruff check aureon tests scripts main_observer.py main_executor.py
+	ruff check aureon tests scripts main_aureon.py main_observer.py main_executor.py \
+	    main_monitor.py main_discord.py main_review.py
 
 check: lint ## the cross-phase checklist
 	python scripts/gen_contracts.py --check
 	python scripts/gen_baseline.py --check
+	python scripts/gen_architecture.py --check
 	python scripts/update_phases.py --check
 	$(MAKE) test

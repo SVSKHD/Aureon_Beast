@@ -8,7 +8,7 @@ finds the existing row rather than announcing it again.
 Two services CAN legitimately raise the same named condition -- ``firestore_unavailable`` is
 true for whichever process cannot write -- and the last writer wins. That is correct here and
 would be wrong for a trade: the worst outcome of a lost race is one duplicate ops message, and
-paying a transaction per poll for ten conditions across four processes would cost far more than
+paying a transaction per poll for every condition across five processes would cost far more than
 the duplicate is worth. Nothing gates on these documents (see ``aureon/models/ops.py``), which
 is what makes the cheap answer the right one.
 """

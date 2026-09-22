@@ -17,11 +17,9 @@ Reconciliation never sends. It only looks and records.
 from __future__ import annotations
 
 import logging
-import signal
 import sys
 from collections.abc import Callable
 from datetime import datetime
-from types import FrameType
 
 from aureon.config import AureonConfig
 from aureon.execution.broker_interface import BrokerInterface
@@ -33,6 +31,7 @@ from aureon.models.enums import MarketState
 from aureon.models.settings import ExecutionSettings
 from aureon.services.heartbeat_service import HeartbeatService
 from aureon.services.market_state_service import WeeklySchedule
+from aureon.services.shutdown import flushed, install_handlers
 from aureon.services.sleep_cycle import SleepCycle, SleepGate
 from aureon.storage import paths
 from aureon.storage.trade_request_repository import TradeRequestRepository
@@ -209,6 +208,7 @@ class Executor:
         if self.heartbeat is not None:
             self.heartbeat.stop()
         self.broker.close()
+        flushed(paths.SERVICE_EXECUTOR)
 
 
 def build_executor(config: AureonConfig) -> Executor:
@@ -265,12 +265,7 @@ def main(argv: list[str] | None = None) -> int:
     config = AureonConfig.from_env()
     executor = build_executor(config)
 
-    def handle(signum: int, _frame: FrameType | None) -> None:
-        log.info("received signal %s", signum)
-        executor.worker.stop()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, handle)
+    install_handlers(executor.worker.stop, service=paths.SERVICE_EXECUTOR)
 
     executor.run()
     return 0

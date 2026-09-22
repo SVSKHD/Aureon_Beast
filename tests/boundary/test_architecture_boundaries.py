@@ -597,3 +597,74 @@ def test_the_assessment_service_never_reads_a_trader_note() -> None:
     assert not offenders, (
         "these would let a trader's own note move a measured number:\n" + "\n".join(offenders)
     )
+
+
+# ── T-9: the measured reference is context, never a gate ──────────────────────
+
+
+def test_the_setup_engine_never_reads_a_reference_to_decide() -> None:
+    """A setup's ``reference`` block must not reach any decision.
+
+    It is a measured cohort of past outcomes, attached at open and rendered on a card. The moment
+    something branches on it, the system has started preferring one structure over another on the
+    strength of its own history -- which is a model, and a model is the one thing this codebase
+    does not have. Worse, the preference would be invisible: every number in the block is
+    genuinely measured, so the branch would look like arithmetic.
+
+    AST rather than a grep, so the legitimate uses are nameable. ``self.reference`` is the hook
+    the observer installs, and ``reference=`` is the keyword that attaches the block.
+    """
+    import ast
+
+    engine = AUREON / "services" / "setup_engine.py"
+    offenders: list[str] = []
+    for node in ast.walk(ast.parse(engine.read_text(encoding="utf-8"))):
+        if not isinstance(node, ast.Attribute) or node.attr != "reference":
+            continue
+        receiver = node.value
+        if isinstance(receiver, ast.Name) and receiver.id == "self":
+            continue
+        offenders.append(f"{engine.name}:{node.lineno} reads .reference off something else")
+    assert not offenders, (
+        "the setup engine must not read a measured reference:\n" + "\n".join(offenders)
+    )
+
+
+def test_the_reference_service_measures_and_never_writes() -> None:
+    """``setup_reference`` is arithmetic over rows somebody else read.
+
+    It is handed a repository and calls exactly one read method on it. A write from here would
+    put a second writer on ``setups`` or ``setup_evaluations`` -- and the transaction in
+    ``SetupRepository.record`` is safe precisely because the observer is the only one.
+    """
+    text = (AUREON / "services" / "setup_reference.py").read_text(encoding="utf-8")
+    for forbidden in (".set(", ".create(", ".update(", ".delete(", ".write(", ".open("):
+        assert forbidden not in text, f"setup_reference must not call {forbidden}"
+
+
+def test_no_surface_renders_a_reference_without_its_label() -> None:
+    """Every rendering of the block goes through ``SetupReference.caption``.
+
+    The caption is the smallest place a measured number can quietly become advice, so it is not
+    left to a caller: a card that printed the quantiles under a heading of its own choosing would
+    be publishing a target with a measurement's authority.
+
+    The rule is narrow on purpose -- it applies to modules that WORK with the block, found by
+    their import of it, rather than to everything mentioning ``mfe``. ``assessment_service``
+    reads ``result.mfe`` off a horizon and is not rendering anything.
+    """
+    offenders: list[str] = []
+    for path in _python_files("discord", "reviews", "services", "engine"):
+        if path.name == "setup_reference.py":
+            continue
+        text = path.read_text(encoding="utf-8")
+        if "SetupReference" not in text and "setup_reference" not in text:
+            continue
+        if ".mfe" not in text and ".mae" not in text:
+            continue
+        if "caption" not in text and "render_reference" not in text:
+            offenders.append(str(path.relative_to(REPO_ROOT)))
+    assert not offenders, (
+        "these modules read a reference's quantiles without its caption:\n"
+        + "\n".join(offenders)
+    )

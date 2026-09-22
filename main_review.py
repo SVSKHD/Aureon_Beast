@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import signal
 import sys
 import threading
 from datetime import datetime
@@ -52,6 +51,7 @@ from aureon.reviews.periods import (
 )
 from aureon.reviews.service import ReviewService
 from aureon.services.market_state_service import WeeklySchedule
+from aureon.services.shutdown import install_handlers
 from aureon.services.sleep_cycle import SleepCycle, SleepGate
 
 log = logging.getLogger("aureon.review")
@@ -281,12 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.period == "watch":
         watcher = build_watcher(config)
 
-        def handle(signum: int, _frame: object) -> None:
-            log.info("received signal %s", signum)
-            watcher.stop()
-
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            signal.signal(sig, handle)
+        install_handlers(watcher.stop, service="review")
         watcher.run()
         return 0
 

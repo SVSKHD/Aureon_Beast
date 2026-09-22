@@ -725,3 +725,231 @@ TERMINAL_CONTROL_STATUSES: frozenset[ControlRequestStatus] = frozenset(
 TERMINAL_ALERT_STATUSES: frozenset[PriceAlertStatus] = frozenset(
     s for s in PriceAlertStatus if is_terminal(s, PRICE_ALERT_TRANSITIONS)
 )
+
+
+# ── Setups (12, T-6) ──────────────────────────────────────────────────────────
+
+
+class SetupFamily(StrEnum):
+    """The four shapes a setup can be, and no fifth (12, T-7).
+
+    A closed set, for the reason the ops register's names are closed: an open vocabulary grows
+    near-duplicates that no runbook can document and no review can group by. Each family has its
+    own lifecycle, its own invalidation rule and its own expiry, all of them in
+    ``aureon/config/symbol_tuning.py`` and versioned.
+
+    The names describe STRUCTURE, not a direction and not an instruction. ``direction_context``
+    carries the bias separately, and nothing in the system turns either into an order.
+    """
+
+    #: Proximity to a tracked level, a sweep of it, a reclaim, then confirmation.
+    LIQUIDITY_REVERSAL = "liquidity_reversal"
+    #: A break of a session or day extreme, or of a value-area edge, that is then accepted.
+    BREAKOUT_ACCEPTANCE = "breakout_acceptance"
+    #: An established trend pulling back into its EMA zone and continuing, or not.
+    TREND_PULLBACK = "trend_pullback"
+    #: The EMA pair narrowing, the fast slope turning, then a cross.
+    MOMENTUM_TRANSITION = "momentum_transition"
+
+
+class DirectionContext(StrEnum):
+    """Which way a setup is biased, phrased as CONTEXT and never as an order.
+
+    BULLISH/BEARISH/NEUTRAL, deliberately not BUY/SELL. The difference is not cosmetic: a card
+    that says BUY has told a human what to do, and the one thing this system must never do is
+    decide. ``NEUTRAL`` is a real answer for a setup whose structure is present and whose
+    direction is not yet resolved -- a level being tested from both sides, for instance.
+
+    A test asserts BUY and SELL appear nowhere in the setup models or their renderers.
+    """
+
+    BULLISH = "bullish"
+    BEARISH = "bearish"
+    NEUTRAL = "neutral"
+
+
+class SetupState(StrEnum):
+    """Where a setup is in its life (12, T-6).
+
+    Read in order: a setup is OBSERVING when its preconditions hold, WATCH when something has
+    happened at the level, DEVELOPING while the reaction builds, CONFIRMED when the confirming
+    event lands, and then PULLBACK/CONTINUATION as it either holds or does not.
+
+    ``FAKEOUT_RISK`` is not a failure state. It is "the confirming move has been given back and
+    we do not yet know whether that is noise", reachable from CONFIRMED and PULLBACK and leading
+    either back to CONFIRMED or on to INVALIDATED. Collapsing it into INVALIDATED would throw
+    away the distinction between a setup that failed and one that wobbled, which is exactly the
+    distinction a review wants to measure.
+    """
+
+    OBSERVING = "observing"
+    WATCH = "watch"
+    DEVELOPING = "developing"
+    CONFIRMED = "confirmed"
+    PULLBACK = "pullback"
+    CONTINUATION = "continuation"
+    FAKEOUT_RISK = "fakeout_risk"
+    COMPLETED = "completed"
+    INVALIDATED = "invalidated"
+
+
+class SetupEventType(StrEnum):
+    """Why a setup moved, or what was seen while it did not (12, T-6, T-8).
+
+    Two kinds in one enum, on purpose. The ``WATCH_*`` values are descriptive: they record that
+    something happened near a level and do NOT change the state, so a setup can accumulate a
+    dozen of them while sitting in WATCH. The rest are the lifecycle's own transitions.
+
+    Keeping them together means one sub-collection holds the whole story of a setup in time
+    order, which is what a card and a review both want to read. Splitting them would mean
+    interleaving two queries to answer "what happened to this setup".
+    """
+
+    # ── lifecycle ─────────────────────────────────────────────────────────────
+    OPENED = "opened"
+    WATCH_STARTED = "watch_started"
+    DEVELOPING = "developing"
+    CONFIRMED = "confirmed"
+    PULLBACK_STARTED = "pullback_started"
+    PULLBACK_TO_EMA20 = "pullback_to_ema20"
+    PULLBACK_TO_EMA_ZONE = "pullback_to_ema_zone"
+    EMA20_REJECTION = "ema20_rejection"
+    EMA50_TEST = "ema50_test"
+    CONTINUATION = "continuation"
+    FAKEOUT_RISK = "fakeout_risk"
+    RECLAIMED = "reclaimed"
+    COMPLETED = "completed"
+    INVALIDATED = "invalidated"
+    EXPIRED = "expired"
+
+    # ── descriptive, context only (T-8) ───────────────────────────────────────
+    PROXIMITY_LIQUIDITY_LEVEL = "proximity_liquidity_level"
+    PROXIMITY_SESSION_EXTREME = "proximity_session_extreme"
+    PROXIMITY_PREV_DAY_EXTREME = "proximity_prev_day_extreme"
+    PROXIMITY_POC = "proximity_poc"
+    PROXIMITY_VAH = "proximity_vah"
+    PROXIMITY_VAL = "proximity_val"
+    EMA_GAP_NARROWING = "ema_gap_narrowing"
+    EMA_FAST_SLOPE_CHANGE = "ema_fast_slope_change"
+    RSI_MOMENTUM_TURN = "rsi_momentum_turn"
+    TICK_VOLUME_EXPANSION = "tick_volume_expansion"
+    REPEATED_LEVEL_TEST = "repeated_level_test"
+    HIGH_TICK_VOLUME_SWEEP = "high_tick_volume_sweep"
+    HIGH_TICK_VOLUME_REJECTION = "high_tick_volume_rejection"
+    VOLUME_EXPANSION_AT_LEVEL = "volume_expansion_at_level"
+    PROFILE_RECLAIM = "profile_reclaim"
+    PROFILE_REJECTION = "profile_rejection"
+    BREAKOUT_PRESSURE = "breakout_pressure"
+
+    @property
+    def is_watch_event(self) -> bool:
+        """True for the descriptive events, which never change a setup's state."""
+        return self in WATCH_EVENT_TYPES
+
+
+#: The descriptive events (T-8). Derived from the name prefix would have been shorter and
+#: wrong: ``WATCH_STARTED`` is a lifecycle transition whose name begins the same way, and
+#: ``PROFILE_RECLAIM`` is descriptive with no prefix at all. An explicit set is the only
+#: version of this that cannot be broken by renaming a value.
+WATCH_EVENT_TYPES: frozenset[SetupEventType] = frozenset(
+    {
+        SetupEventType.PROXIMITY_LIQUIDITY_LEVEL,
+        SetupEventType.PROXIMITY_SESSION_EXTREME,
+        SetupEventType.PROXIMITY_PREV_DAY_EXTREME,
+        SetupEventType.PROXIMITY_POC,
+        SetupEventType.PROXIMITY_VAH,
+        SetupEventType.PROXIMITY_VAL,
+        SetupEventType.EMA_GAP_NARROWING,
+        SetupEventType.EMA_FAST_SLOPE_CHANGE,
+        SetupEventType.RSI_MOMENTUM_TURN,
+        SetupEventType.TICK_VOLUME_EXPANSION,
+        SetupEventType.REPEATED_LEVEL_TEST,
+        SetupEventType.HIGH_TICK_VOLUME_SWEEP,
+        SetupEventType.HIGH_TICK_VOLUME_REJECTION,
+        SetupEventType.VOLUME_EXPANSION_AT_LEVEL,
+        SetupEventType.PROFILE_RECLAIM,
+        SetupEventType.PROFILE_REJECTION,
+        SetupEventType.BREAKOUT_PRESSURE,
+    }
+)
+
+
+class SetupAnchorKind(StrEnum):
+    """What a setup is anchored TO (12, T-6).
+
+    The anchor is half the identity: two setups at the same level on the same day in the same
+    direction are the same setup, and a new anchor opens a new one. So the kinds are a closed
+    set, and a price alone is never the anchor -- "the level at 2412.5" and "the session high,
+    which happens to be at 2412.5" become different things the moment the session high moves.
+    """
+
+    LIQUIDITY_LEVEL = "liquidity_level"
+    SESSION_EXTREME = "session_extreme"
+    PREV_DAY_EXTREME = "prev_day_extreme"
+    VALUE_AREA_EDGE = "value_area_edge"
+    POC = "poc"
+    EMA_ZONE = "ema_zone"
+
+
+#: The setup lifecycle (12, T-6).
+#:
+#: The shape in one sentence: forwards through the sequence, INVALIDATED reachable from
+#: anything that is not already terminal, and FAKEOUT_RISK a two-way door off CONFIRMED and
+#: PULLBACK.
+#:
+#: Three edges are worth their own note, because each one was a decision:
+#:
+#: * ``CONFIRMED -> COMPLETED`` exists without a PULLBACK in between. A setup that runs straight
+#:   to its measured objective never pulls back, and a machine that required the step would have
+#:   to invent one.
+#: * ``CONTINUATION -> PULLBACK`` exists. A trend that continues, pulls back and continues again
+#:   is one setup, not three; forcing a new setup per leg would fragment the population that a
+#:   review has to count.
+#: * ``OBSERVING -> INVALIDATED`` exists. A setup whose preconditions stop holding before
+#:   anything happened at the level is invalidated, not deleted: the fact that it was there and
+#:   came to nothing is data, and expiry is recorded the same way with reason ``expired``.
+SETUP_TRANSITIONS: dict[SetupState, frozenset[SetupState]] = {
+    SetupState.OBSERVING: frozenset(
+        {SetupState.WATCH, SetupState.DEVELOPING, SetupState.INVALIDATED}
+    ),
+    SetupState.WATCH: frozenset(
+        {SetupState.DEVELOPING, SetupState.INVALIDATED}
+    ),
+    SetupState.DEVELOPING: frozenset(
+        {SetupState.CONFIRMED, SetupState.INVALIDATED}
+    ),
+    SetupState.CONFIRMED: frozenset(
+        {
+            SetupState.PULLBACK,
+            SetupState.CONTINUATION,
+            SetupState.FAKEOUT_RISK,
+            SetupState.COMPLETED,
+            SetupState.INVALIDATED,
+        }
+    ),
+    SetupState.PULLBACK: frozenset(
+        {
+            SetupState.CONTINUATION,
+            SetupState.FAKEOUT_RISK,
+            SetupState.COMPLETED,
+            SetupState.INVALIDATED,
+        }
+    ),
+    SetupState.CONTINUATION: frozenset(
+        {SetupState.PULLBACK, SetupState.COMPLETED, SetupState.INVALIDATED}
+    ),
+    SetupState.FAKEOUT_RISK: frozenset(
+        {SetupState.CONFIRMED, SetupState.INVALIDATED}
+    ),
+    SetupState.COMPLETED: frozenset(),
+    SetupState.INVALIDATED: frozenset(),
+}
+
+TERMINAL_SETUP_STATES: frozenset[SetupState] = frozenset(
+    s for s in SetupState if is_terminal(s, SETUP_TRANSITIONS)
+)
+
+
+def assert_setup_transition(current: SetupState, new: SetupState) -> None:
+    """Gate a ``setups`` state change (12, T-6)."""
+    assert_transition(current, new, SETUP_TRANSITIONS, label="setup")

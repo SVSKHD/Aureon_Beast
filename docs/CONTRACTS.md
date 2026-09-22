@@ -31,6 +31,8 @@ test run and production and could never be checked in.
 | `aureon_beast_ops_events` | `{name}[__{scope}]` | `OpsEvent` |
 | `aureon_beast_sessions` | `{market_date}__{session}` | `SessionSummary` |
 | `aureon_beast_settings` | `execution / notifications` | `ExecutionSettings, NotificationSettings` |
+| `aureon_beast_setup_evaluations` | `**not documented — add it to COLLECTION_DOCS**` | `?` |
+| `aureon_beast_setups` | `**not documented — add it to COLLECTION_DOCS**` | `?` |
 | `aureon_beast_symbol_specs` | `{symbol}` | `SymbolInfo` |
 | `aureon_beast_system_state` | `{symbol}_{timeframe}` | `SystemState` |
 | `aureon_beast_trade_notes` | `note_id` | `TradeNote` |
@@ -80,12 +82,12 @@ Outcomes for one detection under one rule (§22).
 | field | type | required | default | notes |
 |---|---|---|---|---|
 | `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
+| `horizons` | `tuple[HorizonResult]` | no | `()` |  |
 | `detection_id` | `str` | yes | — |  |
 | `rule_id` | `str` | yes | — |  |
 | `evaluation_rule_id` | `str \| null` | no | `None` | Alias of rule_id, for review documents (§84). |
 | `reference_price` | `ReferencePrice` | yes | — |  |
 | `reference_value` | `float \| null` | no | `None` | The actual price measured from. |
-| `horizons` | `tuple[HorizonResult]` | no | `()` |  |
 | `context_tags` | `dict[str, bool]` | no | `dict()` | What else the machine had seen at this detection's candle close (§19, §23). Derived ONLY from data available at that close -- see aureon.evaluation.context_tags. Research grouping, never a gate. |
 | `updated_at` | `AwareDatetime \| null` | no | `None` |  |
 
@@ -362,6 +364,16 @@ One trading week, generated after Friday's close (§63).
 | `iso_year` | `int` | yes | — |  |
 | `iso_week` | `int` | yes | — |  |
 | `daily_review_ids` | `tuple[str]` | no | `()` |  |
+| `setups_total` | `int` | no | `0` |  |
+| `setups_by_family` | `dict[str, int]` | no | `dict()` |  |
+| `setups_by_state` | `dict[str, int]` | no | `dict()` |  |
+| `setups_by_direction_context` | `dict[str, int]` | no | `dict()` |  |
+| `setups_confirmed` | `int` | no | `0` |  |
+| `setups_evaluated` | `int` | no | `0` |  |
+| `setups_unresolved` | `int` | no | `0` |  |
+| `setup_reached_by_family` | `dict[str, str]` | no | `dict()` |  |
+| `setup_excursions_by_family` | `dict[str, str]` | no | `dict()` |  |
+| `setups_with_immature_reference` | `int` | no | `0` |  |
 
 ### PriceAlert
 
@@ -399,6 +411,7 @@ One thing Discord said, so it cannot say it twice (9C).
 | `sent_at` | `AwareDatetime \| null` | no | `None` |  |
 | `status` | `NotificationStatus` | no | `'sent'` |  |
 | `failure_message` | `str \| null` | no | `None` |  |
+| `message_id` | `str \| null` | no | `None` |  |
 
 ### Assessment
 

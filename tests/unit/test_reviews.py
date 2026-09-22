@@ -19,17 +19,27 @@ from aureon.models.base import MarketTime, utc_now
 from aureon.models.detection import Detection, SessionContext
 from aureon.models.enums import (
     Direction,
+    DirectionContext,
     ExecutionClassification,
     HorizonStatus,
     LinkType,
     PathClassification,
     ReferencePrice,
     SessionName,
+    SetupAnchorKind,
+    SetupFamily,
+    SetupState,
     Timeframe,
     TradeStatus,
 )
-from aureon.models.evaluation import DetectionEvaluation, HorizonResult
+from aureon.models.evaluation import (
+    DetectionEvaluation,
+    HorizonResult,
+    SetupEvaluation,
+    threshold_key,
+)
 from aureon.models.review import InferredLink
+from aureon.models.setup import Setup, SetupAnchor, SetupReference
 from aureon.models.trade import Trade
 from aureon.reviews.aggregate import (
     PeriodData,
@@ -40,6 +50,7 @@ from aureon.reviews.aggregate import (
 )
 from aureon.reviews.linking import classify, classify_period, infer_links
 from aureon.reviews.periods import day_period
+from aureon.services.assessment_service import default_estimate_horizon
 
 TZ = "Europe/Athens"
 SYMBOL = "XAUUSD"
@@ -949,3 +960,323 @@ def test_the_two_symbols_reviews_are_the_same_shape() -> None:
     silver = daily_for(data, SILVER)
     assert set(gold.model_dump()) == set(silver.model_dump())
     assert (gold.symbol, silver.symbol) == (SYMBOL, SILVER)
+
+
+# ── T-9: the weekly review's setups section ───────────────────────────────────
+
+
+SETUP_HORIZON = default_estimate_horizon(RULE)
+
+
+def a_setup(
+    ident: str,
+    *,
+    family: SetupFamily = SetupFamily.LIQUIDITY_REVERSAL,
+    direction: DirectionContext = DirectionContext.BULLISH,
+    state: SetupState = SetupState.COMPLETED,
+    confirmed: bool = True,
+    minutes: float = 0.0,
+    reference: SetupReference | None = None,
+) -> Setup:
+    at = BASE + timedelta(minutes=minutes)
+    return Setup(
+        setup_id=ident,
+        account_scope="primary",
+        symbol=SYMBOL,
+        timeframe=Timeframe.M5,
+        family=family,
+        direction_context=direction,
+        market_date="2026-09-16",
+        state=state,
+        anchor=SetupAnchor(
+            kind=SetupAnchorKind.LIQUIDITY_LEVEL, price=2412.5, level_type="session_high"
+        ),
+        opened_at=at,
+        confirmed_at=at if confirmed else None,
+        closed_at=at if state in {SetupState.COMPLETED, SetupState.INVALIDATED} else None,
+        reference=reference or SetupReference(),
+    )
+
+
+def a_setup_evaluation(
+    ident: str,
+    *,
+    family: SetupFamily = SetupFamily.LIQUIDITY_REVERSAL,
+    direction: DirectionContext = DirectionContext.BULLISH,
+    mfe: float = 8.0,
+    mae: float = 3.0,
+    favourable_first: bool = True,
+    complete: bool = True,
+) -> SetupEvaluation:
+    threshold = RULE.thresholds[0]
+    reached = {threshold_key(t): (t <= threshold) for t in RULE.thresholds}
+    if complete:
+        horizon = HorizonResult(
+            horizon_id=SETUP_HORIZON,
+            status=HorizonStatus.COMPLETE,
+            future_high=2420.0,
+            future_low=2405.0,
+            mfe=mfe,
+            mae=mae,
+            reached=reached,
+            time_to={k: (600.0 if v else None) for k, v in reached.items()},
+            path=(
+                PathClassification.MFE_FIRST
+                if favourable_first
+                else PathClassification.MAE_FIRST
+            ),
+            candles_seen=5,
+            completed_at=BASE,
+        )
+    else:
+        horizon = HorizonResult(horizon_id=SETUP_HORIZON, status=HorizonStatus.PENDING)
+    return SetupEvaluation(
+        setup_id=ident,
+        rule_id=RULE.rule_id,
+        family=family,
+        direction_context=direction,
+        symbol=SYMBOL,
+        timeframe=Timeframe.M5,
+        market_date="2026-09-16",
+        setup_version="1.0.0",
+        reference_price=RULE.reference_price,
+        reference_value=2412.5,
+        horizons=(horizon,),
+    )
+
+
+def weekly(data: PeriodData) -> object:
+    from aureon.reviews.periods import week_period
+
+    period = week_period(2026, 38, TZ)
+    return build_weekly_review(
+        data,
+        RULE,
+        iso_year=2026,
+        iso_week=38,
+        period_start=period.start,
+        period_end=period.end,
+        market_tz=TZ,
+        infer_window_minutes=30,
+    )
+
+
+def test_a_week_with_no_setups_reports_zero_and_not_an_error() -> None:
+    """A period from before setups existed must build exactly as it did before."""
+    review = weekly(sample_period())
+    assert review.setups_total == 0
+    assert review.setups_by_family == {}
+    assert review.setup_confirmation_rate is None
+
+
+def test_setups_are_counted_by_family_state_and_direction() -> None:
+    review = weekly(
+        PeriodData(
+            setups=[
+                a_setup("s1"),
+                a_setup("s2", family=SetupFamily.TREND_PULLBACK),
+                a_setup(
+                    "s3",
+                    direction=DirectionContext.BEARISH,
+                    state=SetupState.INVALIDATED,
+                    confirmed=False,
+                ),
+            ]
+        )
+    )
+    assert review.setups_total == 3
+    assert review.setups_by_family == {"liquidity_reversal": 2, "trend_pullback": 1}
+    assert review.setups_by_state == {"completed": 2, "invalidated": 1}
+    assert review.setups_by_direction_context == {"bearish": 1, "bullish": 2}
+
+
+def test_a_setup_that_never_confirmed_is_not_counted_as_a_miss() -> None:
+    """It made no claim, so there is nothing for it to have been wrong about. It stays in the
+    opened total and out of every rate."""
+    review = weekly(
+        PeriodData(
+            setups=[a_setup("s1"), a_setup("s2", confirmed=False, state=SetupState.INVALIDATED)],
+            setup_evaluations={"s1": a_setup_evaluation("s1")},
+        )
+    )
+    assert review.setups_total == 2
+    assert review.setups_confirmed == 1
+    assert review.setups_evaluated == 1
+    assert review.setup_confirmation_rate == 0.5
+    assert review.setup_reached_by_family == {"liquidity_reversal": "1/1"}
+
+
+def test_confirmation_is_read_from_confirmed_at_and_not_guessed_from_the_state() -> None:
+    """A setup that confirmed and then invalidated, and one that invalidated from WATCH, both
+    read INVALIDATED. Only the first ever made a claim."""
+    after_confirming = a_setup("s1", state=SetupState.INVALIDATED, confirmed=True)
+    never_confirmed = a_setup("s2", state=SetupState.INVALIDATED, confirmed=False)
+    assert after_confirming.state is never_confirmed.state
+    review = weekly(PeriodData(setups=[after_confirming, never_confirmed]))
+    assert review.setups_confirmed == 1
+
+
+def test_a_pending_only_outcome_is_unresolved_and_not_a_miss() -> None:
+    review = weekly(
+        PeriodData(
+            setups=[a_setup("s1"), a_setup("s2", minutes=10)],
+            setup_evaluations={
+                "s1": a_setup_evaluation("s1"),
+                "s2": a_setup_evaluation("s2", complete=False),
+            },
+        )
+    )
+    assert review.setups_confirmed == 2
+    assert review.setups_evaluated == 1
+    assert review.setups_unresolved == 1
+    assert review.setup_reached_by_family == {"liquidity_reversal": "1/1"}
+
+
+def test_the_reached_count_carries_its_denominator_per_family() -> None:
+    review = weekly(
+        PeriodData(
+            setups=[
+                a_setup("s1"),
+                a_setup("s2", minutes=5),
+                a_setup("s3", minutes=10, family=SetupFamily.BREAKOUT_ACCEPTANCE),
+            ],
+            setup_evaluations={
+                "s1": a_setup_evaluation("s1"),
+                "s2": a_setup_evaluation("s2", favourable_first=False),
+                "s3": a_setup_evaluation(
+                    "s3", family=SetupFamily.BREAKOUT_ACCEPTANCE
+                ),
+            },
+        )
+    )
+    assert review.setup_reached_by_family == {
+        "breakout_acceptance": "1/1",
+        "liquidity_reversal": "1/2",
+    }
+
+
+def test_the_excursions_are_reported_beside_the_reached_count() -> None:
+    """A family that reaches its threshold half the time while giving back twice as much is not
+    the same finding as one that does not."""
+    review = weekly(
+        PeriodData(
+            setups=[a_setup("s1"), a_setup("s2", minutes=5)],
+            setup_evaluations={
+                "s1": a_setup_evaluation("s1", mfe=10.0, mae=2.0),
+                "s2": a_setup_evaluation("s2", mfe=20.0, mae=6.0),
+            },
+        )
+    )
+    line = review.setup_excursions_by_family["liquidity_reversal"]
+    assert "mfe p50=15" in line
+    assert "mae p75=5" in line
+    assert "n=2" in line
+
+
+def test_a_pending_family_appears_in_no_excursion_row_at_all() -> None:
+    review = weekly(
+        PeriodData(
+            setups=[a_setup("s1")],
+            setup_evaluations={"s1": a_setup_evaluation("s1", complete=False)},
+        )
+    )
+    assert review.setup_excursions_by_family == {}
+    assert review.setups_unresolved == 1
+
+
+def test_a_family_with_nothing_measured_says_so_rather_than_reporting_zeros() -> None:
+    """A zero excursion is a measurement; an absent one is not.
+
+    Reachable, and not a hypothetical: a COMPLETE horizon always carries its excursions, so this
+    is the case where a setup's outcomes are complete under a horizon the review is not measuring
+    -- which is what a rule change produces. The row must say "no complete horizons" rather than
+    an authoritative-looking ``mfe p50=0``.
+    """
+    stored = a_setup_evaluation("s1")
+    other_horizon = stored.horizons[0].model_copy(update={"horizon_id": "a_horizon_nobody_asked"})
+    review = weekly(
+        PeriodData(
+            setups=[a_setup("s1")],
+            setup_evaluations={"s1": stored.model_copy(update={"horizons": (other_horizon,)})},
+        )
+    )
+    assert review.setups_evaluated == 1
+    assert review.setup_excursions_by_family == {
+        "liquidity_reversal": "no complete horizons"
+    }
+    # And the reached count is honest about having measured nothing.
+    assert review.setup_reached_by_family == {"liquidity_reversal": "0/0"}
+
+
+def test_an_immature_reference_is_counted_so_a_reader_can_see_it() -> None:
+    """Early on this is every setup, and a reader who cannot see it will read the reference
+    numbers as measurements of the market."""
+    from aureon.models.enums import HistorySource
+
+    review = weekly(
+        PeriodData(
+            setups=[
+                a_setup(
+                    "s1",
+                    reference=SetupReference(
+                        cohort_n=40, history_source=HistorySource.SYNTHETIC, real_days=0
+                    ),
+                ),
+                a_setup(
+                    "s2",
+                    minutes=5,
+                    reference=SetupReference(
+                        cohort_n=40, history_source=HistorySource.REAL, real_days=40
+                    ),
+                ),
+                # An unmeasured block is not an immature one: it is an absence of a measurement.
+                a_setup("s3", minutes=10),
+            ]
+        )
+    )
+    assert review.setups_with_immature_reference == 1
+
+
+def test_the_setups_section_is_stable_under_input_reordering() -> None:
+    """Firestore does not promise an order, so the review must impose one."""
+    # Three FAMILIES, in an order a Counter would otherwise preserve. One family would make the
+    # assertion hold for an unsorted dict too, which is how a stability test becomes decorative.
+    setups = [
+        a_setup("s1", family=SetupFamily.TREND_PULLBACK),
+        a_setup("s2", minutes=5, family=SetupFamily.LIQUIDITY_REVERSAL),
+        a_setup("s3", minutes=10, family=SetupFamily.BREAKOUT_ACCEPTANCE),
+    ]
+    evaluations = {
+        setup.setup_id: a_setup_evaluation(setup.setup_id, family=setup.family)
+        for setup in setups
+    }
+    forward = weekly(PeriodData(setups=list(setups), setup_evaluations=dict(evaluations)))
+    backward = weekly(
+        PeriodData(
+            setups=list(reversed(setups)),
+            setup_evaluations=dict(reversed(list(evaluations.items()))),
+        )
+    )
+    assert forward.model_dump(mode="json") == backward.model_dump(mode="json")
+
+    # Dict equality ignores key order, and a stored document's does not: `model_dump_json`
+    # preserves insertion order, so two runs that agreed on the counts and disagreed on the
+    # order would write different bytes and break "a re-run is byte-identical". The plant that
+    # removed `sorted()` from these Counters survived the equality check above, which is how
+    # this assertion came to exist.
+    for grouping in (
+        forward.setups_by_family,
+        forward.setups_by_state,
+        forward.setups_by_direction_context,
+        forward.setup_reached_by_family,
+        forward.setup_excursions_by_family,
+    ):
+        assert list(grouping) == sorted(grouping), f"{grouping} is not in a stable key order"
+    assert forward.model_dump_json() == backward.model_dump_json()
+
+
+def test_a_daily_review_has_no_setups_section_at_all() -> None:
+    """A setup's sequences do not fit inside a broker day, so a daily section would report a
+    week's structures three times with a different incomplete answer each time."""
+    review = daily()
+    assert not hasattr(review, "setups_total")

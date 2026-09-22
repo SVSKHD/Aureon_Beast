@@ -288,9 +288,13 @@ CATALOGUE: tuple[PhaseEvidence, ...] = (
                 must_contain="live_account_detected",
             ),
             Artefact(
-                label="the frozen spec",
+                # NOT "the frozen spec". That label was here while the file was absent, and
+                # the moment the as-built document landed (12, T-2) it turned the Evidence
+                # cell into a claim the document itself denies in its first paragraph. The
+                # frozen spec is still owed and no artefact in this repository is it.
+                label="ARCHITECTURE.md (as built, not the frozen spec)",
                 path="docs/ARCHITECTURE.md",
-                produced_by="supplied by the operator; see docs/DOCS_CHECK.md",
+                must_contain="never been in this repository",
             ),
         ),
     ),
@@ -302,6 +306,80 @@ CATALOGUE: tuple[PhaseEvidence, ...] = (
                 label="weekend cycle checks",
                 path="tests/failure_injection/test_weekend_cycle.py",
                 link=False,
+            ),
+        ),
+    ),
+    PhaseEvidence(
+        "12 T-1",
+        None,
+        (
+            Artefact(
+                label="launcher",
+                path="main_aureon.py",
+                must_contain="AureonSupervisor",
+            ),
+            Artefact(
+                label="real-subprocess launcher tests",
+                path="tests/unit/test_supervisor.py",
+                must_contain="test_the_children_get_time_to_flush",
+                link=False,
+            ),
+            Artefact(
+                # The gap this row must keep admitting: nothing here has started the five
+                # REAL services together, because main_observer.py needs MetaTrader5.
+                label="a real five-service start",
+                path="evidence/stack_start_*.md",
+                must_contain="STACK STARTED",
+                produced_by="python main_aureon.py on the Windows VPS, with the terminal up",
+            ),
+        ),
+    ),
+    PhaseEvidence(
+        "12 T-2",
+        None,
+        (
+            Artefact(
+                label="ARCHITECTURE.md (as built)",
+                path="docs/ARCHITECTURE.md",
+                # The sentence that keeps it from being read as the frozen spec. If an edit
+                # ever removes it, this artefact stops counting -- which is the right outcome.
+                must_contain="never been in this repository",
+            ),
+            Artefact(
+                label="ownership table",
+                path="aureon/storage/ownership.py",
+                must_contain="def render_table",
+                produced_by="python scripts/gen_architecture.py",
+            ),
+            Artefact(
+                label="the frozen spec",
+                path="docs/FROZEN_SPEC.md",
+                produced_by="supplied by the operator; no artefact in this repository is it",
+            ),
+        ),
+    ),
+    PhaseEvidence(
+        "12 T-3",
+        None,
+        (
+            Artefact(
+                label="credential diagnosis",
+                path="aureon/services/credentials.py",
+                must_contain="def is_permission_error",
+            ),
+            Artefact(
+                label="one test per failure branch",
+                path="tests/unit/test_credentials_diagnosis.py",
+                must_contain="roles/datastore.user",
+                link=False,
+            ),
+            Artefact(
+                # The MT5 rows cannot pass on this OS at all, so the honest cell says the
+                # attach policy is untested against a real terminal.
+                label="a preflight run against a real terminal",
+                path="evidence/preflight_attached_*.md",
+                must_contain="mt5_account",
+                produced_by="python scripts/preflight.py on the Windows VPS, MT5 logged in",
             ),
         ),
     ),

@@ -71,6 +71,17 @@ MIN_COHORT = 30
 #: while still resting on a single day.
 MATURE_REAL_DAYS = 10
 
+#: Quantiles published as target and stop estimates. The pairs are asymmetric on purpose: a
+#: target at the median of what similar detections actually reached, and a stop beyond
+#: three-quarters of what they actually gave back first.
+#:
+#: Here rather than in ``assessment_service`` because two surfaces now publish them -- the
+#: `/monitor` readout and a setup's reference block (T-9) -- and a model validator checks that a
+#: stored block carries these and no others. A constant one layer below both callers is the only
+#: place all three can read the same tuple.
+TP_QUANTILES: tuple[float, ...] = (0.5, 0.25)
+SL_QUANTILES: tuple[float, ...] = (0.75, 0.9)
+
 
 class TrendRead(AureonModel):
     """What the last N closed candles did, as facts rather than as a verdict (9D).

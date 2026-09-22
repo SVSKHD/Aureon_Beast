@@ -258,3 +258,118 @@ def require_tuning(symbol: str, *, point: float | None = None) -> SymbolTuning:
             "the agent versions if you change a value (§12)."
         )
     return tuning_for(symbol, point=point)
+
+
+# ── Setup families (12, T-7) ──────────────────────────────────────────────────
+#
+# A second set of thresholds, in the same file and deliberately NOT in ``SymbolTuning``.
+#
+# The reason is the version scope, not tidiness. Changing a value in ``SymbolTuning`` forks
+# DETECTION ids, because the agent version is a component of one (§12) and the parameters ride
+# in ``agent_params_snapshot``. Changing a value below forks SETUP ids, because ``setup_version``
+# is a component of one (12, T-6). They are different populations with different version numbers,
+# and a single dataclass holding both would make "which version do I bump" a question with no
+# answer visible at the call site.
+#
+# Everything here is as unresearched as the agent thresholds above, and for the same reason: no
+# real session has produced a setup. The distances are in **ATR multiples** rather than in
+# points, which is the one thing that is deliberate — a distance in points is different money per
+# instrument (decision 141) and a distance in ATR is the same *market* distance on both, so
+# silver does not need its own number until somebody measures one.
+
+#: How close price must come to a level before a setup opens, as a multiple of ATR(14).
+#: 0.35 ATR is "within a third of a typical candle's range", which is close enough that the next
+#: candle can reach it. A placeholder.
+DEFAULT_PROXIMITY_ATR = 0.35
+
+#: How far beyond a level a break must close before it counts as a break rather than a wick,
+#: again in ATR. Smaller than the proximity, because this is about the close and that is about
+#: the approach.
+DEFAULT_BREAK_ATR = 0.10
+
+#: Candles without an advancing event before a setup expires. Expiry is recorded as INVALIDATED
+#: with reason ``expired`` (12, T-6), so "nothing happened in time" stays separable from "the
+#: structure broke".
+DEFAULT_EXPIRY_CANDLES = 24
+
+
+@dataclass(frozen=True)
+class SetupTuning:
+    """One family's parameters for one symbol.
+
+    ``version`` is the family's rule version and becomes the setup's ``setup_version``, which is
+    a component of its id. Changing any value here without changing the version leaves the old
+    setups at ids the new rules would never produce, with nothing to distinguish them — the same
+    failure §12 describes for agents, and the reason that field is on this dataclass rather than
+    in a constant somewhere.
+    """
+
+    version: str = "1.0.0"
+    proximity_atr: float = DEFAULT_PROXIMITY_ATR
+    break_atr: float = DEFAULT_BREAK_ATR
+    expiry_candles: int = DEFAULT_EXPIRY_CANDLES
+    #: BREAKOUT_ACCEPTANCE only: closes required beyond the level before it is accepted. Two,
+    #: because one close beyond a level is the definition of the break itself and accepting on it
+    #: would make acceptance and breakout the same event.
+    acceptance_closes: int = 2
+    #: TREND_PULLBACK only: how far price may travel past the slow EMA, against the trend, before
+    #: the trend claim is dead rather than merely tested.
+    ema_break_atr: float = 0.25
+    #: MOMENTUM_TRANSITION only: the EMA pair is "narrowing" below this fraction of ATR.
+    ema_gap_atr: float = 0.5
+
+    def snapshot(self) -> dict[str, str]:
+        """The values, flattened for ``Setup.params_snapshot``.
+
+        Stored on every setup because a setup judged by one set of distances and reviewed
+        against another is not a comparison, and these numbers are not recoverable from config a
+        month later.
+        """
+        return {
+            "version": self.version,
+            "proximity_atr": f"{self.proximity_atr}",
+            "break_atr": f"{self.break_atr}",
+            "expiry_candles": f"{self.expiry_candles}",
+            "acceptance_closes": f"{self.acceptance_closes}",
+            "ema_break_atr": f"{self.ema_break_atr}",
+            "ema_gap_atr": f"{self.ema_gap_atr}",
+        }
+
+
+#: Per-family overrides, then per-symbol overrides within a family. Empty means "reviewed, and
+#: the shipped values are the answer" -- the same statement ``OVERRIDES`` makes above, and a
+#: different one from "nobody has looked".
+#:
+#: Keyed by the family's VALUE rather than by the enum, so this module does not import
+#: ``aureon.models``: config is read by the models' own validators in places, and the cycle would
+#: only appear on an import ordering nobody controls.
+SETUP_OVERRIDES: dict[str, dict[str, object]] = {
+    # A reversal needs longer than the others: the sweep, the reclaim and the confirmation are
+    # three separate candles at minimum, and a retest after that is common.
+    "liquidity_reversal": {"expiry_candles": 30},
+    "breakout_acceptance": {},
+    # A pullback that has not resumed within two hours of M5 is not the pullback that was seen.
+    "trend_pullback": {"expiry_candles": 24},
+    # The slowest to set up: the gap has to narrow, the slope has to turn, and only then does a
+    # cross count.
+    "momentum_transition": {"expiry_candles": 36},
+}
+
+#: Per (family, symbol) overrides, for a value that genuinely differs by instrument. Empty today
+#: and expected to stay empty for a while: the distances are in ATR precisely so that they do
+#: not need a per-symbol number, and adding one before a measurement exists would be inventing a
+#: difference rather than correcting one.
+SETUP_SYMBOL_OVERRIDES: dict[tuple[str, str], dict[str, object]] = {}
+
+
+def setup_tuning(symbol: str, family: str) -> SetupTuning:
+    """The parameters for one family on one symbol.
+
+    Tolerant in the same way ``tuning_for`` is, and for the same reason: reporting tools call it
+    for whatever they are handed. An unknown family gets the shipped values rather than raising,
+    because the families are a closed enum and a name that is not in it cannot reach here through
+    the engine.
+    """
+    values: dict[str, object] = dict(SETUP_OVERRIDES.get(family, {}))
+    values.update(SETUP_SYMBOL_OVERRIDES.get((family, symbol.upper()), {}))
+    return replace(SetupTuning(), **values)
