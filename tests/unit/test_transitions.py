@@ -134,3 +134,56 @@ def test_unknown_status_is_rejected_rather_than_ignored() -> None:
 def test_every_status_appears_in_the_table() -> None:
     """A status absent from the table would raise 'unknown' at runtime."""
     assert set(TRADE_REQUEST_TRANSITIONS) == set(TradeRequestStatus)
+
+
+# ── C-1: RECONCILING ──────────────────────────────────────────────────────────
+
+
+def test_an_uncertain_send_goes_to_reconciling_rather_than_failed() -> None:
+    """C-1, and the reason there is exactly one new status.
+
+    When ``order_send`` raises, times out, or the lease expires while EXECUTING, nobody
+    knows whether an order exists. ``FAILED`` is a CLAIM that none does -- and a failed
+    request invites a resend, which is how one intent becomes two positions. So the
+    uncertain outcome gets its own state, and the answer comes from MT5.
+    """
+    assert_trade_request_transition(S.EXECUTING, S.RECONCILING)
+
+
+def test_reconciling_can_reach_every_real_outcome() -> None:
+    """Reconciliation against MT5 can find a fill, a partial, a resting order -- or fail."""
+    for outcome in (S.FILLED, S.PARTIALLY_FILLED, S.PENDING, S.FAILED_RECONCILIATION):
+        assert_trade_request_transition(S.RECONCILING, outcome)
+
+
+def test_reconciling_can_never_become_a_plain_failure() -> None:
+    """The distinction the whole state exists to keep.
+
+    By this point a send has been ATTEMPTED and its result is unknown. ``FAILED`` asserts
+    that no order exists, which is exactly what nobody knows; ``FAILED_RECONCILIATION`` is
+    the honest terminal for "MT5 could not tell us", and it is terminal precisely so that
+    no automatic path leads from it back to a resend.
+    """
+    with pytest.raises(TransitionError):
+        assert_trade_request_transition(S.RECONCILING, S.FAILED)
+
+
+def test_nothing_enters_reconciling_except_an_attempted_send() -> None:
+    """A request that was never sent has a knowable outcome, so it must not land here.
+
+    ``REQUESTED`` and ``CONFIRMED`` have not reached the broker: if one of those could
+    become RECONCILING, an operator would be asked to reconcile against MT5 for an order
+    that was never placed, and finding nothing would look like a lost fill.
+    """
+    for before in (S.REQUESTED, S.CONFIRMED, S.PENDING, S.PARTIALLY_FILLED):
+        with pytest.raises(TransitionError):
+            assert_trade_request_transition(before, S.RECONCILING)
+
+
+def test_reconciling_is_not_terminal() -> None:
+    """It is a state something is DONE about, not a resting place.
+
+    Derived from the table rather than listed, so this also proves the terminal set stayed
+    correct when the status was added.
+    """
+    assert S.RECONCILING not in TERMINAL_REQUEST_STATUSES

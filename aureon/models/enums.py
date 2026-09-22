@@ -221,6 +221,15 @@ class TradeRequestStatus(StrEnum):
     REQUESTED = "requested"
     CONFIRMED = "confirmed"
     EXECUTING = "executing"
+    #: 13 C-1. The send's result is not known: the call raised, timed out, or the lease
+    #: expired while EXECUTING. The request is NOT failed -- failing it would invite a
+    #: resend and a second position for one intent. It is reconciled against MT5, which is
+    #: broker truth, and only then does it reach a real outcome.
+    #:
+    #: Exactly ONE new status, and it is in this enum rather than in Discord: a state a
+    #: renderer invented would be a state no transition table could check, and
+    #: ``assert_transition`` is the gate every status write passes through (CLAUDE.md).
+    RECONCILING = "reconciling"
     PENDING = "pending"
     PARTIALLY_FILLED = "partially_filled"
     FILLED = "filled"
@@ -568,6 +577,20 @@ TRADE_REQUEST_TRANSITIONS: Mapping[TradeRequestStatus, frozenset[TradeRequestSta
             TradeRequestStatus.PARTIALLY_FILLED,
             TradeRequestStatus.PENDING,
             TradeRequestStatus.FAILED,
+            TradeRequestStatus.FAILED_RECONCILIATION,
+            # C-1. The send's outcome is uncertain, or the lease expired mid-flight.
+            TradeRequestStatus.RECONCILING,
+        }
+    ),
+    # C-1. What reconciliation against MT5 can conclude. FAILED is deliberately NOT here:
+    # by this point a send has been attempted and its result is unknown, and "failed" is a
+    # claim that no order exists -- which is precisely what nobody knows yet.
+    # FAILED_RECONCILIATION is the honest terminal state for "MT5 could not tell us".
+    TradeRequestStatus.RECONCILING: frozenset(
+        {
+            TradeRequestStatus.FILLED,
+            TradeRequestStatus.PARTIALLY_FILLED,
+            TradeRequestStatus.PENDING,
             TradeRequestStatus.FAILED_RECONCILIATION,
         }
     ),

@@ -579,6 +579,9 @@ def test_no_bare_collection_literal_outside_paths() -> None:
         # them, which is exactly why ``test_paths.py`` is already here.
         (REPO_ROOT / "tests" / "unit" / "test_schema_revision.py").resolve(),
         (REPO_ROOT / "tests" / "postgres" / "test_migrations.py").resolve(),
+        # 13 S-3: pins which repositories must audit inside their transaction, by name. A
+        # test whose SUBJECT is a list of names has to spell them, same as the two above.
+        (REPO_ROOT / "tests" / "postgres" / "test_audit_discipline.py").resolve(),
     }
     migrations = (AUREON / "storage" / "postgres" / "migrations").resolve()
     offenders: list[str] = []

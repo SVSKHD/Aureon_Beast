@@ -32,6 +32,14 @@ def migrated(database: Database) -> Iterator[Database]:
     """
     from alembic import command
 
+    # Start from nothing, regardless of what ran before. The repository tests create the
+    # same tables with ``metadata.create_all``, and a session-scoped database is shared, so
+    # a migration run on top of them would fail with "relation already exists" -- a
+    # failure that depends on test ORDER and so appears and disappears between runs.
+    with database.transaction() as connection:
+        Base.metadata.drop_all(connection)
+        connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+
     command.upgrade(schema.alembic_config(database.url), "head")
     yield database
     with database.transaction() as connection:

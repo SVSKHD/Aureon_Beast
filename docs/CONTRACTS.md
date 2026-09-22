@@ -1102,6 +1102,7 @@ Lifecycle of a human-initiated trade request (§25).
 | `REQUESTED` | `requested` |
 | `CONFIRMED` | `confirmed` |
 | `EXECUTING` | `executing` |
+| `RECONCILING` | `reconciling` |
 | `PENDING` | `pending` |
 | `PARTIALLY_FILLED` | `partially_filled` |
 | `FILLED` | `filled` |
@@ -1297,7 +1298,8 @@ Every status write goes through `aureon.models.enums.assert_transition`
 |---|---|
 | `requested` | `cancelled`, `confirmed`, `expired` |
 | `confirmed` | `cancelled`, `executing`, `failed`, `failed_stale` |
-| `executing` | `failed`, `failed_reconciliation`, `filled`, `partially_filled`, `pending` |
+| `executing` | `failed`, `failed_reconciliation`, `filled`, `partially_filled`, `pending`, `reconciling` |
+| `reconciling` | `failed_reconciliation`, `filled`, `partially_filled`, `pending` |
 | `pending` | `cancelled`, `expired`, `failed_reconciliation`, `filled`, `partially_filled` |
 | `partially_filled` | `cancelled`, `expired`, `failed_reconciliation`, `filled`, `partially_filled` |
 | `filled` | _terminal_ |
