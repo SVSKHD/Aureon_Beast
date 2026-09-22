@@ -89,6 +89,7 @@ class Preflight:
         drift_tolerance_seconds: float = DEFAULT_DRIFT_TOLERANCE_SECONDS,
         archive_dir: Path | None = None,
         outbox_path: Path | None = None,
+        database_factory: Any | None = None,
     ) -> None:
         self.config = config
         self.now = now
@@ -100,6 +101,7 @@ class Preflight:
         self.outbox_path = outbox_path or Path(config.outbox_path)
         self._provider_factory = provider_factory or self._default_provider
         self._client_factory = client_factory or self._default_client
+        self._database_factory = database_factory or self._default_database
         self._provider: Any | None = None
         self._client: Any | None = None
 
@@ -115,6 +117,17 @@ class Preflight:
             server=self.config.mt5_server,
             terminal_path=self.config.mt5_terminal_path,
         )
+
+    def _default_database(self) -> Any:
+        """A ``Database`` from ``AUREON_DATABASE_URL``.
+
+        Constructed lazily and never connected here: building one cannot fail, so a broken
+        URL is REPORTED by the migrations row rather than crashing the preflight that
+        exists to report it.
+        """
+        from aureon.storage.postgres.database import Database, database_url
+
+        return Database(database_url())
 
     def _default_client(self) -> Any:
         from aureon.storage.firebase_service import get_client
@@ -136,6 +149,7 @@ class Preflight:
             self.check_archive_dir,
             self.check_credentials,
             self.check_firestore,
+            self.check_migrations,
             self.check_trading_enabled,
             self.check_mt5_init,
             self.check_mt5_account,
@@ -417,6 +431,84 @@ class Preflight:
             f"{paths.heartbeat_path(PREFLIGHT_SERVICE)} round trip "
             f"({elapsed_ms:.0f} ms)",
         )
+
+    def check_migrations(self) -> CheckResult:
+        """Is this database's schema the one THIS build was written against? (plan §6, §35)
+
+        SKIPs while the storage backend is still Firestore, because there is no PostgreSQL
+        to have a schema yet -- S-4 is the commit that switches over, and a row that FAILED
+        before then would be a preflight that fails on a correctly-configured system.
+
+        When it does run it FAILS in BOTH directions, which is C-7 and is the whole point:
+
+        * **behind** -- somebody deployed without migrating. A query will hit a missing
+          column. Remedy: run the migration.
+        * **ahead** -- an OLDER build has started against a schema a NEWER one wrote. This
+          is the dangerous one, and the one a ``>=`` check misses. The build reads the
+          tables it knows, writes the columns it knows, and leaves every column added since
+          silently NULL. On ``trade_requests`` that is a broker ticket or a failure code
+          that never gets recorded, in a run that reports success. Remedy: run the right
+          build -- migrating again would do nothing and look like a fix.
+        * **drifted** -- the revision matches and the TABLES do not, because a model was
+          changed without generating a migration or a migration was hand-edited. Everything
+          looks healthy until a query mentions the column that is not there.
+        """
+        from aureon.storage.backend import is_postgres
+        from aureon.storage.postgres import schema
+
+        if not is_postgres():
+            return CheckResult(
+                "migrations",
+                Status.SKIP,
+                "storage backend is not postgres; no schema to check yet",
+            )
+
+        try:
+            database = self._database_factory()
+        except Exception as exc:  # noqa: BLE001 - a bad URL is a report, not a crash
+            return CheckResult(
+                "migrations",
+                Status.FAIL,
+                str(exc),
+                remedy="set AUREON_DATABASE_URL (see .env.example)",
+            )
+
+        try:
+            state = schema.compare(database)
+            if state.status is schema.SchemaStatus.UNKNOWN:
+                return CheckResult(
+                    "migrations",
+                    Status.FAIL,
+                    state.render(),
+                    remedy="start the PostgreSQL service, then re-run preflight",
+                )
+            if state.status is schema.SchemaStatus.AHEAD:
+                return CheckResult(
+                    "migrations",
+                    Status.FAIL,
+                    state.render(),
+                    remedy="run the build that matches the schema; do NOT migrate again",
+                )
+            if not state.ok:
+                return CheckResult(
+                    "migrations",
+                    Status.FAIL,
+                    state.render(),
+                    remedy="python scripts/migrate.py upgrade",
+                )
+
+            differences = schema.drift(database)
+            if differences:
+                return CheckResult(
+                    "migrations",
+                    Status.FAIL,
+                    f"{state.render()}, but the tables do not match the models: "
+                    + "; ".join(differences),
+                    remedy="python -m alembic revision --autogenerate, then migrate",
+                )
+            return CheckResult("migrations", Status.PASS, state.render())
+        finally:
+            database.dispose()
 
     def check_trading_enabled(self) -> CheckResult:
         """Printed, never judged (§56).

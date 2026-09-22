@@ -75,6 +75,20 @@ class UtcTimestamp(TypeDecorator):
     def process_bind_param(self, value: datetime | None, dialect: Any) -> datetime | None:
         if value is None:
             return None
+        if not isinstance(value, datetime):
+            # An ISO STRING, most likely -- the outbox stores JSON payloads and a repository
+            # that passed one straight through would otherwise get
+            # ``AttributeError: 'str' object has no attribute 'tzinfo'`` from inside
+            # SQLAlchemy's bind processing, which names neither the column nor the cause.
+            #
+            # Refused rather than parsed: an ISO string without an offset is exactly the
+            # naive value the rest of this class exists to reject, and accepting the ones
+            # that happen to carry an offset would make the guard depend on how the caller
+            # happened to serialise (decision 345).
+            raise NaiveTimestamp(
+                f"expected a tz-aware datetime, got {type(value).__name__} {value!r}. "
+                "Parse it first; a string cannot be checked for a timezone."
+            )
         if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
             raise NaiveTimestamp(
                 f"refusing to store the naive timestamp {value!r}. Every Aureon timestamp "

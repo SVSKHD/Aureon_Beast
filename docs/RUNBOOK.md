@@ -117,6 +117,57 @@ instead and it creates `aureon_test` at the start of the session and drops it at
 
 The role needs `CREATEDB` and nothing more.
 
+### Applying the schema
+
+The tables come from one Alembic revision, `0001_initial`, generated from
+`aureon/storage/postgres/tables.py`. Three commands, and a deployment should run the third
+before starting anything:
+
+    python scripts/migrate.py upgrade    # bring the database to the head revision
+    python scripts/migrate.py current    # what it is at, and what this build wants
+    python scripts/migrate.py check      # exit non-zero unless they agree AND match the models
+
+`check` exits **0** when the schema is current, **1** when it is wrong, and **2** when the
+database could not be reached — three outcomes because the remedies differ, and a deploy
+script that treated a stopped database as a schema problem would try to migrate it.
+
+It fails in **both** directions, which is the part worth understanding:
+
+- **behind** — somebody deployed without migrating. A query will hit a missing column.
+  Run the migration.
+- **ahead** — an *older* build has started against a schema a newer one wrote. It reads the
+  tables it knows, writes the columns it knows, and leaves every column added since
+  silently NULL. On `trade_requests` that is a broker ticket or a failure code that never
+  gets recorded, in a run that reports success. **Do not migrate again** — it would do
+  nothing and look like a fix. Run the build that matches the schema.
+- **drifted** — the revision matches and the tables do not, because a model changed without
+  a migration or a migration was hand-edited. Everything looks healthy until a query
+  mentions the column that is not there.
+
+**There is no `alembic downgrade`.** `0001_initial` raises instead. Dropping
+`trade_requests`, `trades`, `audit_logs` and `control_requests` would not be a rollback —
+it would be indistinguishable from the trades never having happened, while MT5 still held
+the positions.
+
+To tear down a **development** database, drop it by name — `DROP DATABASE aureon_test`.
+Naming it out loud is the point: `alembic downgrade` does not, which is exactly why it is
+the wrong tool here.
+
+A **real** database is not torn down. It is restored from a backup, and the backup and
+restore tooling does not exist yet — it arrives with C-3 in S-6, together with the
+`backup_age` preflight row and a tested restore drill. Until then there is no supported way
+to roll a real Aureon database back, which is the honest position: nothing has written to
+one, because no service reads PostgreSQL until S-4.
+
+After changing a model, regenerate both the migration and the contract:
+
+    python -m alembic revision --autogenerate -m "what changed"
+    python scripts/gen_contracts.py
+
+`python scripts/gen_contracts.py --check` fails when `docs/CONTRACTS.md` is stale, and the
+tables section is generated from the models, so a table added without regenerating is
+caught rather than silently undocumented.
+
 ### The name is the safety rule
 
 `AUREON_DATABASE_URL` for a test run must name a database called **`aureon_test`**. Anything

@@ -36,6 +36,9 @@ from aureon.config.sessions import (  # noqa: E402
     SESSION_WINDOWS,
 )
 from aureon.storage import paths  # noqa: E402
+from aureon.storage.postgres import tables as pg_tables  # noqa: E402,F401
+from aureon.storage.postgres.models import Base  # noqa: E402
+from aureon.storage.postgres.schema import EXPECTED_REVISION  # noqa: E402
 
 OUTPUT = REPO_ROOT / "docs" / "CONTRACTS.md"
 
@@ -239,6 +242,89 @@ def as_default_prefix(text: str) -> str:
     return text.replace(f"{paths.PREFIX}_", f"{paths.DEFAULT_COLLECTION_PREFIX}_")
 
 
+def _column_type(column: object) -> str:
+    """The column's SQL type as PostgreSQL will spell it.
+
+    Compiled against the PostgreSQL dialect rather than printed with ``str()``, because a
+    ``JSONB`` column renders as ``JSONB`` on PostgreSQL and as something else generically --
+    and this document is about the database Aureon actually runs on.
+    """
+    from sqlalchemy.dialects import postgresql
+
+    try:
+        return column.type.compile(dialect=postgresql.dialect())  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - a type we cannot compile still has a name
+        return type(column.type).__name__.upper()  # type: ignore[attr-defined]
+
+
+def _table_rows(table: object) -> list[str]:
+    """One row per column: name, type, null, and what makes it a column rather than JSONB."""
+    lines = ["| column | type | null |", "|---|---|---|"]
+    for column in table.columns:  # type: ignore[attr-defined]
+        null = "yes" if column.nullable else "no"
+        mark = " **(pk)**" if column.primary_key else ""
+        lines.append(f"| `{column.name}`{mark} | `{_column_type(column)}` | {null} |")
+    return lines
+
+
+def _tables_section() -> list[str]:
+    """The schema, generated from ``Base.metadata`` (C-5).
+
+    Generated rather than hand-maintained for the reason the collections registry was made
+    generated in 11A F-10: a hand-kept list drifts, and the drift is invisible -- nothing
+    fails, the missing table simply is not documented. ``--check`` fails the build when this
+    file no longer matches the models, so a table added without regenerating is caught.
+    """
+    tables = sorted(Base.metadata.tables.values(), key=lambda t: t.name)
+    lines = [
+        "---",
+        "",
+        "## Tables (local PostgreSQL)",
+        "",
+        "**Generated from `aureon/storage/postgres/tables.py`.** The application truth from",
+        "Phase 13 (plan §2). MT5 remains broker truth, parquet remains the candle archive,",
+        "and the SQLite outbox remains local durability.",
+        "",
+        f"Schema revision **{EXPECTED_REVISION}** (`alembic_version`). `python",
+        "scripts/migrate.py check` FAILS when the database is behind this OR ahead of it:",
+        "an older build against a newer schema writes NULL into every column it does not",
+        "know about, silently (C-7).",
+        "",
+        f"{len(tables)} tables. Column rule (plan §7): relational for anything filtered,",
+        "ordered, identified, claimed or transitioned on; `JSONB` for frozen context read",
+        "back whole. Tick data is never stored here.",
+        "",
+        "| table | columns | indexes |",
+        "|---|---|---|",
+    ]
+    for table in tables:
+        lines.append(f"| `{table.name}` | {len(table.columns)} | {len(table.indexes)} |")
+    lines.append("")
+
+    for table in tables:
+        lines += [f"### `{table.name}`", ""]
+        lines += _table_rows(table)
+        if table.indexes:
+            names = ", ".join(
+                f"`{index.name}`" + (" (unique)" if index.unique else "")
+                for index in sorted(table.indexes, key=lambda i: i.name or "")
+            )
+            lines += ["", f"Indexes: {names}"]
+        # Unique CONSTRAINTS are listed separately from indexes, because they are not the
+        # same thing to SQLAlchemy and only one of them is what makes a write idempotent:
+        # `uq_detection_evaluation` is the reason re-running a rule upserts instead of
+        # adding a second answer for the same (detection, rule).
+        uniques = sorted(
+            constraint.name
+            for constraint in table.constraints
+            if type(constraint).__name__ == "UniqueConstraint" and constraint.name
+        )
+        if uniques:
+            lines += ["", "Unique: " + ", ".join(f"`{name}`" for name in uniques)]
+        lines.append("")
+    return lines
+
+
 def build() -> str:
     lines: list[str] = [
         "# Aureon contracts",
@@ -341,6 +427,7 @@ def build() -> str:
         "comment field (decision 5). Deterministic so an executor that crashed mid-send",
         "re-derives exactly the token it stamped.",
         "",
+        *_tables_section(),
         "---",
         "",
         "## Sessions",
