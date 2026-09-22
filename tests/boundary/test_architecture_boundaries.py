@@ -83,6 +83,10 @@ MT5_PERMITTED = {
     AUREON / "execution" / "mt5_broker.py",
 }
 
+# Phase 13. The SQL machinery, importable only under ``aureon/storage``. Pinned as a literal
+# by its own test below, because the list IS the guard.
+SQL_LIBRARIES = ("sqlalchemy", "psycopg", "psycopg2", "alembic", "asyncpg")
+
 
 def test_discord_never_imports_a_writable_observation_repository() -> None:
     """§71: Discord writes ``trade_requests``, ``settings.trading_enabled`` and ``audit_logs``.
@@ -364,6 +368,56 @@ def test_no_firestore_access_outside_storage() -> None:
         "only aureon/storage may call Firestore's .collection()/.document()/"
         ".transaction(); move the read into a repository method:\n" + "\n".join(offenders)
     )
+
+
+def test_sql_is_imported_only_under_storage() -> None:
+    """Phase 13: the same rule as Firestore's, for the database that replaces it.
+
+    The point of a storage package is that the rest of the system cannot tell what is
+    underneath it. Firestore had that guard from Phase 1 and it held for four phases; a
+    migration is exactly the moment it would be lost, because the easiest way to write any of
+    S-4's service changes is to reach for a ``select()`` where the data is needed.
+
+    So SQLAlchemy, psycopg and Alembic may be imported only under ``aureon/storage``. The
+    consequence is the one that matters: a service cannot express a query, so a query it needs
+    has to become a named repository method -- which is the thing that can be tested for
+    atomicity, indexed, and found again when the schema changes.
+
+    ``scripts/`` is deliberately NOT covered. ``migrate.py`` and ``backup_postgres.py`` are
+    operator tools whose subject IS the database, and an operator tool that had to route a
+    schema check through a repository would be pretending the layering meant something it does
+    not (decision 334).
+    """
+    offenders: list[str] = []
+    for path in sorted(AUREON.rglob("*.py")):
+        if path.is_relative_to(AUREON / "storage"):
+            continue
+        for module in _imported_modules(path):
+            if module.split(".")[0] in SQL_LIBRARIES:
+                offenders.append(f"{path.relative_to(REPO_ROOT)} imports {module}")
+    assert not offenders, (
+        "only aureon/storage may import SQL machinery; a service that needs a query needs a "
+        "repository method:\n" + "\n".join(offenders)
+    )
+
+
+def test_every_sql_library_is_named_in_the_list() -> None:
+    """Pinned as a literal, for the reason ``OBSERVER_SIDE`` is.
+
+    The rule above is a list of package names, and a list is only as good as its last edit. A
+    driver added to ``pyproject.toml`` and not added here would be a hole with no symptom: the
+    guard keeps passing while a service imports it directly. ``asyncpg`` and ``psycopg2`` are
+    in the set although nothing depends on them -- they are the two a future contributor is
+    most likely to reach for, and a guard that only covers what is installed today is a guard
+    that stops working the moment somebody adds a dependency.
+    """
+    assert set(SQL_LIBRARIES) == {
+        "sqlalchemy",
+        "psycopg",
+        "psycopg2",
+        "alembic",
+        "asyncpg",
+    }
 
 
 def test_nothing_reaches_into_a_repositorys_private_client() -> None:
