@@ -19,11 +19,12 @@ mapper would turn that into a silent ``None``.
 from __future__ import annotations
 
 import logging
+import zlib
 from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import Any, TypeVar
 
-from sqlalchemy import Table
+from sqlalchemy import Table, text
 from sqlalchemy.dialects.postgresql import insert
 
 from aureon.models.base import to_utc
@@ -32,6 +33,22 @@ from aureon.storage.postgres.database import Database
 log = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+
+#: The first half of every advisory lock key this package takes, so a lock of ours can never
+#: collide with one taken by something else sharing the database. 0x4155 is "AU".
+ADVISORY_NAMESPACE = 0x4155
+
+
+def advisory_key(name: str) -> int:
+    """A stable ``int4`` for one lock name.
+
+    A pure function of the name rather than a number somebody chose, so a second lock is
+    added by naming it. CRC32 shifted into the signed range, because that is what
+    ``pg_advisory_xact_lock(int4, int4)`` takes; a collision between two of our own names
+    would cost one unnecessary wait, never a missed lock.
+    """
+    return zlib.crc32(name.encode()) - 2**31
 
 
 class RepositoryError(RuntimeError):
@@ -72,6 +89,7 @@ class PostgresRepository:
         *,
         key: Sequence[str] | None = None,
         connection: Any = None,
+        table: Table | None = None,
     ) -> None:
         """``INSERT ... ON CONFLICT (pk) DO UPDATE``. Safe to repeat, byte for byte.
 
@@ -79,9 +97,16 @@ class PostgresRepository:
         already running -- §12's setup write and §15's claim both do several writes that
         must commit together or not at all. Left ``None``, the write gets its own
         transaction.
+
+        ``table`` names a second table the repository owns, for the one case where a
+        repository legitimately owns two: ``ReviewRepository`` writes ``daily_reviews`` and
+        ``weekly_reviews``, which are one concept keyed two ways. Passing the table beats
+        re-deriving the ON CONFLICT clause in the subclass, because a second copy of it is a
+        second thing that can stop being an upsert.
         """
-        columns = [c.name for c in self.table.primary_key.columns] if key is None else list(key)
-        statement = insert(self.table).values(**values)
+        target = self.table if table is None else table
+        columns = [c.name for c in target.primary_key.columns] if key is None else list(key)
+        statement = insert(target).values(**values)
         statement = statement.on_conflict_do_update(
             index_elements=columns,
             set_={name: statement.excluded[name] for name in values if name not in columns},
@@ -106,14 +131,35 @@ class PostgresRepository:
         with self._db.transaction() as own:
             own.execute(statement)
 
+    def _advisory_lock(self, connection: Any, name: str) -> None:
+        """Take a transaction-scoped advisory lock named ``name``.
+
+        For the writes a ROW lock cannot protect, and there are two of them: a settings
+        toggle on a deployment that has no settings row yet, and a per-user alert cap whose
+        count must not miss a row another transaction is inserting. ``SELECT ... FOR
+        UPDATE`` locks the rows it finds; it cannot lock a row that does not exist yet, and
+        under READ COMMITTED a blocked scan does not see the inserts the transaction it
+        waited for made (decision 359). Both were measured, and both let two writers
+        through before this existed.
+
+        Released by the commit or the rollback, so there is no path that leaks one.
+        """
+        connection.execute(
+            text("SELECT pg_advisory_xact_lock(:namespace, :key)"),
+            {"namespace": ADVISORY_NAMESPACE, "key": advisory_key(name)},
+        )
+
     # ── Reading ───────────────────────────────────────────────────────────────
 
-    def _row(self, identifier: str, *, connection: Any = None) -> Any | None:
-        """One row by primary key, or ``None``."""
+    def _row(
+        self, identifier: str, *, connection: Any = None, table: Table | None = None
+    ) -> Any | None:
+        """One row by primary key, or ``None``. ``table`` as in ``_upsert``."""
         from sqlalchemy import select
 
-        column = list(self.table.primary_key.columns)[0]
-        statement = select(self.table).where(column == identifier)
+        target = self.table if table is None else table
+        column = list(target.primary_key.columns)[0]
+        statement = select(target).where(column == identifier)
         if connection is not None:
             return connection.execute(statement).mappings().first()
         with self._db.connect() as own:

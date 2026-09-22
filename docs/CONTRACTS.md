@@ -1401,7 +1401,7 @@ back whole. Tick data is never stored here.
 | `market_days` | 16 | 2 |
 | `notifications` | 10 | 2 |
 | `ops_events` | 10 | 2 |
-| `sessions` | 20 | 1 |
+| `sessions` | 21 | 1 |
 | `settings` | 6 | 0 |
 | `setup_evaluations` | 16 | 1 |
 | `setup_events` | 12 | 1 |
@@ -1643,7 +1643,7 @@ Indexes: `ix_notifications_ref`, `ix_notifications_status`
 | `since` | `TIMESTAMP WITH TIME ZONE` | yes |
 | `updated_at` | `TIMESTAMP WITH TIME ZONE` | yes |
 | `onsets` | `INTEGER` | no |
-| `detail` | `JSONB` | no |
+| `detail` | `VARCHAR` | no |
 
 Indexes: `ix_ops_events_active`, `ix_ops_events_updated`
 
@@ -1659,6 +1659,7 @@ Indexes: `ix_ops_events_active`, `ix_ops_events_updated`
 | `timeframe` | `VARCHAR` | no |
 | `session` | `VARCHAR` | no |
 | `market_date` | `VARCHAR` | no |
+| `timezone` | `VARCHAR` | no |
 | `session_config_version` | `VARCHAR` | no |
 | `started_at` | `TIMESTAMP WITH TIME ZONE` | yes |
 | `ended_at` | `TIMESTAMP WITH TIME ZONE` | yes |

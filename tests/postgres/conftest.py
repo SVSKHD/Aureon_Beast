@@ -72,18 +72,44 @@ def database(postgres_url: str) -> Iterator[Database]:
         instance.dispose()
 
 
+@pytest.fixture(scope="session")
+def built(postgres_url: str) -> Iterator[None]:
+    """Build the tables from the models ONCE, dropping whatever was there first.
+
+    Dropping first is the part that matters, and it was learned the hard way: a database
+    left behind by an earlier run keeps its old columns, and ``create_all`` skips a table
+    that exists rather than altering it. A column changed in ``tables.py`` then tested
+    against the previous shape, and the failure named the value rather than the schema.
+    A test database is disposable, so it is rebuilt rather than trusted.
+
+    Built from ``metadata`` rather than by running the migration, because these tests are
+    about the REPOSITORIES: running alembic would make every one of them also a test of the
+    migration, and a migration failure would look like a repository bug in forty places at
+    once. ``tests/postgres/test_migrations.py`` is where the migration is the subject, and
+    it asserts the two agree.
+    """
+    from aureon.storage.postgres import tables  # noqa: F401  -- registers every table
+
+    instance = Database(postgres_url)
+    try:
+        with instance.transaction() as connection:
+            Base.metadata.drop_all(connection)
+            Base.metadata.create_all(connection)
+        yield
+    finally:
+        instance.dispose()
+
+
 @pytest.fixture
-def schema(database: Database) -> Iterator[Database]:
-    """A database with the tables created and emptied, per test.
+def schema(database: Database, built: None) -> Iterator[Database]:
+    """A database with the tables present and emptied, per test.
 
-    Created with ``metadata.create_all`` rather than by running the migration, because
-    these tests are about the REPOSITORIES: running alembic per test would make every one
-    of them also a test of the migration, and a migration failure would then look like a
-    repository bug in forty places at once. ``tests/postgres/test_migrations.py`` is where
-    the migration is the subject.
+    Emptied by truncating rather than dropping: dropping and recreating 24 tables per test
+    is slow enough to change how often the suite gets run.
 
-    Emptied between tests by truncating rather than dropping: dropping and recreating 24
-    tables per test is slow enough to change how often the suite gets run.
+    ``create_all`` is repeated per test rather than relied upon from ``built`` alone,
+    because ``tests/postgres/test_migrations.py`` drops everything to do its own work and
+    the two fixtures share one database. It is a no-op when the tables are there.
     """
     from sqlalchemy import text
 

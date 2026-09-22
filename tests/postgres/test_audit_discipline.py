@@ -23,6 +23,7 @@ import pytest
 
 from aureon.storage.postgres.repositories import (
     control_requests,
+    operations,
     setups,
     trade_requests,
     trades,
@@ -30,7 +31,8 @@ from aureon.storage.postgres.repositories import (
 
 #: The modules whose writes are audited. Named as a literal for the reason ``OBSERVER_SIDE``
 #: is: a module dropped from this list is a rule switched off with every test still green.
-AUDITED = (trade_requests, control_requests, trades)
+#: ``operations`` is here for one call and it is the important one: §57's kill switch.
+AUDITED = (trade_requests, control_requests, trades, operations)
 
 
 def test_every_audited_module_is_named_in_the_list() -> None:
@@ -44,6 +46,7 @@ def test_every_audited_module_is_named_in_the_list() -> None:
         "trade_requests",
         "control_requests",
         "trades",
+        "operations",
     ]
     assert "audit" not in inspect.getsource(setups), (
         "setups.py grew an audit call; add it to AUDITED and give it a connection"

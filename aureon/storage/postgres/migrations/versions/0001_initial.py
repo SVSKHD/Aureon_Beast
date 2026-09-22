@@ -225,7 +225,7 @@ def upgrade() -> None:
     sa.Column('since', sa.DateTime(timezone=True), nullable=True),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('onsets', sa.Integer(), nullable=False),
-    sa.Column('detail', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('detail', sa.String(), nullable=False),
     sa.PrimaryKeyConstraint('event_id')
     )
     op.create_index('ix_ops_events_active', 'ops_events', ['active', 'name'], unique=False)
@@ -239,6 +239,7 @@ def upgrade() -> None:
     sa.Column('timeframe', sa.String(), nullable=False),
     sa.Column('session', sa.String(), nullable=False),
     sa.Column('market_date', sa.String(), nullable=False),
+    sa.Column('timezone', sa.String(), nullable=False),
     sa.Column('session_config_version', sa.String(), nullable=False),
     sa.Column('started_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('ended_at', sa.DateTime(timezone=True), nullable=True),
