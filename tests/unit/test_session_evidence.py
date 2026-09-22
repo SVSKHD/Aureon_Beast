@@ -28,6 +28,7 @@ from aureon.services.checks import CheckReport, CheckResult, Status
 from aureon.services.session_evidence import (
     AFTER_MARKER,
     NOT_YET_VERIFIED,
+    VERIFIED_MARKER,
     Block,
     SessionDocument,
     SessionMeta,
@@ -38,6 +39,7 @@ from aureon.services.session_evidence import (
     render_closing,
     replace_after,
     split_at_marker,
+    verified_market_dates,
 )
 from aureon.services.session_verifier import (
     HEARTBEAT_TOLERANCE_CANDLES,
@@ -569,3 +571,96 @@ def test_preflight_names_the_symbols_rule_on_its_config_line() -> None:
     silver = Preflight(two_symbol_config(), symbol="XAGUSD", skip_mt5=True)
     assert silver._rule_id() == "XAG_OUTCOME_V1"  # noqa: SLF001
     assert "XAG_OUTCOME_V1" in silver.check_config().detail
+
+
+# ── 12 T-4/T-5: the gate, end to end ──────────────────────────────────────────
+
+
+def write_opening(path: Path) -> Path:
+    """The half a session writes when it STARTS, with the marker and nothing verified."""
+    return SessionDocument(meta=meta()).write(path)
+
+
+def verify_into(path: Path, report: CheckReport, blocks: list[Block]) -> str:
+    """What ``session_verify.py`` writes: the opening half kept, the closing half replaced."""
+    above, _ = split_at_marker(path.read_text(encoding="utf-8"))
+    written = above + render_closing(report, blocks, verified_at=NOW)
+    path.write_text(written, encoding="utf-8")
+    return written
+
+
+def test_one_changed_detection_keeps_the_marker_out_of_the_document(
+    tmp_path, day_candles
+) -> None:
+    """The gate, asserted on the ARTEFACT rather than on a check's status.
+
+    Every other test here asks whether a check FAILed. This one asks the question the gate
+    actually turns on: does the file on disk carry the literal ``SESSION VERIFIED``. A check
+    that failed while the document still carried the marker would be the whole evidence chain
+    broken at its last link -- ``update_phases.py`` greps for that string and nothing else, and
+    ``verified_market_dates`` decides which days "really happened" from it.
+
+    One changed detection, which is exit 1 from the comparison. Not a missing archive, not a
+    dead observer: the subtlest of the failures, and the one a tired operator is most likely to
+    wave through.
+    """
+    write_archive(tmp_path / "archive", day_candles)
+    check = verifier(
+        tmp_path,
+        comparison=Comparison(
+            1, "DIFFERENCES FOUND\n  mismatched 1\n    XAUUSD M5 09:35 ema_cross"
+        ),
+    )
+    report = check.run()
+    assert not report.ok, "a changed detection must fail the report"
+
+    path = write_opening(tmp_path / "session_2026-09-16_XAUUSD.md")
+    written = verify_into(path, report, check.blocks)
+
+    assert "SESSION NOT VERIFIED" in written
+    assert VERIFIED_MARKER not in written.replace("SESSION NOT VERIFIED", ""), (
+        "the document carries the verified marker after a failed verification"
+    )
+    # And the tool that reads the directory must not count the day.
+    assert verified_market_dates("XAUUSD", root=tmp_path) == ()
+
+
+def test_the_marker_lands_only_when_every_check_passed(tmp_path, day_candles) -> None:
+    """The positive half, so the test above is not passing because nothing ever writes it.
+
+    Without this, ``VERIFIED_MARKER not in written`` would hold for a tool that had stopped
+    writing the marker at all, and the evidence column would go permanently and silently red --
+    a failure in the opposite direction and just as invisible.
+    """
+    report = CheckReport(
+        [
+            CheckResult("archive", Status.PASS, "288 candles"),
+            CheckResult("live_vs_replay", Status.PASS, "IDENTICAL (exit 0)"),
+        ]
+    )
+    path = write_opening(tmp_path / "session_2026-09-16_XAUUSD.md")
+    written = verify_into(path, report, [])
+
+    assert VERIFIED_MARKER in written
+    assert "SESSION NOT VERIFIED" not in written
+    assert verified_market_dates("XAUUSD", root=tmp_path) == (MARKET_DATE,)
+
+
+def test_a_skipped_check_is_not_a_verified_session(tmp_path) -> None:
+    """A SKIP does not pass. ``report.ok`` is silent about SKIP by design, so the summary
+    carries the count -- and the marker must not appear beside "(1 checks not run)".
+
+    This is the case where the archive was missing, so there was nothing to compare: the
+    comparison SKIPs, and a reader scanning for a green table would see no FAIL.
+    """
+    report = CheckReport(
+        [
+            CheckResult("archive", Status.FAIL, "no archive for this date"),
+            CheckResult("live_vs_replay", Status.SKIP, "not run: there is no archive"),
+        ]
+    )
+    path = write_opening(tmp_path / "session_2026-09-16_XAUUSD.md")
+    written = verify_into(path, report, [])
+    assert "SESSION NOT VERIFIED" in written
+    assert "checks not run" in written
+    assert verified_market_dates("XAUUSD", root=tmp_path) == ()
