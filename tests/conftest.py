@@ -31,12 +31,21 @@ from aureon.models.base import to_utc
 from aureon.models.enums import Timeframe
 from aureon.models.market import Candle, QuoteSnapshot, SymbolInfo
 from aureon.storage.paths import DEFAULT_COLLECTION_PREFIX, PREFIX
+from tests.postgres_support import guard_configured_url
 
 if PREFIX == DEFAULT_COLLECTION_PREFIX and not os.environ.get("FIRESTORE_EMULATOR_HOST"):
     raise RuntimeError(
         f"AUREON_COLLECTION_PREFIX resolved to {PREFIX!r}, the production default, and "
         "no FIRESTORE_EMULATOR_HOST is set. Refusing to run the suite."
     )
+
+# C-9: the same rule for the PostgreSQL half, and the shape it takes from here on. A
+# prefix was never right for a relational database -- there is nothing to prefix -- so the
+# suite is pinned to a database NAME instead, and a URL pointing at the production
+# database is refused. Runs at conftest import, before any fixture can open a connection;
+# it does not need to precede the imports above, because nothing freezes the URL at import
+# time the way ``paths`` freezes the prefix.
+guard_configured_url()
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_CSV = REPO_ROOT / "aureon" / "data" / "fixtures" / "XAUUSD_M5.csv"

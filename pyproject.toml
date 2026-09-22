@@ -12,6 +12,12 @@ dependencies = [
     "pandas>=2.1",
     # Parquet for the live-candle archive the live-vs-replay comparison reads (§82).
     "pyarrow>=14",
+    # Phase 13. Local PostgreSQL is the application truth (plan §2, §5). Core rather than
+    # an extra: unlike matplotlib or discord.py, every service needs it to start.
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.1",
+    # Removed in S-4, once the last service reads PostgreSQL. Kept until then so the system
+    # runs at every commit in this phase.
     "google-cloud-firestore>=2.14",
     "firebase-admin>=6.4",
     "python-dotenv>=1.0",
@@ -47,6 +53,7 @@ markers = [
     "emulator: requires the Firestore emulator (FIRESTORE_EMULATOR_HOST)",
     "mt5: requires a live MetaTrader5 terminal (Windows only)",
     "boundary: architectural boundary guards that must never be skipped",
+    "postgres: requires a local PostgreSQL server (AUREON_DATABASE_URL or AUREON_TEST_ADMIN_URL)",
 ]
 
 [tool.ruff]

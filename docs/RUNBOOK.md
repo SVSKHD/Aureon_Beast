@@ -91,6 +91,47 @@ MetaTrader5 is **Windows-only** and is imported lazily inside exactly two module
 suite runs anywhere with a fake. Anything that needs a terminal says so by failing the
 `mt5_init` preflight check rather than by crashing somewhere further in.
 
+## A local PostgreSQL for the tests
+
+From Phase 13, PostgreSQL is the application truth. The tests that touch it are in
+`tests/postgres/` and they **skip** when no server is configured, so `make test` still works
+on a machine with no database — the skip message names both variables below. Nothing else in
+the suite needs one.
+
+There are two ways to give it a server, and the suite picks whichever it finds (C-10).
+
+**A server already running, which is what CI does.** Bring up PostgreSQL however you like — a
+service container in the workflow, a local install, whatever the machine has — and export the
+URL:
+
+    export AUREON_DATABASE_URL='postgresql+psycopg://aureon:PASSWORD@127.0.0.1:5432/aureon_test'
+
+The suite uses that database as it finds it and never drops it, because dropping something it
+did not create is how a harness deletes a scratch database somebody was using.
+
+**No container, a local server you can create databases on.** Give the suite an admin URL
+instead and it creates `aureon_test` at the start of the session and drops it at the end:
+
+    sudo -u postgres psql -c "CREATE ROLE aureon LOGIN PASSWORD 'PASSWORD' CREATEDB"
+    export AUREON_TEST_ADMIN_URL='postgresql+psycopg://aureon:PASSWORD@127.0.0.1:5432/postgres'
+
+The role needs `CREATEDB` and nothing more.
+
+### The name is the safety rule
+
+`AUREON_DATABASE_URL` for a test run must name a database called **`aureon_test`**. Anything
+else is refused at conftest import, before a single fixture runs, and a URL naming `aureon`
+is refused by name with its own message (C-9). This replaces the Firestore collection prefix,
+which had nothing to prefix in a relational database. The suite creates, truncates and drops
+tables; pointed at `aureon` it would do that to the only copy of every detection, evaluation
+and trade the system has.
+
+To check a machine is set up without running anything:
+
+    python -c "import sys; sys.path.insert(0, '.'); from tests.postgres_support import resolve_test_url; print(resolve_test_url())"
+
+A `(url, None)` means ready. A `(None, reason)` prints what is missing.
+
 ## Before anything
 
     cp .env.example .env        # then fill it in
