@@ -84,6 +84,32 @@ class NotificationRepository:
             raise
         return record
 
+    def record_message(
+        self, kind: NotificationKind | str, ref_id: str, *, message_id: str
+    ) -> Notification | None:
+        """Remember the Discord message this notification became, so it can be EDITED later.
+
+        A separate write after the post rather than part of the claim, because the message id does
+        not exist until Discord has accepted the message -- and the claim has to happen BEFORE the
+        post or it is not a claim.
+
+        The window between the two is the one 9C already accepted: a process that claimed, posted,
+        and died before this write leaves a card in the channel that will never be edited again.
+        That is visible (the card stops updating) rather than silent, and it is a better failure
+        than the alternative -- claiming after posting, which double-posts under a race.
+
+        A string, never an int: a Discord snowflake exceeds 2^53 and a JSON round trip through a
+        float would corrupt one in a way nobody would notice until an edit hit the wrong message.
+        """
+        ref = self._client.document(paths.notification_path(str(kind), ref_id))
+        snapshot = ref.get()
+        if not getattr(snapshot, "exists", False):
+            return None
+        record = Notification.model_validate(snapshot.to_dict())
+        updated = record.model_copy(update={"message_id": str(message_id)})
+        ref.set(updated.model_dump(mode="json"))
+        return updated
+
     def mark_failed(
         self, kind: NotificationKind | str, ref_id: str, *, message: str
     ) -> None:

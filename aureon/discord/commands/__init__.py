@@ -16,6 +16,7 @@ def register_all(tree: Any, context: BotContext) -> None:
     from aureon.discord.commands.note import register as register_note
     from aureon.discord.commands.ops import register as register_ops
     from aureon.discord.commands.remind import register as register_remind
+    from aureon.discord.commands.setups import register as register_setups
     from aureon.discord.commands.status import register as register_status
     from aureon.discord.commands.trading import register as register_trading
 
@@ -28,3 +29,4 @@ def register_all(tree: Any, context: BotContext) -> None:
     register_monitor(tree, context)
     register_note(tree, context)
     register_ops(tree, context)
+    register_setups(tree, context)

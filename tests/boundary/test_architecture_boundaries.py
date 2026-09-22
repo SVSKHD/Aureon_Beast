@@ -71,6 +71,10 @@ OBSERVER_SIDE = (
     "evaluation",
     "reviews",
     "services",
+    # ``visuals`` joined with T-10. A chart is a picture of observations, and the package that
+    # draws it has no business holding anything that can act on them -- least of all because its
+    # main caller is Discord, which is forbidden the broker outright (§71).
+    "visuals",
 )
 
 # Only these two modules may touch MetaTrader5 at all (CLAUDE.md).
@@ -78,6 +82,129 @@ MT5_PERMITTED = {
     AUREON / "data" / "mt5_provider.py",
     AUREON / "execution" / "mt5_broker.py",
 }
+
+
+def test_discord_never_imports_a_writable_observation_repository() -> None:
+    """§71: Discord writes ``trade_requests``, ``settings.trading_enabled`` and ``audit_logs``.
+
+    ``setups`` and ``market_day_frames`` are the observer's, and the transaction in
+    ``SetupRepository.record`` is safe precisely because one process writes them. So Discord holds
+    READERS (``aureon/storage/setup_reader.py``), and the way that is enforced is structural: the
+    package may not import the writable classes at all.
+
+    An ANNOTATION is not a guard. The first version of this rule was the type hint
+    ``setups: SetupReader | None`` on ``BotContext``, and a plant that widened it to ``Any``
+    survived every test in the suite -- because a dataclass does not check its annotations at
+    runtime and the fixture happened to pass the right object anyway (12, T-11).
+    """
+    # The two collections T-11 introduced a Discord read of, and only those.
+    #
+    # ``DetectionRepository`` is deliberately NOT here, and that is a finding rather than an
+    # omission: ``BotContext`` has imported it since 9C, it can write ``detections``, and by the
+    # same argument it should be a reader too. Adding it here would fail on shipped code, and
+    # fixing that is a change to 9C rather than to this task -- so it is recorded as decision 317
+    # and left for a deliberate follow-up. A guard that quietly grew to cover code nobody had
+    # looked at would be a guard somebody deletes.
+    forbidden = {"SetupRepository", "MarketDayRepository"}
+    offenders: list[str] = []
+    for path in _python_files("discord"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            named = {alias.name for alias in node.names} & forbidden
+            if named:
+                offenders.append(
+                    f"{path.relative_to(REPO_ROOT)}:{node.lineno} imports {sorted(named)}"
+                )
+    assert not offenders, (
+        "Discord may not import a writable observation repository:\n" + "\n".join(offenders)
+    )
+
+
+def test_nothing_gates_on_multi_timeframe_alignment() -> None:
+    """MTF alignment is RECORDED, never acted on (11D, and restated by 12 T-12).
+
+    Whether alignment predicts anything is a question for the evaluation rules, and nobody has
+    answered it. A filter built on the assumption that it does would be a threshold nobody
+    researched -- the failure ``symbol_tuning`` documents at length -- and it would be invisible,
+    because the detections it suppressed would never exist to be counted.
+
+    So: no ``if`` anywhere in the observation or execution path may branch on an alignment value.
+    Reading one to STORE it is fine and is what the observer does; comparing one is not.
+
+    AST rather than a grep, because ``alignment=...`` as a keyword (building a context) and
+    ``if alignment is ALIGNED`` (gating on one) are the same characters and opposite acts.
+
+    What counts as gating is a branch that compares something against a **named member** of
+    ``MtfAlignment``. Two narrowings, both found by running the first version:
+
+    * ``found.mtf_alignment is not wanted.mtf_alignment`` in ``setup_reference`` compares two
+      context summaries to each other. That is cohort SELECTION -- "are these the same shape" --
+      and it decides which past setups a research block is measured over, not whether anything
+      happens. No member is named, so it does not match.
+    * ``if source is HistorySource.MIXED`` in the Discord service is a different enum that
+      happens to share a member name. Requiring the qualifier to be ``MtfAlignment`` (or one of
+      the bare aliases ``mtf`` exports) tells them apart.
+
+    The first version of this test flagged all three, and the third was real: ``TrendPullback``
+    refused to open unless alignment was ALIGNED. That gate is gone.
+    """
+    gated: list[str] = []
+    aliases = {"ALIGNED", "AGAINST", "MIXED"}
+    for path in _python_files(*OBSERVER_SIDE, "execution", "positions", "discord"):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        # The bare aliases only mean an alignment where they were imported from ``mtf``.
+        bare = aliases if "from aureon.engine.mtf import" in source else set()
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.If, ast.IfExp, ast.While)):
+                continue
+            for inner in ast.walk(node.test):
+                named = None
+                if isinstance(inner, ast.Attribute):
+                    qualifier = inner.value
+                    if (
+                        isinstance(qualifier, ast.Name)
+                        and qualifier.id == "MtfAlignment"
+                        and inner.attr in aliases
+                    ):
+                        named = f"MtfAlignment.{inner.attr}"
+                elif isinstance(inner, ast.Name) and inner.id in bare:
+                    named = inner.id
+                if named:
+                    gated.append(
+                        f"{path.relative_to(REPO_ROOT)}:{node.lineno} branches on {named}"
+                    )
+    assert not gated, (
+        "multi-timeframe alignment is recorded, never gated on:\n" + "\n".join(gated)
+    )
+
+
+def test_every_observation_package_is_named_in_the_list() -> None:
+    """Pinned as a literal, because THE LIST IS THE GUARD.
+
+    Every rule below iterates ``OBSERVER_SIDE``. A package quietly dropped from the tuple is not
+    a failing test -- it is a guard switched off, silently, with every test in this file still
+    green. A plant removing ``visuals`` survived every other check here, which is how this test
+    came to exist.
+
+    Adding a package is a one-line change to this literal, made on purpose. Removing one should
+    be the same.
+    """
+    assert set(OBSERVER_SIDE) == {
+        "agents",
+        "engine",
+        "outbox",
+        "data",
+        "evaluation",
+        "reviews",
+        "services",
+        "visuals",
+    }
+    # And every name must be a package that actually exists, or the rule iterates nothing.
+    for package in OBSERVER_SIDE:
+        assert (AUREON / package).is_dir(), f"{package} is not a package under aureon/"
 
 
 def test_observer_side_never_imports_execution() -> None:
@@ -303,16 +430,22 @@ def _innocent_string_nodes(tree: ast.AST) -> set[int]:
     ``client.collection("assessments")`` as well -- the check went quiet on exactly the kind of
     bug it exists to find. Planting that call is what caught it.
 
-    Three positions are innocent, and nothing else:
+    Four positions are innocent, and nothing else:
 
     * a **dict key** -- ``{"trade_notes": ...}`` builds a document, it does not name a
       collection;
     * a **string subscript** -- ``fields["trade_notes"]`` reads one back out of a dict; there
       is no API in this codebase where a collection is reached by indexing;
-    * the **attribute-name argument** of ``getattr``/``setattr``/``hasattr``.
+    * the **attribute-name argument** of ``getattr``/``setattr``/``hasattr``;
+    * a ``name=`` **keyword argument** -- ``@tree.command(name="setups")`` names a Discord
+      slash command (12, T-11). This one was added when `/setups` collided with the ``setups``
+      collection, and it is safe for a structural reason rather than a hopeful one: no Firestore
+      API in this codebase takes its path as ``name=``. ``collection()`` and ``document()`` take
+      it positionally, so a real call cannot hide here.
 
     An argument to ``.collection(...)`` or ``.document(...)`` is never innocent, whatever the
-    string says.
+    string says -- not by a second check, but because a positional call argument is none of the
+    four positions above.
     """
     innocent: set[int] = set()
     for node in ast.walk(tree):
@@ -329,6 +462,13 @@ def _innocent_string_nodes(tree: ast.AST) -> set[int]:
                 second = node.args[1]
                 if isinstance(second, ast.Constant) and isinstance(second.value, str):
                     innocent.add(id(second))
+            for keyword in node.keywords:
+                if keyword.arg != "name":
+                    continue
+                if isinstance(keyword.value, ast.Constant) and isinstance(
+                    keyword.value.value, str
+                ):
+                    innocent.add(id(keyword.value))
     return innocent
 
 

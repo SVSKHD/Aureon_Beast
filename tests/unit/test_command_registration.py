@@ -13,6 +13,8 @@ tree would get to define those rules for itself.
 
 from __future__ import annotations
 
+import pathlib
+
 import discord
 import pytest
 from discord import app_commands
@@ -20,19 +22,29 @@ from discord import app_commands
 from aureon.config import AureonConfig
 from aureon.discord.commands import register_all
 
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
 GOLD = "XAUUSD"
 SILVER = "XAGUSD"
 
-#: Every command a trader is told exists (docs/RUNBOOK.md).
+#: Every command a trader is told exists, spelled as the RUNBOOK spells it (docs/RUNBOOK.md).
+#:
+#: With the slash, so the set holds exactly the strings the document contains -- which is what
+#: makes the cross-check below a real check rather than a second hand-maintained list. It also
+#: keeps `/setups` out of the way of the ``setups`` COLLECTION: the boundary guard on bare
+#: collection literals is deliberately blunt, and "setups" in a set of command names would trip
+#: it for no reason (12, T-11).
 EXPECTED = {
-    "status",
-    "remind",
-    "execute",
-    "execute-trade",
-    "close",
-    "cancel-order",
-    "close-trade",
-    "trading",
+    "/status",
+    "/remind",
+    "/execute",
+    "/execute-trade",
+    "/close",
+    "/cancel-order",
+    "/close-trade",
+    "/trading",
+    "/setups",
+    "/setup",
 }
 
 
@@ -59,8 +71,30 @@ def tree() -> app_commands.CommandTree:
 
 
 def test_every_documented_command_is_registered(tree: app_commands.CommandTree) -> None:
-    names = {command.name for command in tree.get_commands()}
+    names = {f"/{command.name}" for command in tree.get_commands()}
     assert EXPECTED <= names
+
+
+def test_every_documented_command_is_in_the_runbook_table(
+    tree: app_commands.CommandTree,
+) -> None:
+    """``EXPECTED`` claims to be "the commands a trader is told exist". This checks the claim.
+
+    Without it the set is a list somebody maintained by hand, and the subset assertion above
+    passes for a command nobody documented -- which is how `/setups` would have shipped invisible.
+    """
+    runbook = (REPO_ROOT / "docs" / "RUNBOOK.md").read_text(encoding="utf-8")
+    # The ROW, not a mention. A first version searched the whole document for the name, and a
+    # plant that renamed `/setups`' own row survived it -- because the `/setup` row's prose says
+    # "the short prefix `/setups` lists". A command described only inside another command's
+    # sentence is not documented.
+    rows = {
+        line.split("`")[1].split(" ")[0]
+        for line in runbook.splitlines()
+        if line.startswith("| `/")
+    }
+    missing = sorted(name for name in EXPECTED if name not in rows)
+    assert not missing, f"registered with no row of their own in the RUNBOOK: {missing}"
 
 
 def test_the_shortcut_and_the_wizard_both_exist(tree: app_commands.CommandTree) -> None:

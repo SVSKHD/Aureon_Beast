@@ -513,11 +513,15 @@ class TrendPullback(Family):
     def openings(self, inputs: SetupInputs, tuning: SetupTuning) -> list[Opening]:
         if inputs.ema_fast is None or inputs.trend is TrendBias.SIDEWAYS:
             return []
-        if inputs.mtf_alignment is not MtfAlignment.ALIGNED:
-            # An unaligned trend is a trend on one timeframe, which is what this family is
-            # specifically not about. MIXED covers "nobody has a view" too (11D), and opening on
-            # an absence of evidence is how a population fills with setups nothing produced.
-            return []
+        # NOT gated on ``inputs.mtf_alignment``, although an earlier version of this family was
+        # (12, T-12). Multi-timeframe alignment is RECORDED, never acted on: whether it predicts
+        # anything is a question for the evaluation rules and nobody has answered it, and a
+        # filter built on the assumption that it does would be a threshold nobody researched --
+        # invisible, too, because the setups it suppressed would never exist to be counted.
+        #
+        # The alignment rides on ``context_summary`` and is a cohort dimension in the reference
+        # block, so "did aligned trend pullbacks do better?" is answerable from the record. That
+        # is the question the rule preserves; the gate would have destroyed it.
         direction = (
             DirectionContext.BULLISH
             if inputs.trend is TrendBias.BULLISH

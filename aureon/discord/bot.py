@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import io
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
@@ -96,7 +97,7 @@ class AureonBot(discord.Client):
             if context.config.discord_guild_id
             else None
         )
-        self.notifier = Notifier(context, send=self.announce)
+        self.notifier = Notifier(context, send=self.announce, edit=self.revise)
         self._notifier_task: asyncio.Task[None] | None = None
         #: 11B. Optional: a bot without one behaves exactly as it did before, at the awake
         #: cadence all week. Set by ``main_discord`` when there is a heartbeat to slow.
@@ -195,21 +196,52 @@ class AureonBot(discord.Client):
         embed: discord.Embed | None = None,
         view: discord.ui.View | None = None,
         direct: bool = False,
-    ) -> None:
+        chart: bytes | None = None,
+        filename: str | None = None,
+    ) -> str | None:
         """Send one announcement. The notifier's only way out of the process.
 
         ``direct`` sends to a user rather than a channel: a fired alert is one person's
         question, and the channel is readable by more people than armed it.
+
+        Returns the message id as a STRING (12, T-11), so a setup's card can be edited later. A
+        string because a Discord snowflake exceeds 2^53 and a JSON round trip through a float
+        would corrupt one -- which would send a later edit to the wrong message.
         """
+        recipient = await self._recipient(target, direct=direct)
+        message = await recipient.send(embed=embed, view=view, **_attachment(chart, filename))
+        return None if message is None else str(message.id)
+
+    async def revise(
+        self,
+        target: int | str,
+        message_id: str,
+        *,
+        embed: discord.Embed | None = None,
+        view: discord.ui.View | None = None,
+        chart: bytes | None = None,
+        filename: str | None = None,
+    ) -> None:
+        """Edit a message already in the channel (12, T-11).
+
+        Re-fetched by id rather than cached: the bot restarts, and the ``discord.Message`` object
+        from before the restart is gone while the message in the channel is not. The id is stored
+        on the notification document precisely so this can be done from a cold start.
+
+        A missing message -- deleted by a human, or in a channel the bot has lost -- raises, and
+        the caller records the failure without retrying. Re-posting would leave two cards for one
+        setup, which is the thing this whole design exists to avoid.
+        """
+        recipient = await self._recipient(target, direct=False)
+        message = await recipient.fetch_message(int(message_id))
+        await message.edit(
+            embed=embed, view=view, **_attachment(chart, filename, editing=True)
+        )
+
+    async def _recipient(self, target: int | str, *, direct: bool) -> Any:
         if direct:
-            recipient: Any = self.get_user(int(target)) or await self.fetch_user(
-                int(target)
-            )
-        else:
-            recipient = self.get_channel(int(target)) or await self.fetch_channel(
-                int(target)
-            )
-        await recipient.send(embed=embed, view=view)
+            return self.get_user(int(target)) or await self.fetch_user(int(target))
+        return self.get_channel(int(target)) or await self.fetch_channel(int(target))
 
     async def close(self) -> None:
         self.notifier.stop()
@@ -221,3 +253,24 @@ class AureonBot(discord.Client):
 
     async def on_ready(self) -> None:  # pragma: no cover - requires a gateway
         log.info("connected as %s", self.user)
+
+
+def _attachment(
+    chart: bytes | None, filename: str | None, *, editing: bool = False
+) -> dict[str, Any]:
+    """The keyword a chart needs, or nothing at all.
+
+    The two call sites genuinely differ: a send takes ``file`` and an edit takes
+    ``attachments``. Getting that backwards is not a crash -- discord.py accepts ``file`` on an
+    edit and ignores it -- so the words would update while the picture silently stayed the old
+    one, which is a card that looks stale in exactly the way a reader cannot diagnose. Hence the
+    flag, and hence this being one function rather than a keyword spelled out twice.
+
+    On an edit with no chart, ``attachments=[]`` CLEARS whatever was there. That is deliberate: a
+    setup whose chart can no longer be drawn should lose its picture rather than keep one from
+    twenty candles ago.
+    """
+    if not chart or not filename:
+        return {"attachments": []} if editing else {}
+    attachment = discord.File(io.BytesIO(chart), filename=filename)
+    return {"attachments": [attachment]} if editing else {"file": attachment}

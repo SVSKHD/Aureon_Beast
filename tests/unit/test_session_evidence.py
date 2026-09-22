@@ -489,6 +489,9 @@ def test_a_clean_session_verifies(tmp_path, day_candles, stored) -> None:
         "archive",
         "archive_gaps",
         "live_vs_replay",
+        # 12 T-12. Present and SKIPPED here: no MTF runner was wired in, and a session
+        # verified before this check existed is not retroactively unverified.
+        "mtf_replay",
         "detections_stored",
         "outbox_drained",
         "observer_ran_to_the_close",

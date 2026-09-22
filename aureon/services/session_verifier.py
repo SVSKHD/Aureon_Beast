@@ -79,6 +79,11 @@ class SessionVerifier:
     outbox_path: Path | None = None
     client_factory: Callable[[], Any] | None = None
     comparison_runner: Callable[[], Comparison] | None = None
+    #: 12 T-12. The MTF comparison, injected like the one above. ``None`` SKIPs the check
+    #: rather than defaulting to a run: it needs several archived days, and a verifier that
+    #: silently read ten days of history when the caller asked about one would be doing
+    #: something the caller did not ask for and would not see in the output.
+    mtf_runner: Callable[[], Comparison] | None = None
     now: Callable[[], datetime] = utc_now
     blocks: list[Block] = field(default_factory=list)
 
@@ -139,6 +144,7 @@ class SessionVerifier:
             self.check_archive,
             self.check_archive_gaps,
             self.check_live_vs_replay,
+            self.check_mtf_replay,
             self.check_detections_stored,
             self.check_outbox_drained,
             self.check_observer_ran_to_the_close,
@@ -275,6 +281,62 @@ class SessionVerifier:
             "live_vs_replay",
             Status.FAIL,
             f"the comparison could not run (exit {result.exit_code})",
+            remedy="Its output is in the block below; nothing was compared.",
+        )
+
+    def check_mtf_replay(self) -> CheckResult:
+        """The 12 T-12 comparison: does the recorded higher-timeframe context reproduce?
+
+        A SEPARATE check from ``live_vs_replay``, not a widening of it. The detection comparison
+        replays one archived day and deliberately ignores the ``mtf`` block, because a read built
+        from a rolling multi-day buffer cannot be reproduced from one day. This reads several and
+        answers the other question.
+
+        SKIP rather than FAIL when it cannot run. A session verified before this check existed is
+        not retroactively unverified, and an archive that does not reach back far enough is a
+        statement about the archive rather than about the observer -- which is why a shallow
+        window reports "unreadable" in the tool's own output instead of disagreements.
+        """
+        runner = self.mtf_runner
+        if runner is None:
+            return CheckResult(
+                "mtf_replay",
+                Status.SKIP,
+                "not run: no MTF comparison was wired in",
+                remedy=(
+                    "python scripts/compare_live_vs_replay.py "
+                    f"{self.market_date} --mtf, by hand."
+                ),
+            )
+        result = runner()
+        self.blocks.append(
+            Block(
+                title="MTF context vs replay",
+                body=result.output,
+                command=(
+                    f"python scripts/compare_live_vs_replay.py {self.market_date} --mtf"
+                ),
+            )
+        )
+        if result.exit_code == 0:
+            return CheckResult("mtf_replay", Status.PASS, "IDENTICAL (exit 0)")
+        if result.exit_code == 1:
+            return CheckResult(
+                "mtf_replay",
+                Status.FAIL,
+                "the recorded context does not reproduce (exit 1)",
+                remedy=(
+                    "Read the disagreements in the block below. A differing BAR OPEN means the "
+                    "live buffer and the archive disagree about which bar was last closed; "
+                    "differing EMAs with the same bar means something wrote a read the "
+                    "aggregation would not produce. 'unreadable' is neither -- it is buffer "
+                    "depth, so widen --mtf-days."
+                ),
+            )
+        return CheckResult(
+            "mtf_replay",
+            Status.SKIP,
+            f"the MTF comparison could not run (exit {result.exit_code})",
             remedy="Its output is in the block below; nothing was compared.",
         )
 

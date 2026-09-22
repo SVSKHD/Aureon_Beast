@@ -27,13 +27,20 @@ from aureon.models.base import MarketTime
 from aureon.models.detection import Detection, IndicatorSnapshot, SessionContext
 from aureon.models.enums import (
     Direction,
+    DirectionContext,
     NotificationKind,
+    NotificationStatus,
     PriceAlertStatus,
     SessionName,
+    SetupAnchorKind,
+    SetupEventType,
+    SetupFamily,
+    SetupState,
     Timeframe,
 )
 from aureon.models.profile import VolatilityContext, VolumeProfileRef
 from aureon.models.settings import NotificationSettings
+from aureon.models.setup import Setup, SetupAnchor, SetupEvent
 from aureon.storage.alert_repository import PriceAlertRepository
 from aureon.storage.detection_repository import DetectionRepository
 from aureon.storage.notification_repository import NotificationRepository
@@ -41,6 +48,7 @@ from aureon.storage.settings_repository import (
     ExecutionSettingsRepository,
     NotificationSettingsRepository,
 )
+from aureon.storage.setup_reader import MarketDayReader, SetupReader
 from aureon.storage.symbol_repository import SymbolRepository
 from aureon.storage.system_state_repository import (
     HeartbeatRepository,
@@ -134,6 +142,8 @@ def context(firestore) -> BotContext:
         alerts=PriceAlertRepository(firestore),
         notifications=NotificationRepository(firestore),
         notification_settings=NotificationSettingsRepository(firestore),
+        setups=SetupReader(firestore),
+        market_days=MarketDayReader(firestore),
     )
 
 
@@ -534,3 +544,314 @@ def test_the_model_field_is_named_for_what_it_holds() -> None:
     assert "total_tick_volume" in VolumeProfile.model_fields
     assert "total_volume" not in VolumeProfile.model_fields
     assert "total_tick_volume" in ProfileSummary.model_fields
+
+
+# ── 12 T-11: setup cards, one message per setup ───────────────────────────────
+
+
+class CardRecorder:
+    """The injected send and edit for a setup card, with a message id."""
+
+    def __init__(self, *, fail_send: bool = False, fail_edit: bool = False) -> None:
+        self.posts: list[dict] = []
+        self.edits: list[dict] = []
+        self.fail_send = fail_send
+        self.fail_edit = fail_edit
+        self._next = 900_000_000_000_000_001
+
+    async def send(
+        self, target, *, embed=None, view=None, direct: bool = False, chart=None, filename=None
+    ):
+        if self.fail_send:
+            raise RuntimeError("403 forbidden")
+        self._next += 1
+        self.posts.append(
+            {"target": target, "embed": embed, "view": view, "filename": filename}
+        )
+        return str(self._next)
+
+    async def edit(
+        self, target, message_id, *, embed=None, view=None, chart=None, filename=None
+    ):
+        if self.fail_edit:
+            raise RuntimeError("404 unknown message")
+        self.edits.append({"target": target, "message_id": message_id, "embed": embed})
+
+
+def a_setup(
+    *,
+    ident: str = "s" * 32,
+    state: SetupState = SetupState.WATCH,
+    direction: DirectionContext = DirectionContext.BULLISH,
+    minutes_ago: float = 0.5,
+    last_event_id: str | None = None,
+    closed: bool = False,
+) -> Setup:
+    moment = NOW - timedelta(minutes=minutes_ago)
+    return Setup(
+        setup_id=ident,
+        account_scope="primary",
+        symbol=SYMBOL,
+        timeframe=Timeframe.M5,
+        family=SetupFamily.LIQUIDITY_REVERSAL,
+        direction_context=direction,
+        market_date="2026-09-16",
+        state=state,
+        anchor=SetupAnchor(
+            kind=SetupAnchorKind.LIQUIDITY_LEVEL, price=2412.5, level_type="session_high"
+        ),
+        invalidation_price=2410.0,
+        opened_at=moment,
+        updated_at=moment,
+        closed_at=moment if closed else None,
+        last_event_id=last_event_id,
+        event_count=1,
+    )
+
+
+def store_setup(firestore, setup: Setup) -> Setup:
+    """Write a setup directly, as the observer would. The notifier only reads."""
+    from aureon.storage import paths
+
+    firestore.document(paths.setup_path(setup.setup_id)).set(setup.model_dump(mode="json"))
+    return setup
+
+
+def store_setup_event(firestore, setup: Setup, event: SetupEvent) -> SetupEvent:
+    from aureon.storage import paths
+
+    firestore.document(paths.setup_event_path(setup.setup_id, event.event_id)).set(
+        event.model_dump(mode="json")
+    )
+    return event
+
+
+def a_watch_event(setup: Setup, event_type: SetupEventType) -> SetupEvent:
+    """A descriptive event: from_state == to_state, so it changes nothing."""
+    return SetupEvent(
+        event_id=f"ev-{event_type.value}",
+        setup_id=setup.setup_id,
+        event_type=event_type,
+        from_state=setup.state,
+        to_state=setup.state,
+        market_time=MarketTime.from_utc(NOW, TZ),
+    )
+
+
+def card_notifier(context: BotContext, recorder: CardRecorder) -> Notifier:
+    return Notifier(
+        context,
+        send=recorder.send,
+        edit=recorder.edit,
+        channel_id=CHANNEL,
+        charts=False,
+    )
+
+
+def test_the_first_announced_change_posts_and_the_next_edits(
+    context: BotContext, firestore
+) -> None:
+    """One message for the life of a setup. Seven messages for a setup that walked seven states
+    is a channel nobody reads and a scroll a human has to reassemble."""
+    recorder = CardRecorder()
+    notifier = card_notifier(context, recorder)
+    setup = store_setup(firestore, a_setup(state=SetupState.WATCH))
+
+    assert sweep(notifier).setups == [setup.setup_id]
+    assert len(recorder.posts) == 1 and not recorder.edits
+
+    store_setup(firestore, a_setup(state=SetupState.DEVELOPING))
+    assert sweep(notifier).setups == [setup.setup_id]
+    assert len(recorder.posts) == 1, "a transition posted a second card"
+    assert len(recorder.edits) == 1
+    stored = context.notifications.get(NotificationKind.SETUP, setup.setup_id)
+    assert recorder.edits[0]["message_id"] == stored.message_id
+
+
+def test_the_message_id_is_stored_so_a_restart_keeps_editing(
+    context: BotContext, firestore
+) -> None:
+    """The id lives on the notification document, not on the setup: Discord does not own
+    ``setups`` (§71), and "what have we already said" is what notifications are for."""
+    first = CardRecorder()
+    setup = store_setup(firestore, a_setup(state=SetupState.WATCH))
+    sweep(card_notifier(context, first))
+    posted_id = first.posts[0] and context.notifications.get(
+        NotificationKind.SETUP, setup.setup_id
+    ).message_id
+    assert posted_id
+
+    # A brand-new notifier, as a restarted process would build.
+    second = CardRecorder()
+    store_setup(firestore, a_setup(state=SetupState.CONFIRMED))
+    sweep(card_notifier(context, second))
+    assert not second.posts, "a restart posted a second card"
+    assert [edit["message_id"] for edit in second.edits] == [posted_id]
+
+
+def test_a_state_not_in_the_settings_is_not_announced(
+    context: BotContext, firestore
+) -> None:
+    context.notification_settings.write(
+        NotificationSettings(setup_states=("confirmed",))
+    )
+    recorder = CardRecorder()
+    store_setup(firestore, a_setup(state=SetupState.WATCH))
+    assert sweep(card_notifier(context, recorder)).setups == []
+    assert not recorder.posts
+
+
+def test_setups_can_be_silenced_entirely(context: BotContext, firestore) -> None:
+    context.notification_settings.write(
+        NotificationSettings(setups_enabled=False)
+    )
+    recorder = CardRecorder()
+    store_setup(firestore, a_setup(state=SetupState.CONFIRMED))
+    assert sweep(card_notifier(context, recorder)).setups == []
+
+
+def test_a_descriptive_event_is_judged_by_its_own_type(
+    context: BotContext, firestore
+) -> None:
+    """A WATCH_* event leaves the state alone, so judging it by the state would announce it under
+    whatever the setup already was -- and a reader could not switch one off without the other."""
+    context.notification_settings.write(
+        # Nothing but the one quiet event: the state itself is NOT subscribed.
+        NotificationSettings(setup_states=("proximity_poc",))
+    )
+    setup = a_setup(state=SetupState.WATCH, last_event_id="ev-proximity_poc")
+    store_setup(firestore, setup)
+    store_setup_event(firestore, setup, a_watch_event(setup, SetupEventType.PROXIMITY_POC))
+
+    recorder = CardRecorder()
+    assert sweep(card_notifier(context, recorder)).setups == [setup.setup_id]
+
+
+def test_a_quiet_event_is_off_by_default(context: BotContext, firestore) -> None:
+    setup = a_setup(state=SetupState.WATCH, last_event_id="ev-proximity_poc")
+    store_setup(firestore, setup)
+    store_setup_event(firestore, setup, a_watch_event(setup, SetupEventType.PROXIMITY_POC))
+    # WATCH is subscribed by default, but the TRIGGER here is the event, which is not.
+    recorder = CardRecorder()
+    assert sweep(card_notifier(context, recorder)).setups == []
+
+
+def test_a_terminal_setup_still_gets_its_last_card(
+    context: BotContext, firestore
+) -> None:
+    """COMPLETED and INVALIDATED are the two transitions a reader most wants told about, and
+    ``open_setups`` excludes exactly those -- a notifier built on it would fall silent at the
+    moment the story ended."""
+    recorder = CardRecorder()
+    store_setup(firestore, a_setup(state=SetupState.WATCH))
+    sweep(card_notifier(context, recorder))
+    store_setup(firestore, a_setup(state=SetupState.INVALIDATED, closed=True))
+    assert sweep(card_notifier(context, recorder)).setups
+    assert recorder.edits
+
+
+def test_a_failed_post_is_recorded_and_never_retried(
+    context: BotContext, firestore
+) -> None:
+    """The claim-before-post tradeoff, stated as a test. A claim that succeeded and then failed
+    to post is not retried -- retrying a post whose outcome is unknown double-posts the one
+    message a human presses a button on. The card never appears; the FAILED row is the signal."""
+    store_setup(firestore, a_setup(state=SetupState.WATCH))
+    broken = CardRecorder(fail_send=True)
+    assert sweep(card_notifier(context, broken)).setups == []
+
+    record = context.notifications.get(NotificationKind.SETUP, "s" * 32)
+    assert record is not None and record.status is NotificationStatus.FAILED
+    assert record.message_id is None
+
+    # And a later sweep with a working send does NOT post: the claim is spent.
+    working = CardRecorder()
+    store_setup(firestore, a_setup(state=SetupState.CONFIRMED))
+    assert sweep(card_notifier(context, working)).setups == []
+    assert not working.posts and not working.edits
+
+
+def test_a_failed_edit_is_recorded_and_the_card_is_not_reposted(
+    context: BotContext, firestore
+) -> None:
+    recorder = CardRecorder()
+    store_setup(firestore, a_setup(state=SetupState.WATCH))
+    sweep(card_notifier(context, recorder))
+
+    broken = CardRecorder(fail_edit=True)
+    broken._next = 0  # so a post would be obvious
+    store_setup(firestore, a_setup(state=SetupState.CONFIRMED))
+    assert sweep(card_notifier(context, broken)).setups == []
+    assert not broken.posts, "a failed edit reposted the card"
+    record = context.notifications.get(NotificationKind.SETUP, "s" * 32)
+    assert record.status is NotificationStatus.FAILED
+
+
+def test_the_card_offers_a_side_for_a_directional_setup(
+    context: BotContext, firestore
+) -> None:
+    """BULLISH prefills BUY, as decided. The mapping is a table in the notifier, not an ``if``
+    buried in a handler, precisely because it is the one place a description becomes an action."""
+    from aureon.discord.notifier import side_for
+
+    assert side_for(a_setup(direction=DirectionContext.BULLISH)) == "buy"
+    assert side_for(a_setup(direction=DirectionContext.BEARISH)) == "sell"
+    assert side_for(a_setup(direction=DirectionContext.NEUTRAL)) is None
+
+
+def test_a_neutral_setup_has_no_execute_button(context: BotContext, firestore) -> None:
+    """A MOMENTUM_TRANSITION that confirmed without resolving its direction has no side to
+    offer, and inventing one is the guess this whole design refuses."""
+    from aureon.discord.views.setup_view import SetupView
+
+    directional = SetupView(context, symbol=SYMBOL, setup_id="x", side="buy")
+    neutral = SetupView(context, symbol=SYMBOL, setup_id="x", side=None)
+    labels = lambda view: {item.label for item in view.children}  # noqa: E731
+    assert "Execute" in labels(directional)
+    assert "Execute" not in labels(neutral)
+    assert "Monitor" in labels(neutral)
+
+
+def test_a_setup_outside_the_window_is_not_announced(
+    context: BotContext, firestore
+) -> None:
+    """The window is what stops a restart re-announcing yesterday."""
+    recorder = CardRecorder()
+    store_setup(firestore, a_setup(state=SetupState.WATCH, minutes_ago=600))
+    assert sweep(card_notifier(context, recorder)).setups == []
+
+
+def test_a_notifier_without_an_editor_says_so_rather_than_failing_silently(
+    context: BotContext, firestore
+) -> None:
+    recorder = CardRecorder()
+    posting_only = Notifier(
+        context, send=recorder.send, channel_id=CHANNEL, charts=False
+    )
+    store_setup(firestore, a_setup(state=SetupState.WATCH))
+    assert sweep(posting_only).setups  # the first card posts
+
+    store_setup(firestore, a_setup(state=SetupState.CONFIRMED))
+    assert sweep(posting_only).setups == []
+    assert not recorder.edits
+
+    # And the notification is NOT marked FAILED. A missing editor is a CONFIGURATION error, not
+    # a send that went wrong: recording FAILED would tell the operator that Discord rejected the
+    # message, send them looking at permissions, and leave the real cause -- a notifier built
+    # without an editor -- unexamined. A plant that removed the guard survived an assertion that
+    # only checked "nothing was edited", because calling None also raises and lands in the
+    # generic handler.
+    record = context.notifications.get(NotificationKind.SETUP, "s" * 32)
+    assert record.status is NotificationStatus.SENT, (
+        "a missing editor was recorded as a failed send"
+    )
+
+
+def test_the_notifier_never_writes_a_setup(context: BotContext, firestore) -> None:
+    """§71: ``setups`` is the observer's. The context holds a READER, which has no write method
+    to call even by mistake."""
+    from aureon.storage.setup_reader import SetupReader
+
+    assert isinstance(context.setups, SetupReader)
+    for forbidden in ("open", "record", "set", "create", "update", "delete"):
+        assert not hasattr(context.setups, forbidden), forbidden

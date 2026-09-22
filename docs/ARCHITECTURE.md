@@ -429,11 +429,17 @@ nothing measures, silently changing the meaning of every hit rate computed over 
 Each observation names the families it is relevant to, and one about a level carries the level's
 price so it attaches only to setups anchored in the same bin the id uses.
 
-The vocabulary is policed: `absorption`, `footprint` and `order flow` appear nowhere in the
-models, the embeds or the docs, and `delta` is banned in its market sense (`volume delta`,
-`cumulative delta`, …) but not as arithmetic. Volume is always `tick_volume` — MT5 reports the
-number of price *changes* in a bar, and calling it anything else would be a claim this system
-cannot support.
+The vocabulary is policed. Three words for things this system cannot observe are banned outright
+across every module and document, and one more is banned in its market sense but not as
+arithmetic — a first difference is a legitimate thing to compute and a name for order-book
+aggression is not. The words themselves are listed once, in the test that enforces the ban
+(`tests/unit/test_watch_events.py`) and in decision 280; **this document deliberately does not
+repeat them**, because the scan covers `docs/` and a document that quoted the list would be its
+own first violation. That is not a hypothetical: the first draft of this section did exactly
+that, and the check caught it.
+
+Volume is always `tick_volume` — MT5 reports the number of price *changes* in a bar, and calling
+it anything else would be a claim this system cannot support.
 
 ### Outcomes: measured by the machinery that measures detections
 
@@ -489,6 +495,73 @@ per family; and how many carried an immature reference. A setup's sequences do n
 broker day, so a daily section would report a week's structures three times with a different
 incomplete answer each time.
 
+---
+
+## Charts
+
+A setup card is a list of assertions — "swept the session high, reclaimed it, RSI turned" — and a
+reader has no way to check any of them. `aureon/visuals/chart_renderer.py` is the check. It is the
+only artefact in this system whose purpose is to let a human disagree with it.
+
+### It draws what it is given and computes nothing
+
+Every series arrives in `Overlays`: the EMAs, the named levels, the value area, the anchor, the
+invalidation price, the detection and event marks. The renderer never computes an indicator, for
+two reasons. Its main caller is Discord, which is forbidden from computing indicators at all
+(§71), so a renderer with its own EMA would smuggle that capability in behind a picture. And an
+EMA computed from the chart's own window is not necessarily the EMA the agents detected against,
+so the picture would be of a market nobody looked at. A test greps the module for `ema(`, `rsi(`,
+`atr(` and the indicator imports.
+
+`visuals` is on the observation side of the boundary suite, like `engine` and `services`: it
+cannot import `aureon.execution` and cannot name an order-placing call.
+
+### Never `pyplot`
+
+The figure is built through the object API (`Figure` + `FigureCanvasAgg`). `pyplot` keeps global
+state — a registry of open figures, a "current" axis — and this draws in a worker thread inside a
+bot that may render two charts at once. Two threads sharing one current axis draw each other's
+candles, and the result is a picture that is subtly wrong rather than an exception. A test parses
+the module's imports and fails on any that mention `pyplot`.
+
+### The budget bounds the wait, not the work
+
+`render` submits the drawing to a bounded pool and waits `budget_seconds` (default 5). A Python
+thread cannot be cancelled, so an expired budget does not stop the drawing — **it stops the
+waiting**, and the caller gets an "unavailable" image at once, which is what a Discord interaction
+needs. The pool is bounded at two workers for the same reason: a caller rendering faster than the
+machine draws would otherwise accumulate threads until the process fell over.
+
+### An absence is an image, never an exception
+
+Too few bars, no bars, a drawing that raised, a drawing that ran long: each produces a small
+labelled image saying which. A card whose chart is missing looks broken; one whose chart says
+"insufficient data: 4 bars, 10 needed" says exactly what happened.
+
+### Nothing on it is an instruction
+
+The invalidation line is labelled **"not a stop"** on the picture itself, because a red dashed
+line at a round number under a candle chart is read as a stop-loss by everyone who has ever
+traded, and no amount of prose elsewhere undoes that. Every chart carries the footer "observations
+only · no order is implied by anything on this chart". The volume panel is named "tick volume
+(price changes, not contracts traded)". A test walks every text artist on the figure and fails on
+buy, sell, entry, take profit, stop loss, target or lot size.
+
+### Per-instrument precision, and where the bars come from
+
+Prices are formatted from the broker's own `SymbolInfo.digits`: gold quotes to two decimals and
+silver to three, and rounding silver to gold's precision puts a level on the wrong tick — which is
+exactly what a reader opens a chart to check. With no spec, the precision is inferred from the
+decimals the quotes themselves carry, never from their magnitude.
+
+Bars come from `market_day_frames`. `recent_frames` returns **completed days only**, because an
+unfinished day's last bar is not its last bar. A chart is the documented exception: `bars_for`
+fetches the day in progress by name with `get_frame`, and the caller has to ask for it with
+`include_today`, so the distinction stays visible rather than becoming a default.
+
+The golden test is a 256-bit average hash per symbol with a twelve-bit tolerance, and a second
+test asserts the two symbols' hashes are further apart than that — a tolerance wide enough to
+accept any picture is not a test.
 ---
 
 ## The invariants

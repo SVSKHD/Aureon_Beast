@@ -32,18 +32,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
 from aureon.discord.context import BotContext
-from aureon.discord.embeds import notification_embed, reminder_embed
-from aureon.discord.service import build_notification, build_reminder, should_notify
+from aureon.discord.embeds import notification_embed, reminder_embed, setup_embed
+from aureon.discord.service import (
+    build_notification,
+    build_reminder,
+    build_setup_card,
+    should_notify,
+)
 from aureon.discord.views.notification_view import NotificationView
+from aureon.discord.views.setup_view import SetupView
 from aureon.models.alerts import PriceAlert
 from aureon.models.base import to_utc, utc_now
 from aureon.models.detection import Detection
-from aureon.models.enums import NotificationKind
+from aureon.models.enums import DirectionContext, NotificationKind
 
 log = logging.getLogger(__name__)
 
@@ -56,10 +62,14 @@ class Posted:
 
     detections: list[str]
     reminders: list[str]
+    #: 12 T-11. Setups whose card was posted OR edited this sweep. One list for both, because a
+    #: card is one message for the life of the setup and "we said something about this setup"
+    #: is the fact worth counting; whether it was the first thing said is in the log.
+    setups: list[str] = field(default_factory=list)
 
     @property
     def total(self) -> int:
-        return len(self.detections) + len(self.reminders)
+        return len(self.detections) + len(self.reminders) + len(self.setups)
 
 
 class Notifier:
@@ -73,6 +83,8 @@ class Notifier:
         channel_id: int | str | None = None,
         window_seconds: float | None = None,
         poll_seconds: float = DEFAULT_POLL_SECONDS,
+        edit: Any = None,
+        charts: bool = True,
     ) -> None:
         self.context = context
         #: ``async send(channel_id, embed=..., view=...)``. Injected rather than reaching
@@ -86,6 +98,15 @@ class Notifier:
             else context.config.notify_window_seconds
         )
         self.poll_seconds = poll_seconds
+        #: ``async edit(channel_id, message_id, embed=..., view=..., chart=..., filename=...)``.
+        #: Injected like ``send``, so every decision below is testable without a gateway. A
+        #: notifier constructed without one posts cards and never edits them, which is why the
+        #: default is not silently a no-op: ``_post_setup`` treats a missing ``edit`` as a
+        #: configuration error and says so once.
+        self.edit = edit
+        #: 12 T-10/T-11. False renders no chart at all -- for a deployment without the ``charts``
+        #: extra, and for the tests, which assert the card's words rather than its picture.
+        self.charts = charts
         self._stop = asyncio.Event()
 
     # ── One sweep ─────────────────────────────────────────────────────────────
@@ -99,11 +120,13 @@ class Notifier:
         posted = Posted([], [])
         posted.detections = await self._sweep_detections(moment)
         posted.reminders = await self._sweep_reminders(moment)
+        posted.setups = await self._sweep_setups(moment)
         if posted.total:
             log.info(
-                "announced %d detection(s) and %d reminder(s)",
+                "announced %d detection(s), %d reminder(s) and %d setup card(s)",
                 len(posted.detections),
                 len(posted.reminders),
+                len(posted.setups),
             )
         return posted
 
@@ -173,6 +196,197 @@ class Notifier:
                 announced.append(alert.alert_id)
         return announced
 
+    # ── 12 T-11: setup cards, one message per setup ───────────────────────────
+
+    async def _sweep_setups(self, now: datetime) -> list[str]:
+        """Post or EDIT one card per setup that changed inside the window.
+
+        ## One message, edited, rather than one message per transition
+
+        A setup that walks OBSERVING → WATCH → DEVELOPING → CONFIRMED → PULLBACK → CONTINUATION
+        → COMPLETED is ONE thing that happened, and seven messages about it is a channel nobody
+        reads and a scroll a human has to reassemble. So the first announced state posts a card
+        and every later one edits it in place: the channel holds one live card per setup, showing
+        where it is now, with its last few events as the story of how it got there.
+
+        ## The claim-before-post tradeoff, and what it costs here
+
+        ``notifications.claim`` is a Firestore ``create``: exactly one process may take the right
+        to post a given setup, which is what stops two Discord instances double-posting. The cost
+        is the one 9C already accepted -- **a claim that succeeds and then fails to post is never
+        retried.** For a detection that means one missing embed. For a setup it means the card for
+        that setup never appears at all, because every later transition takes the edit path and
+        finds no ``message_id``.
+
+        That is the right trade anyway: the alternative is retrying a post whose outcome is
+        unknown, which double-posts the one message a human presses a button on. The failure is
+        recorded on the notification document for the operator, and the setup itself is in
+        Firestore regardless -- ``/setup id`` renders the same card on demand.
+
+        ## Restart
+
+        The ``message_id`` lives on the notification document, so a restarted process reads it
+        back and keeps editing the same message. It is NOT on the setup: Discord does not own
+        ``setups`` (§71), and "what have we already said about this" is exactly what the
+        notifications collection is for.
+        """
+        context = self.context
+        if context.setups is None or context.notifications is None:
+            return []
+        if context.notification_settings is None:
+            return []
+        settings = await context.run(context.notification_settings.read_or_default)
+        since = now - timedelta(seconds=self.window_seconds)
+
+        announced: list[str] = []
+        for symbol in context.config.symbols:
+            changed = await context.run(
+                context.setups.changed_since, symbol=symbol, since=since
+            )
+            # Oldest first, so a burst reads in the order it happened.
+            for setup in sorted(changed, key=lambda one: (one.updated_at or one.opened_at)):
+                trigger = await self._setup_trigger(setup)
+                if not settings.announces_setup(trigger):
+                    continue
+                if await self._post_setup(setup, now=now):
+                    announced.append(setup.setup_id)
+        return announced
+
+    async def _setup_trigger(self, setup: Any) -> str:
+        """What this change should be judged by: the state, or the descriptive event that caused it.
+
+        A state change is announced under its STATE. A descriptive ``WATCH_*`` event leaves the
+        state alone, so judging it by the state would announce it under whatever the setup already
+        was -- and a reader could not switch off "tell me about repeated level tests" without also
+        switching off the state those tests happen in.
+        """
+        context = self.context
+        last = setup.last_event_id
+        if last is None:
+            return setup.state.value
+        event = await context.run(context.setups.get_event, setup.setup_id, last)
+        if event is None:
+            return setup.state.value
+        if event.to_state is event.from_state:
+            return event.event_type.value
+        return setup.state.value
+
+    async def _post_setup(self, setup: Any, *, now: datetime) -> bool:
+        context = self.context
+        existing = await context.run(
+            context.notifications.get, NotificationKind.SETUP, setup.setup_id
+        )
+        events = await context.run(context.setups.events, setup.setup_id)
+        chart, filename = await self._setup_chart(setup)
+        screen = build_setup_card(setup, events=events, chart_filename=filename)
+        embed = setup_embed(screen)
+        view = SetupView(
+            context,
+            symbol=setup.symbol,
+            setup_id=setup.setup_id,
+            side=side_for(setup),
+        )
+
+        if existing is None:
+            claim = await context.run(
+                context.notifications.claim,
+                NotificationKind.SETUP,
+                setup.setup_id,
+                symbol=setup.symbol,
+                channel_id=str(self.channel_id),
+                now=now,
+            )
+            if claim is None:
+                return False  # another process took it between the read and the claim
+            try:
+                message_id = await self.send(
+                    self.channel_id, embed=embed, view=view, chart=chart, filename=filename
+                )
+            except Exception as exc:  # noqa: BLE001 - recorded, not retried (9C-1)
+                log.exception("could not post the card for setup %s", setup.setup_id)
+                await context.run(
+                    context.notifications.mark_failed,
+                    NotificationKind.SETUP,
+                    setup.setup_id,
+                    message=str(exc),
+                )
+                return False
+            if message_id is not None:
+                await context.run(
+                    context.notifications.record_message,
+                    NotificationKind.SETUP,
+                    setup.setup_id,
+                    message_id=str(message_id),
+                )
+            return True
+
+        if self.edit is None:
+            # Constructed without an editor. Said once rather than silently skipped: a card that
+            # posted and then never changed again looks live and is not, and the operator cannot
+            # tell from the channel which of the two it is.
+            log.error(
+                "the notifier has no edit callable; the card for setup %s cannot be updated",
+                setup.setup_id,
+            )
+            return False
+        if existing.message_id is None:
+            # Claimed, never posted. Not retried -- see the docstring. Saying so once per sweep
+            # would fill the log, so this is DEBUG and the FAILED row is the operator's signal.
+            log.debug(
+                "setup %s was claimed but never posted; not retrying", setup.setup_id
+            )
+            return False
+        try:
+            await self.edit(
+                self.channel_id,
+                existing.message_id,
+                embed=embed,
+                view=view,
+                chart=chart,
+                filename=filename,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.exception("could not edit the card for setup %s", setup.setup_id)
+            await context.run(
+                context.notifications.mark_failed,
+                NotificationKind.SETUP,
+                setup.setup_id,
+                message=str(exc),
+            )
+            return False
+        return True
+
+    async def _setup_chart(self, setup: Any) -> tuple[bytes | None, str | None]:
+        """The chart to attach, or ``(None, None)``.
+
+        Never raises and never blocks past the renderer's own budget: a card with its words and
+        no picture is a card; a sweep that died drawing one is a channel that stops updating. The
+        renderer is handed bars from ``market_day_frames`` and the symbol's stored spec, and it
+        computes nothing -- see ``aureon/visuals/chart_renderer.py``.
+        """
+        context = self.context
+        if context.market_days is None or not self.charts:
+            return None, None
+        try:
+            from aureon.visuals import chart_renderer
+
+            bars = await context.run(
+                chart_renderer.bars_for,
+                context.market_days,
+                symbol=setup.symbol,
+                timeframe=setup.timeframe,
+                market_dates=[setup.market_date],
+                include_today=setup.market_date,
+            )
+            spec = await context.run(context.symbols.get, setup.symbol)
+            png = await context.run(_render_chart, setup, bars, spec)
+        except Exception:  # noqa: BLE001 - a missing picture must not cost the card
+            log.exception("could not draw the chart for setup %s", setup.setup_id)
+            return None, None
+        if not png:
+            return None, None
+        return png, f"{setup.symbol}_{setup.timeframe.value}_{setup.setup_id[:8]}.png"
+
     def _recent_fired(self, now: datetime) -> list[PriceAlert]:
         """Alerts that fired inside the window, oldest first.
 
@@ -236,3 +450,49 @@ class Notifier:
 
     def stop(self) -> None:
         self._stop.set()
+
+
+#: 12 T-11. BULLISH prefills BUY and BEARISH prefills SELL on the card's ``[Execute]`` button;
+#: NEUTRAL prefills nothing and the button is removed.
+#:
+#: This is the one place this system maps a DESCRIPTION onto an ACTION, and it is written here as
+#: a table rather than buried in an ``if`` so that it can be read, argued with and changed in one
+#: edit. What it buys is a retyping error removed; what it must never buy is a decision made. The
+#: lot is still typed into a modal, the order is still planned by ``plan_market_order``, CONFIRM
+#: is still required, and Discord still never calls the broker.
+SIDE_FOR_CONTEXT: dict[str, str] = {
+    DirectionContext.BULLISH.value: "buy",
+    DirectionContext.BEARISH.value: "sell",
+}
+
+
+def side_for(setup: Any) -> str | None:
+    """The side a setup's card offers, or ``None`` for NEUTRAL. See ``SIDE_FOR_CONTEXT``."""
+    return SIDE_FOR_CONTEXT.get(setup.direction_context.value)
+
+
+def _render_chart(setup: Any, bars: Any, spec: Any) -> bytes:
+    """Draw the setup's chart. A module-level function so it can be handed to ``context.run``.
+
+    Every overlay here is read off the stored setup: the anchor, the invalidation price and the
+    family. **No indicator series is passed**, because Discord does not have them and must not
+    compute them (§71) -- the observer holds the EMAs, and a chart drawn here shows the candles,
+    the levels the setup is about, and nothing it would have had to derive.
+    """
+    from aureon.services.setup_reference import render_reference
+    from aureon.visuals import chart_renderer
+
+    overlays = chart_renderer.Overlays(
+        title=f"{setup.symbol} {setup.timeframe.value} · {setup.family.value.replace('_', ' ')}",
+        subtitle=setup.state.value,
+        anchor_price=setup.anchor.price,
+        invalidation_price=setup.invalidation_price,
+        notes=(render_reference(setup.reference)[0],),
+    )
+    return chart_renderer.render(
+        symbol=setup.symbol,
+        timeframe=setup.timeframe,
+        bars=bars,
+        spec=spec,
+        overlays=overlays,
+    )

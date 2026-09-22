@@ -11,7 +11,7 @@ trade until a human turns it on.
 
 from __future__ import annotations
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
 
 from aureon.models.base import AureonDocument, AureonModel, UtcDatetime
 
@@ -68,6 +68,68 @@ class ResolvedLimits(AureonModel):
 DEFAULT_NOTIFIED_AGENTS: tuple[str, ...] = ("ema_cross", "wick", "liquidity", "breakout")
 
 
+#: 12 T-11. Every name that may appear in ``settings/notifications.setup_states``: all nine
+#: states a setup can be in, and all seventeen descriptive ``WATCH_*`` event types.
+#:
+#: Twenty-six, not the nine the field's name suggests. A name in this list is a **trigger**,
+#: matched against either the setup's state or the event type that caused the change, whichever
+#: the change was -- see ``Notifier._setup_trigger``. The field keeps the name ``setup_states``
+#: because that is the documented key an operator edits.
+SETUP_STATE_ANNOUNCEMENTS: tuple[str, ...] = (
+    "observing",
+    "watch",
+    "developing",
+    "confirmed",
+    "pullback",
+    "continuation",
+    "fakeout_risk",
+    "completed",
+    "invalidated",
+)
+
+#: The three observations worth telling a human about before anything has confirmed: a level
+#: tested a third time, a bar that poked through and came back, tick volume expanding at a level.
+#: These are ON by default.
+NOTABLE_SETUP_EVENTS: tuple[str, ...] = (
+    "repeated_level_test",
+    "breakout_pressure",
+    "volume_expansion_at_level",
+)
+
+#: The other fourteen. Configurable and OFF by default, which is the one judgement call in this
+#: block and is made in the open: "price is near the previous day's high" is true on dozens of
+#: consecutive candles, so a card subscribed to it would be edited on every one of them. Turning
+#: any of these on is a one-line edit to ``settings/notifications.setup_states``, and it takes
+#: effect on the next sweep without a redeploy -- which is the whole reason this lives in
+#: Firestore rather than in the environment (decision 11).
+QUIET_SETUP_EVENTS: tuple[str, ...] = (
+    "ema_fast_slope_change",
+    "ema_gap_narrowing",
+    "high_tick_volume_rejection",
+    "high_tick_volume_sweep",
+    "profile_reclaim",
+    "profile_rejection",
+    "proximity_liquidity_level",
+    "proximity_poc",
+    "proximity_prev_day_extreme",
+    "proximity_session_extreme",
+    "proximity_vah",
+    "proximity_val",
+    "rsi_momentum_turn",
+    "tick_volume_expansion",
+)
+
+#: Every trigger a human may name. Validated against, so a typo in the settings document is a
+#: refused write rather than a silently ignored line.
+SETUP_ANNOUNCEMENTS: tuple[str, ...] = (
+    SETUP_STATE_ANNOUNCEMENTS + NOTABLE_SETUP_EVENTS + QUIET_SETUP_EVENTS
+)
+
+DEFAULT_SETUP_ANNOUNCEMENTS: tuple[str, ...] = (
+    SETUP_STATE_ANNOUNCEMENTS + NOTABLE_SETUP_EVENTS
+)
+
+
 class NotificationSettings(AureonDocument):
     """What Discord announces, held at ``settings/notifications`` (9C).
 
@@ -83,11 +145,42 @@ class NotificationSettings(AureonDocument):
     )
     #: False silences every detection embed without forgetting which kinds were enabled.
     detections_enabled: bool = True
+    #: 12 T-11. Which setup changes get a card, named from ``SETUP_ANNOUNCEMENTS``. A trigger is
+    #: matched against either the setup's state or the event type that caused the change,
+    #: whichever the change was -- see ``Notifier._setup_trigger``.
+    setup_states: tuple[str, ...] = Field(
+        default=DEFAULT_SETUP_ANNOUNCEMENTS,
+        description="Setup states and watch-event types Discord posts or edits a card for.",
+    )
+    #: False silences every setup card without forgetting which triggers were enabled. Separate
+    #: from ``detections_enabled`` because the two answer different questions: a channel can
+    #: reasonably want structures and not every EMA cross.
+    setups_enabled: bool = True
     updated_at: UtcDatetime | None = None
     updated_by: str | None = None
 
+    @model_validator(mode="after")
+    def _every_trigger_is_a_real_one(self) -> NotificationSettings:
+        """A name that is not a trigger is refused, not ignored.
+
+        A typo in a hand-edited settings document -- ``confermed`` -- would otherwise be a line
+        that silently never fires, which is indistinguishable from a feature that does not work.
+        The write fails and the operator sees why.
+        """
+        unknown = [name for name in self.setup_states if name not in SETUP_ANNOUNCEMENTS]
+        if unknown:
+            raise ValueError(
+                f"{unknown} is not a setup announcement trigger; the twenty-six are "
+                f"{list(SETUP_ANNOUNCEMENTS)}"
+            )
+        return self
+
     def announces(self, agent_name: str) -> bool:
         return self.detections_enabled and agent_name in self.enabled_kinds
+
+    def announces_setup(self, trigger: str) -> bool:
+        """Whether a setup change named by ``trigger`` gets a card."""
+        return self.setups_enabled and trigger in self.setup_states
 
 
 class ExecutionSettings(AureonDocument):
