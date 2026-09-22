@@ -94,6 +94,7 @@ class ReviewService:
             # by the trades already narrowed above, so they need no second filter.
             assessments=self._for_symbol(self._load_assessments(period)),
             notes=self._load_notes(self._for_symbol(self._load_trades(period))),
+            **self._load_setups(period),
         )
         log.info(
             "period %s (%s): %d detections, %d evaluations, %d trades, %d sessions (%s)",
@@ -144,6 +145,31 @@ class ReviewService:
 
     def _load_notes(self, trades: list[Trade]) -> dict[str, list[Any]]:
         return self.source.notes_for(trades)
+
+    def _load_setups(self, period: Period) -> dict[str, Any]:
+        """The period's setups and their outcomes (T-9).
+
+        Loaded for every review although only the weekly one counts them, because ``load`` is
+        the one place that knows the period and narrowing it by review kind would put the
+        weekly/daily distinction in two places. The cost is one symbol-scoped read per daily
+        review over a collection holding tens of documents a day.
+
+        Tolerant of a missing collection: a repository that has never written a setup returns
+        nothing, and a review of a period from before T-9 must build exactly as it did before.
+        """
+        try:
+            setups = self._for_symbol(self.source.setups_in(period.start, period.end))
+        except Exception:  # noqa: BLE001 - a review must not fail on an absent collection
+            log.warning("could not read setups for %s", period.market_date, exc_info=True)
+            return {}
+        try:
+            evaluations = self.source.setup_evaluations_for(setups, self.rule.rule_id)
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "could not read setup evaluations for %s", period.market_date, exc_info=True
+            )
+            evaluations = {}
+        return {"setups": setups, "setup_evaluations": evaluations}
 
     # ── Generating ────────────────────────────────────────────────────────────
 

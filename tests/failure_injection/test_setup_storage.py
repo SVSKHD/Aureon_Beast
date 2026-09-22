@@ -307,6 +307,74 @@ def test_an_illegal_transition_writes_nothing_at_all(setups) -> None:
     assert len(setups.events(setup.setup_id)) == 1
 
 
+# ── "did it ever make a claim?" (T-9) ─────────────────────────────────────────
+
+
+def test_confirmation_is_stamped_once_and_never_moved(setups) -> None:
+    """``confirmed_at`` marks the moment an outcome is measured from, so it must not drift.
+
+    A setup confirms, pulls back and continues. Each of those is a state write through the same
+    transaction, and a version that stamped the field on every write would move the moment a
+    review measures from -- quietly, and only on the setups that pulled back, which are exactly
+    the ones a reader is most interested in.
+    """
+    setup = setups.open(a_setup(), now=NOW)
+    walk = [
+        (SetupEventType.WATCH_STARTED, SetupState.WATCH),
+        (SetupEventType.DEVELOPING, SetupState.DEVELOPING),
+        (SetupEventType.CONFIRMED, SetupState.CONFIRMED),
+        (SetupEventType.PULLBACK_STARTED, SetupState.PULLBACK),
+        (SetupEventType.CONTINUATION, SetupState.CONTINUATION),
+    ]
+    stamped: datetime | None = None
+    for index, (event_type, state) in enumerate(walk):
+        at = NOW + timedelta(minutes=5 * index)
+        current = setups.get(setup.setup_id)
+        setups.record(
+            an_event(current, event_type=event_type, to_state=state, at=at), now=at
+        )
+        after = setups.get(setup.setup_id)
+        if state is SetupState.CONFIRMED:
+            assert after.confirmed_at == at, "confirmation was not stamped"
+            stamped = after.confirmed_at
+        elif stamped is None:
+            assert after.confirmed_at is None, (
+                f"{state.value} stamped a confirmation that had not happened"
+            )
+        else:
+            assert after.confirmed_at == stamped, (
+                f"{state.value} moved confirmed_at from {stamped} to {after.confirmed_at}"
+            )
+
+    final = setups.get(setup.setup_id)
+    assert final.reached_confirmation
+    assert final.confirmed_at == NOW + timedelta(minutes=10)
+
+
+def test_a_setup_invalidated_from_watch_never_claims_a_confirmation(setups) -> None:
+    """The distinction ``confirmed_at`` exists for: this document and one that confirmed and then
+    invalidated both read INVALIDATED, and only the second ever made a claim."""
+    setup = setups.open(a_setup(), now=NOW)
+    setups.record(
+        an_event(setup, event_type=SetupEventType.WATCH_STARTED, to_state=SetupState.WATCH),
+        now=NOW,
+    )
+    current = setups.get(setup.setup_id)
+    setups.record(
+        an_event(
+            current,
+            event_type=SetupEventType.INVALIDATED,
+            to_state=SetupState.INVALIDATED,
+            at=NOW + timedelta(minutes=5),
+        ),
+        now=NOW + timedelta(minutes=5),
+    )
+    stored = setups.get(setup.setup_id)
+    assert stored.state is SetupState.INVALIDATED
+    assert stored.confirmed_at is None
+    assert not stored.reached_confirmation
+
+
 def test_a_terminal_setup_leaves_the_open_set(setups) -> None:
     live = setups.open(a_setup(), now=NOW)
     other = setups.open(

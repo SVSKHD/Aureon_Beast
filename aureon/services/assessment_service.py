@@ -49,6 +49,8 @@ from datetime import datetime
 from aureon.evaluation.stats import median, quantile, wilson_interval
 from aureon.models.assessment import (
     MIN_COHORT,
+    SL_QUANTILES,
+    TP_QUANTILES,
     WIDENING_ORDER,
     Assessment,
     CohortFilter,
@@ -67,12 +69,22 @@ from aureon.models.enums import (
     PathClassification,
     TrendBias,
 )
-from aureon.models.evaluation import DetectionEvaluation, EvaluationRule, threshold_key
+from aureon.models.evaluation import (
+    DetectionEvaluation,
+    EvaluationRule,
+    SetupEvaluation,
+    threshold_key,
+)
 from aureon.models.identity import new_assessment_id
 from aureon.models.market import Candle
 from aureon.models.profile import ProfileSummary, VolatilityContext
 
 log = logging.getLogger(__name__)
+
+#: What the narrow cores below accept: anything holding ``HorizonResult``s under a frozen rule.
+#: Spelled as a union of the two real documents rather than as a protocol, because the set is
+#: closed -- a third kind of evaluation would be a decision worth making explicitly.
+HorizonSource = DetectionEvaluation | SetupEvaluation
 
 #: How many closed candles the trend read looks at. Sixty M5 candles is five hours -- long
 #: enough to cover a session's shape, short enough that yesterday's move is not being read
@@ -84,11 +96,11 @@ DEFAULT_TREND_CANDLES = 60
 #: every third candle and would make a structure count meaningless.
 SWING_STRENGTH = 2
 
-#: Quantiles published as target and stop estimates. The pairs are asymmetric on purpose:
-#: a target at the median of what similar detections actually reached, and a stop beyond
-#: three-quarters of what they actually gave back first.
-TP_QUANTILES: tuple[float, ...] = (0.5, 0.25)
-SL_QUANTILES: tuple[float, ...] = (0.75, 0.9)
+#: Re-exported from ``aureon.models.assessment``, where they now live: a setup's reference
+#: block publishes the same pairs and a model validator checks them, so the tuple had to sit
+#: one layer below both callers. Kept importable from here because that is where every existing
+#: caller and test looks for it.
+__all__ = ["SL_QUANTILES", "TP_QUANTILES"]
 
 
 # ── a. The trend read ─────────────────────────────────────────────────────────
@@ -459,10 +471,23 @@ def excursions(
     cohort: Sequence[CohortMember], horizon_id: str
 ) -> tuple[list[float], list[float]]:
     """The cohort's measured MFE and MAE at one horizon, in points."""
+    return excursions_from([member.evaluation for member in cohort], horizon_id)
+
+
+def excursions_from(
+    evaluations: Sequence[HorizonSource], horizon_id: str
+) -> tuple[list[float], list[float]]:
+    """The same arithmetic over the evaluations alone.
+
+    Split out for T-9, which measures a cohort of ``setup_evaluations`` and has no detections to
+    hand. One body, two entry points: a second implementation would differ from this one on an
+    empty cohort or a horizon that never completed, and there would be no way to say which of
+    the two screens was right.
+    """
     mfe: list[float] = []
     mae: list[float] = []
-    for member in cohort:
-        for result in member.evaluation.complete_horizons:
+    for evaluation in evaluations:
+        for result in evaluation.complete_horizons:
             if result.horizon_id != horizon_id:
                 continue
             if result.mfe is not None:
@@ -470,6 +495,26 @@ def excursions(
             if result.mae is not None:
                 mae.append(result.mae)
     return mfe, mae
+
+
+def point_estimates(
+    values: Sequence[float], quantiles: Sequence[float]
+) -> tuple[Estimate, ...]:
+    """Quantiles of a measured excursion, in points and with NO price attached.
+
+    What a caller wants when the numbers describe a population rather than one moment: a setup's
+    reference block publishes points only, because a price on it would render as a level on a
+    card beside a chart, which is indistinguishable from a target (T-9).
+
+    The rounding lives here so both surfaces round identically.
+    """
+    built: list[Estimate] = []
+    for q in quantiles:
+        points = quantile(values, q)
+        if points is None:
+            continue
+        built.append(Estimate(quantile=q, points=round(points, 2)))
+    return tuple(built)
 
 
 def estimates(
@@ -489,15 +534,13 @@ def estimates(
     reads as a plausible number and is the wrong side of the market.
     """
     built: list[Estimate] = []
-    for q in quantiles:
-        points = quantile(values, q)
-        if points is None:
-            continue
+    for estimate in point_estimates(values, quantiles):
         price: float | None = None
         if reference is not None and point > 0:
             up = (direction is Direction.BUY) == favourable
+            points = estimate.points
             price = round(reference + (points * point if up else -points * point), 5)
-        built.append(Estimate(quantile=q, points=round(points, 2), price=price))
+        built.append(estimate.model_copy(update={"price": price}))
     return tuple(built)
 
 
@@ -515,11 +558,27 @@ def paired_outcome(
     they could have had. Ambiguous paths are excluded from the numerator AND the
     denominator, because for those the order was never observed at all.
     """
+    return paired_outcome_from(
+        [member.evaluation for member in cohort],
+        horizon_id,
+        favourable=favourable,
+        adverse=adverse,
+    )
+
+
+def paired_outcome_from(
+    evaluations: Sequence[HorizonSource],
+    horizon_id: str,
+    *,
+    favourable: float,
+    adverse: float,
+) -> PairedOutcome:
+    """The same arithmetic over the evaluations alone -- see ``excursions_from``."""
     key = threshold_key(favourable)
     evaluated = 0
     first = 0
-    for member in cohort:
-        for result in member.evaluation.complete_horizons:
+    for evaluation in evaluations:
+        for result in evaluation.complete_horizons:
             if result.horizon_id != horizon_id or result.path_ambiguous:
                 continue
             evaluated += 1
@@ -641,14 +700,26 @@ def classify_history(
     An EMPTY set is different again: the caller looked, and no session has been verified, so
     every member is synthetic. That is the state this repository is in today.
     """
+    return classify_dates(
+        [member.detection.candle_open_time.market_date for member in cohort], real_days
+    )
+
+
+def classify_dates(
+    dates: Sequence[str], real_days: Collection[str] | None
+) -> tuple[HistorySource, int]:
+    """The same arithmetic over the cohort's broker dates alone -- see ``excursions_from``.
+
+    T-9's population is ``setup_evaluations``, whose rows carry their ``market_date`` directly
+    rather than through a detection.
+    """
     if real_days is None:
         return HistorySource.UNKNOWN, 0
-    if not cohort:
+    if not dates:
         # No members, so no bars, so nothing to be real or synthetic about. SYNTHETIC would
         # be a claim about data that does not exist.
         return HistorySource.UNKNOWN, 0
     verified = {str(day) for day in real_days}
-    dates = [member.detection.candle_open_time.market_date for member in cohort]
     matched = {day for day in dates if day in verified}
     if len(matched) == len(set(dates)):
         return HistorySource.REAL, len(matched)

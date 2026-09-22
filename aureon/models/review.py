@@ -206,8 +206,60 @@ class DailyReview(ReviewBase):
 
 
 class WeeklyReview(ReviewBase):
-    """One trading week, generated after Friday's close (§63)."""
+    """One trading week, generated after Friday's close (§63).
+
+    ## Why the setups section is weekly and not daily (T-9)
+
+    A setup is a claim about a sequence, and the sequences worth counting do not fit inside a
+    broker day: a trend pullback opened on Tuesday confirms on Wednesday and completes on
+    Thursday. A daily section would therefore report a week's structures three times, each time
+    with a different and equally incomplete answer. Counted once, over a week, the numbers are
+    about the same population a reader has been watching.
+    """
 
     iso_year: int
     iso_week: int = Field(ge=1, le=53)
     daily_review_ids: tuple[str, ...] = ()
+
+    # ── T-9: the setups this week noticed, and what they did ──────────────────
+    #: Setups OPENED in the period, whatever state they reached. Opened rather than closed, so
+    #: a setup belongs to the week a reader was looking at it.
+    setups_total: int = Field(default=0, ge=0)
+    #: family -> count, and state -> count at the moment the review was generated. A setup still
+    #: open appears under its current state, which is the honest answer: "we do not know yet" is
+    #: a state, and folding it into COMPLETED or INVALIDATED would invent an outcome.
+    setups_by_family: dict[str, int] = Field(default_factory=dict)
+    setups_by_state: dict[str, int] = Field(default_factory=dict)
+    setups_by_direction_context: dict[str, int] = Field(default_factory=dict)
+    #: How many reached CONFIRMED, which is the first state with a claim in it. A setup that
+    #: never confirmed is not a wrong prediction; it is an absence of one, and it is excluded
+    #: from every rate below rather than counted as a miss.
+    setups_confirmed: int = Field(default=0, ge=0)
+    #: Confirmed setups with at least one COMPLETE horizon, and those whose horizons are all
+    #: still pending. The second is this section's honesty field, the same role
+    #: ``pending_horizons_excluded`` plays above.
+    setups_evaluated: int = Field(default=0, ge=0)
+    setups_unresolved: int = Field(default=0, ge=0)
+    #: family -> "reached/evaluated" at the rule's first threshold and the counted horizon.
+    #: A string rather than a float for the reason every rate in this document is: a bare
+    #: percentage loses its n, and 1/1 and 60/100 render identically.
+    setup_reached_by_family: dict[str, str] = Field(default_factory=dict)
+    #: family -> the measured excursions, in points, as a one-liner. What actually happened,
+    #: beside how often a threshold was reached: a family that reaches its threshold half the
+    #: time while giving back twice as much is not the same finding as one that does not.
+    setup_excursions_by_family: dict[str, str] = Field(default_factory=dict)
+    #: How many of the week's setups carried a reference block built on fewer than
+    #: ``MATURE_REAL_DAYS`` verified broker days (11C, T-9). Early on this is all of them, and a
+    #: reader who cannot see that will read the reference numbers as measurements of the market.
+    setups_with_immature_reference: int = Field(default=0, ge=0)
+
+    @property
+    def setup_confirmation_rate(self) -> float | None:
+        """Confirmed over opened, or ``None`` on a week with no setups.
+
+        ``None`` rather than 0.0, for the reason ``ThresholdConfirmation.rate`` gives: a rate of
+        zero says nothing confirmed, and no setups says nothing at all.
+        """
+        if self.setups_total == 0:
+            return None
+        return self.setups_confirmed / self.setups_total

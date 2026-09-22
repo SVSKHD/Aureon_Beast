@@ -24,14 +24,16 @@ from typing import Any
 
 from aureon.models.assessment import Assessment, TradeNote
 from aureon.models.detection import Detection
-from aureon.models.evaluation import DetectionEvaluation
+from aureon.models.evaluation import DetectionEvaluation, SetupEvaluation
 from aureon.models.session import SessionSummary
+from aureon.models.setup import Setup
 from aureon.models.trade import Trade
 from aureon.storage.assessment_repository import AssessmentRepository
 from aureon.storage.detection_repository import DetectionRepository
 from aureon.storage.evaluation_repository import EvaluationRepository
 from aureon.storage.note_repository import TradeNoteRepository
 from aureon.storage.session_repository import SessionRepository
+from aureon.storage.setup_repository import SetupEvaluationRepository, SetupRepository
 from aureon.storage.trade_repository import TradeRepository
 
 
@@ -50,6 +52,10 @@ class PeriodReader:
         # able to make its own numbers agree with itself.
         self.__assessments = AssessmentRepository(client)
         self.__notes = TradeNoteRepository(client)
+        # T-9. Read-only through this surface for the same reason as everything else: a review
+        # that could rewrite a setup would be able to make its own numbers agree with itself.
+        self.__setups = SetupRepository(client)
+        self.__setup_evaluations = SetupEvaluationRepository(client)
 
     def detections_in(self, start: datetime, end: datetime) -> list[Detection]:
         return self.__detections.in_period(start, end)
@@ -70,6 +76,16 @@ class PeriodReader:
     def assessments_in(self, start: datetime, end: datetime) -> list[Assessment]:
         """`/monitor` readouts produced in the period, for scoring them (9D)."""
         return self.__assessments.in_period(start, end)
+
+    def setups_in(self, start: datetime, end: datetime) -> list[Setup]:
+        """Setups opened in the period, for the weekly review's setups section (T-9)."""
+        return self.__setups.in_period(start, end)
+
+    def setup_evaluations_for(
+        self, setups: list[Setup], rule_id: str
+    ) -> dict[str, SetupEvaluation]:
+        """Their outcomes, by exact document id -- see ``evaluations_for``."""
+        return self.__setup_evaluations.get_many(setups, rule_id)
 
     def notes_for(self, trades: list[Trade]) -> dict[str, list[TradeNote]]:
         """What the trader wrote about each of the period's trades (9D)."""

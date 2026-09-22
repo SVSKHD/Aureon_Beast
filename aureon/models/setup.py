@@ -36,6 +36,13 @@ from __future__ import annotations
 
 from pydantic import ConfigDict, Field, model_validator
 
+from aureon.models.assessment import (
+    MATURE_REAL_DAYS,
+    SL_QUANTILES,
+    TP_QUANTILES,
+    Estimate,
+    PairedOutcome,
+)
 from aureon.models.base import AureonDocument, AureonModel, MarketTime, UtcDatetime
 from aureon.models.enums import (
     DirectionContext,
@@ -104,29 +111,128 @@ class SetupContextSummary(AureonModel):
     session: SessionName | None = None
 
 
+#: The words every rendering of a ``SetupReference`` carries, verbatim (T-9).
+#:
+#: Three claims, in the order a reader needs them: it is HISTORY (not a forecast), it is a
+#: MEASURED COHORT (arithmetic over stored outcomes, not a model), and it is RESEARCH CONTEXT
+#: (not a target and not advice). A rendering that shortened it to "reference" would leave the
+#: numbers looking like a recommendation, which is the one thing they must never look like.
+REFERENCE_LABEL = "historical reference · measured cohort · research context"
+
+#: What a reference says when the cohort never reached ``MIN_COHORT`` even fully widened, or when
+#: the history behind it is not yet mature. Kept beside the label rather than replacing it, so a
+#: reader sees both what the block is and why its numbers are not worth much yet.
+IMMATURE_NOTE = "immature history"
+
+
 class SetupReference(AureonModel):
     """A measured historical cohort, carried as research context and labelled as such (T-9).
 
     Not a target and not a prediction. It is the answer to "when this shape happened before, what
-    did the population do" — produced by the same machinery ``/monitor`` uses, so there is exactly
-    one definition of a cohort in the system and no second TP/SL engine.
+    did the population do" — produced by the same arithmetic ``/monitor`` uses (the same quantile
+    and Wilson functions, the same ``MIN_COHORT`` floor, the same ``MATURE_REAL_DAYS`` maturity
+    rule), so there is exactly one definition of a cohort in the system and no second TP/SL engine.
+
+    ``mfe`` is the cohort's measured favourable excursion at p50 and p25; ``mae`` its measured
+    adverse excursion at p75 and p90 — the same quantiles and the same asymmetry
+    ``assessment_service`` publishes, in points. ``paired`` is how often the favourable distance
+    came first, with its 95% interval and its n.
 
     ``history_source`` and ``real_days`` ride along because a cohort built from fixtures and one
     built from six months of real sessions are different claims, and a screen that showed them
     alike would let a synthetic number be read as a measured one (11C).
+
+    Every field is optional and the default is an EMPTY reference: a setup opened before any
+    history existed carries one that says nothing, which is different from one that says zero.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    assessment_id: str | None = None
+    #: The frozen rule the cohort's outcomes were measured under (§21), and which of its horizons
+    #: the excursions come from. Without both, a reference from before a rule change and one from
+    #: after are indistinguishable while meaning different things.
+    rule_id: str | None = None
+    horizon_id: str | None = None
     cohort_n: int | None = Field(default=None, ge=0)
+    #: Which cohort dimensions had to be given up to reach ``MIN_COHORT``, in the order they were
+    #: dropped. Reported, never silent: a cohort that quietly stopped matching on volatility
+    #: regime is a different question wearing the same words.
+    dropped: tuple[str, ...] = ()
+    #: p50 and p25 of the cohort's measured MFE, in points.
+    mfe: tuple[Estimate, ...] = ()
+    #: p75 and p90 of the cohort's measured MAE, in points.
+    mae: tuple[Estimate, ...] = ()
+    #: How often the favourable distance came first, with n and a 95% Wilson interval.
+    paired: PairedOutcome | None = None
+    #: Set when the cohort never reached ``MIN_COHORT`` even fully widened. Recorded rather than
+    #: left blank: "we looked and there was not enough history" is a finding worth counting.
+    insufficient: bool = False
     history_source: HistorySource | None = None
     real_days: int | None = Field(default=None, ge=0)
+    measured_at: UtcDatetime | None = None
+
+    @model_validator(mode="after")
+    def _quantiles_are_the_published_ones(self) -> SetupReference:
+        """The quantiles are not free text.
+
+        A reference whose ``mfe`` carried p90 would read as a target somebody could hit rather
+        than as the median of what already happened, and it would not be comparable with the
+        ``/monitor`` readout beside it. The allowed sets are the ones ``assessment_service``
+        publishes, imported rather than repeated.
+        """
+        for name, found, allowed in (
+            ("mfe", self.mfe, TP_QUANTILES),
+            ("mae", self.mae, SL_QUANTILES),
+        ):
+            unexpected = [e.quantile for e in found if e.quantile not in allowed]
+            if unexpected:
+                raise ValueError(
+                    f"{name} carries quantiles {unexpected}, which are not the published "
+                    f"{sorted(allowed)}"
+                )
+        return self
 
     @property
     def is_evidence(self) -> bool:
         """Whether this reference is about the instrument rather than about a fixture."""
         return self.history_source is not None and self.history_source.is_evidence
+
+    @property
+    def immature(self) -> bool:
+        """Under ``MATURE_REAL_DAYS`` verified broker days, whatever the cohort size.
+
+        The same floor ``Assessment.immature`` uses, and separate from ``insufficient`` for the
+        same reason: a cohort of two hundred setups from one Tuesday is not two hundred
+        independent observations. A reference that never measured anything (``real_days`` unset)
+        is immature too — there is nothing mature about an absence.
+        """
+        return (self.real_days or 0) < MATURE_REAL_DAYS
+
+    @property
+    def measured(self) -> bool:
+        """Whether this reference carries any arithmetic at all."""
+        return self.cohort_n is not None
+
+    @property
+    def caption(self) -> str:
+        """The one line every rendering of this block must carry.
+
+        Built here rather than in the embed so the Discord card, the weekly review and any future
+        surface cannot disagree about what the numbers are. A caption is the smallest place a
+        measured number can quietly become advice, so it is not left to a caller.
+        """
+        if not self.measured:
+            return f"{REFERENCE_LABEL} · nothing measured yet"
+        parts = [REFERENCE_LABEL, f"n={self.cohort_n}"]
+        if self.insufficient:
+            parts.append(f"below the cohort floor · {IMMATURE_NOTE}")
+        elif self.immature:
+            parts.append(IMMATURE_NOTE)
+        if self.dropped:
+            parts.append("widened: " + ", ".join(self.dropped))
+        if self.history_source is not None:
+            parts.append(f"history: {self.history_source.value}")
+        return " · ".join(parts)
 
 
 class SetupEvent(AureonDocument):
@@ -209,6 +315,13 @@ class Setup(AureonDocument):
     invalidation_price: float | None = None
     opened_at: UtcDatetime
     updated_at: UtcDatetime | None = None
+    #: When this setup first reached CONFIRMED, and when it reached a terminal state (T-9).
+    #:
+    #: ``confirmed_at`` is stored rather than derived because it is NOT derivable from ``state``:
+    #: a setup that confirmed and then invalidated and one that invalidated from WATCH both read
+    #: INVALIDATED, and only the first ever made a claim. A review that could not tell them apart
+    #: would count an absence of a prediction as a wrong one.
+    confirmed_at: UtcDatetime | None = None
     closed_at: UtcDatetime | None = None
     #: The last event written, and how many there are. A count rather than a list, because a list
     #: of every event is what the sub-collection is for and what an unbounded array would become.
@@ -259,6 +372,11 @@ class Setup(AureonDocument):
                 f"{self.setup_id}: closed_at is set but state is {self.state.value}"
             )
         return self
+
+    @property
+    def reached_confirmation(self) -> bool:
+        """Whether this setup ever made a claim. See ``confirmed_at``."""
+        return self.confirmed_at is not None
 
     @property
     def is_terminal(self) -> bool:

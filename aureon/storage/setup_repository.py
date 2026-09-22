@@ -126,6 +126,31 @@ class SetupRepository:
                 )
         return sorted(found, key=lambda one: one.opened_at)
 
+    def in_period(self, start: datetime, end: datetime) -> list[Setup]:
+        """Every setup OPENED in a window, whatever state it reached (T-9).
+
+        Opened rather than closed, so a week's review counts the setups that week noticed. One
+        that opened on Friday and invalidated on Monday belongs to Friday, which is when a reader
+        was looking at it.
+
+        Filtered in Python after a single-field read, like every other period read here: the
+        alternative is a composite index declared and deployed for a batch job that runs a few
+        times a day.
+        """
+        first, last = to_utc(start), to_utc(end)
+        found: list[Setup] = []
+        for document in self._client.collection(paths.SETUPS).stream():
+            try:
+                setup = Setup.model_validate(document.to_dict())
+            except Exception:  # noqa: BLE001 - one bad row must not hide the rest
+                log.warning(
+                    "unreadable setup %s", getattr(document, "id", "?"), exc_info=True
+                )
+                continue
+            if first <= to_utc(setup.opened_at) < last:
+                found.append(setup)
+        return sorted(found, key=lambda one: (one.opened_at, one.setup_id))
+
     # ── writes ────────────────────────────────────────────────────────────────
 
     def open(self, setup: Setup, *, now: datetime | None = None) -> Setup:
@@ -225,6 +250,11 @@ class SetupRepository:
                 updates["context_summary"] = context_summary
             if reference is not None:
                 updates["reference"] = reference
+            if event.to_state is SetupState.CONFIRMED and current.confirmed_at is None:
+                # First confirmation only. A setup that pulled back and confirmed again is the
+                # same claim, made once; re-stamping it would move the moment a review measures
+                # the outcome from (T-9).
+                updates["confirmed_at"] = moment
             if event.to_state in TERMINAL_SETUP_STATES:
                 updates["closed_at"] = moment
             moved = current.model_copy(update=updates)
@@ -326,6 +356,50 @@ class SetupEvaluationRepository:
             paths.setup_evaluation_path(stamped.setup_id, stamped.rule_id)
         ).set(stamped.model_dump(mode="json"))
         return stamped
+
+    def get_many(
+        self, setups: Sequence[Setup], rule_id: str
+    ) -> dict[str, SetupEvaluation]:
+        """Fetch by exact document id, keyed by setup id (T-9).
+
+        No index, and no chance of a query silently missing one -- which for a setup evaluation
+        would mean its setup counted as unevaluated rather than as answered. The same reasoning
+        ``EvaluationRepository.get_many`` uses for detections.
+        """
+        found: dict[str, SetupEvaluation] = {}
+        for setup in setups:
+            evaluation = self.get(setup.setup_id, rule_id)
+            if evaluation is not None:
+                found[setup.setup_id] = evaluation
+        return found
+
+    def before(self, *, symbol: str, market_date: str) -> list[SetupEvaluation]:
+        """Every evaluation for one symbol on a STRICTLY EARLIER broker day (T-9).
+
+        The population a reference is measured over. Same-day rows are excluded here as well as
+        in ``prior_to``, so a caller that forgot the filter still cannot put this morning's
+        outcome into this afternoon's reference.
+
+        A ``<`` on the stored ``market_date`` string, which is safe because the format is
+        ISO ``YYYY-MM-DD`` and lexicographic order is chronological order for it. A parsed
+        comparison would be the same answer at the cost of a round trip through ``date``.
+        """
+        query = (
+            self._client.collection(paths.SETUP_EVALUATIONS)
+            .where("symbol", "==", symbol.upper())
+            .where("market_date", "<", market_date)
+        )
+        found: list[SetupEvaluation] = []
+        for document in query.stream():
+            try:
+                found.append(SetupEvaluation.model_validate(document.to_dict()))
+            except Exception:  # noqa: BLE001 - one bad row must not hide the rest
+                log.warning(
+                    "unreadable setup evaluation %s",
+                    getattr(document, "id", "?"),
+                    exc_info=True,
+                )
+        return sorted(found, key=lambda one: (one.market_date, one.setup_id))
 
     def for_market_date(self, *, symbol: str, market_date: str) -> list[SetupEvaluation]:
         """Every evaluation for one symbol's day, for a review.

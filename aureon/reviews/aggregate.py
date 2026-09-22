@@ -37,7 +37,7 @@ from aureon.models.enums import (
     SessionName,
     TradeStatus,
 )
-from aureon.models.evaluation import DetectionEvaluation, EvaluationRule
+from aureon.models.evaluation import DetectionEvaluation, EvaluationRule, SetupEvaluation
 from aureon.models.review import (
     DailyReview,
     HorizonOutcome,
@@ -46,6 +46,7 @@ from aureon.models.review import (
     WeeklyReview,
 )
 from aureon.models.session import SessionSummary
+from aureon.models.setup import Setup
 from aureon.models.trade import Trade
 from aureon.reviews.linking import classify_period, infer_links
 
@@ -65,6 +66,14 @@ class PeriodData:
     #: as it did before rather than failing on a missing collection.
     assessments: list[Assessment] = field(default_factory=list)
     notes: dict[str, list[TradeNote]] = field(default_factory=dict)
+    #: T-9. The setups opened in this period and their outcomes, keyed by setup id. Both
+    #: default empty, so a review of a period from before setups existed builds exactly as it
+    #: did before rather than failing on a missing collection.
+    setups: list[Setup] = field(default_factory=list)
+    setup_evaluations: dict[str, SetupEvaluation] = field(default_factory=dict)
+
+    def sorted_setups(self) -> list[Setup]:
+        return sorted(self.setups, key=lambda s: (s.opened_at, s.setup_id))
 
     def sorted_detections(self) -> list[Detection]:
         return sorted(self.detections, key=lambda d: (d.detected_at.utc, d.detection_id))
@@ -318,7 +327,91 @@ def build_weekly_review(
         notes=_classification_note(totals),
         **_assessment_fields(data),
         **_note_fields(data),
+        **_setup_fields(data, rule),
     )
+
+
+def _setup_fields(data: PeriodData, rule: EvaluationRule) -> dict[str, object]:
+    """The week's structures, counted (T-9).
+
+    Every number here goes through ``complete_horizons`` and the two narrow cores in
+    ``assessment_service``, so a PENDING horizon cannot be folded into a reached-count and the
+    quantiles are the same arithmetic ``/monitor`` publishes. A second implementation in this
+    module would drift, and the drift would look like a slightly better week.
+
+    A setup that never confirmed is counted as opened and excluded from every rate: it made no
+    claim, so there is nothing for it to have been right or wrong about.
+    """
+    from aureon.services.assessment_service import (
+        default_estimate_horizon,
+        excursions_from,
+        paired_outcome_from,
+    )
+
+    setups = data.sorted_setups()
+    horizon_id = default_estimate_horizon(rule)
+    threshold = rule.thresholds[0]
+
+    confirmed = [s for s in setups if s.reached_confirmation]
+    evaluations = [
+        data.setup_evaluations[s.setup_id]
+        for s in confirmed
+        if s.setup_id in data.setup_evaluations
+    ]
+    resolved = [e for e in evaluations if e.complete_horizons]
+    unresolved = [e for e in evaluations if not e.complete_horizons and e.pending_horizons]
+
+    by_family: dict[str, str] = {}
+    excursions_by_family: dict[str, str] = {}
+    families = sorted({e.family.value for e in resolved})
+    for family in families:
+        rows = [e for e in resolved if e.family.value == family]
+        paired = paired_outcome_from(
+            rows, horizon_id, favourable=threshold, adverse=threshold
+        )
+        by_family[family] = f"{paired.favourable_first}/{paired.evaluated}"
+        excursions_by_family[family] = _excursion_line(
+            *excursions_from(rows, horizon_id), n=len(rows)
+        )
+
+    return {
+        "setups_total": len(setups),
+        "setups_by_family": dict(sorted(Counter(s.family.value for s in setups).items())),
+        "setups_by_state": dict(sorted(Counter(s.state.value for s in setups).items())),
+        "setups_by_direction_context": dict(
+            sorted(Counter(s.direction_context.value for s in setups).items())
+        ),
+        "setups_confirmed": len(confirmed),
+        "setups_evaluated": len(resolved),
+        "setups_unresolved": len(unresolved),
+        "setup_reached_by_family": by_family,
+        "setup_excursions_by_family": excursions_by_family,
+        "setups_with_immature_reference": sum(
+            1 for s in setups if s.reference.measured and s.reference.immature
+        ),
+    }
+
+
+def _excursion_line(mfe: list[float], mae: list[float], *, n: int) -> str:
+    """The measured excursions as one stable line, in points.
+
+    ``median`` and ``quantile`` from ``evaluation.stats`` -- the same functions behind every
+    other quantile in this system. "no complete horizons" rather than zeros when there is
+    nothing to measure: a zero excursion is a measurement, and an absent one is not.
+    """
+    from aureon.evaluation.stats import median, quantile
+
+    if not mfe and not mae:
+        return "no complete horizons"
+    parts = []
+    favourable = median(mfe)
+    if favourable is not None:
+        parts.append(f"mfe p50={favourable:g}")
+    adverse = quantile(mae, 0.75)
+    if adverse is not None:
+        parts.append(f"mae p75={adverse:g}")
+    parts.append(f"n={n}")
+    return " · ".join(parts)
 
 
 def _assessment_fields(data: PeriodData) -> dict[str, object]:

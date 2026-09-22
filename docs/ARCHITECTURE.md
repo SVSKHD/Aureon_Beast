@@ -341,12 +341,153 @@ with a `FailureCode`, where it is testable.
 
 ## Setups
 
-*Lands in T-6 through T-9 and this section is written when it does.* The shape it will have:
-`setups` with a deterministic id and an `events` sub-collection, a state machine gated by
-`assert_transition`, families whose thresholds live in `symbol_tuning` and are versioned, and a
-`reference` block filled from the existing measured-cohort machinery rather than from a new TP/SL
-engine. The engine will run inside the observer after the agents, will import nothing from
-`aureon.execution`, and will never mutate a detection.
+A detection is a fact about one closed candle. A **setup** is a claim about a sequence — that a
+level was swept, reclaimed and confirmed — and it therefore has the one thing a detection must
+never have: a state that changes. Everything below follows from that.
+
+### Where it runs, and what it may touch
+
+The setup engine (`aureon/services/setup_engine.py`) runs **inside the observer**, after the
+agents and after the context, on each closed M5 candle. It reads detections, levels, indicators
+and the volume profile from what the observer already computed for the detections — nothing is
+recomputed and nothing is re-fetched, so the setup engine and the agents cannot disagree about
+what EMA(20) was. It writes `setups` and their events through `SetupRepository`.
+
+It imports nothing from `aureon.execution` and holds no broker handle: `services` is on the
+observation side of `OBSERVER_SIDE` in the boundary suite, which enforces both. It never mutates
+a detection — a setup *references* the detection that advanced it, one way, because detections
+are immutable.
+
+**A setup reaching CONFIRMED posts a card and nothing else happens.** There is no path from any
+state of any setup to an order.
+
+### The four families
+
+Each is a shape with a beginning, a middle and a way of being wrong, which is what makes it
+measurable. The vocabulary is closed for the same reason the ops register's is: an open one grows
+near-duplicates no review can group by.
+
+| family | the shape | how it fails |
+| --- | --- | --- |
+| `LIQUIDITY_REVERSAL` | price sweeps a level and comes back | a close beyond the sweep extreme |
+| `BREAKOUT_ACCEPTANCE` | price breaks a level and stays | a close back inside — `FAKEOUT_RISK` first, `INVALIDATED` only if it holds |
+| `TREND_PULLBACK` | an established trend pulls back into its EMA zone and resumes | a close through the slow EMA against the trend |
+| `MOMENTUM_TRANSITION` | the EMA pair narrows, the fast slope turns, the cross lands | the gap widening again without one |
+
+Every threshold lives in `aureon/config/symbol_tuning.py`'s setup section, is versioned, and is
+expressed in **ATR multiples** rather than points: a distance in points is different money per
+instrument (decision 141) and the same market distance in ATR on both. Every number there is a
+placeholder — no real session has produced a setup.
+
+### The document, its history, and the id
+
+`{prefix}_setups/{setup_id}` holds where a setup is now.
+`{prefix}_setups/{setup_id}/events/{event_id}` holds how it got there, one row per change, with
+the context that was true at the time. The split is the one §21 makes between a detection and its
+evaluations, for the same reason: a summary carrying its own history grows without bound, and an
+unbounded array is how a document comes to fail its write at a size limit nobody was watching.
+So every list on the summary is capped and `event_count` is a number.
+
+`setup_id` is a hash over `account_scope | symbol | timeframe | family | direction_context |
+market_date | anchor_kind | anchor_price_bin | setup_version`, with the same separator and 32-hex
+convention as a detection's. **One open setup per that tuple is not a separate rule — it is what
+the id means**: a new anchor opens a new setup, the same anchor re-derives the same id and finds
+the setup already there. A level tested twice in one day is one setup with two histories of
+events; `market_date` is what stops it being one setup across a week.
+
+`event_id` is a hash over `(setup_id, candle_close, event_type)`, which makes every write
+idempotent: a candle re-processed after a restart, or replayed from the archive, derives the same
+ids and writes nothing.
+
+### The state machine, and the one transaction
+
+```
+OBSERVING → WATCH → DEVELOPING → CONFIRMED → PULLBACK → CONTINUATION → COMPLETED
+                                     ↘ FAKEOUT_RISK ↙
+        any non-terminal state → INVALIDATED        COMPLETED / INVALIDATED are terminal
+```
+
+Every state write passes `assert_setup_transition`. Expiry is recorded as `INVALIDATED` with
+reason `expired` rather than as a state of its own — a setup that ran out of candles is a setup
+whose claim was not borne out, and a separate state would be a second answer to "did it work".
+
+`SetupRepository.record` writes the state change **and** its event in **one Firestore
+transaction**. That is the only reason the two can be trusted together: without it, two observers
+on the same candle could both read `OBSERVING`, both write `WATCH`, and both increment a count
+read before the other's write — leaving the document and its history disagreeing. The emulator
+suite exercises exactly that race.
+
+### The seventeen observations (T-8)
+
+`aureon/engine/watch_events.py` emits `WATCH_*` events — proximity to a level, an EMA gap or
+slope, an RSI turn, tick-volume expansion, a profile reclaim or rejection, breakout pressure.
+They are **setup events with `from_state == to_state`**, not detections, and the model refuses any
+other shape. "Price is near the previous day's high" is true on dozens of consecutive candles and
+is not a finding: minting a detection for each would double the detections collection with rows
+nothing measures, silently changing the meaning of every hit rate computed over it.
+
+Each observation names the families it is relevant to, and one about a level carries the level's
+price so it attaches only to setups anchored in the same bin the id uses.
+
+The vocabulary is policed: `absorption`, `footprint` and `order flow` appear nowhere in the
+models, the embeds or the docs, and `delta` is banned in its market sense (`volume delta`,
+`cumulative delta`, …) but not as arithmetic. Volume is always `tick_volume` — MT5 reports the
+number of price *changes* in a bar, and calling it anything else would be a claim this system
+cannot support.
+
+### Outcomes: measured by the machinery that measures detections
+
+A setup's outcome is measured **from the CONFIRMED candle**. Before that there is no claim to be
+right or wrong about: an OBSERVING setup is "a level is nearby", which is not a prediction.
+
+`aureon/services/setup_evaluation.py` measures nothing itself. It feeds the existing
+`OutcomeTracker` — the same class, the same frozen rule, the same `point` — an in-memory
+`Detection` standing for the confirmation, and re-keys the result onto the setup in
+`{prefix}_setup_evaluations/{setup_id}__{rule_id}`. **That subject is never stored**, and it
+carries the setup's own id so that if it ever reached `detections` by accident it would be
+obvious rather than plausible. One definition of an outcome in the system; a second measurement
+here would differ from the first on the first gap over a weekend, with no way to tell which was
+right.
+
+`confirmed_at` is stored on the setup rather than derived, because it is not derivable: a setup
+that confirmed and then invalidated and one that invalidated from WATCH both read `INVALIDATED`,
+and only the first ever made a claim.
+
+### The reference block (T-9)
+
+Every setup carries a `reference`: a **measured cohort of what past setups of the same shape
+did**, built by `aureon/services/setup_reference.py` from `setup_evaluations` rows on strictly
+earlier broker days.
+
+It reuses `/monitor`'s arithmetic rather than repeating it — the same `quantile` and
+`wilson_interval`, the same `TP_QUANTILES`/`SL_QUANTILES` pairs, the same `MIN_COHORT` floor, the
+same `MATURE_REAL_DAYS` maturity rule and the same `classify_dates`. What differs is the
+population and the cohort dimensions: symbol, family and direction context are never mixed, and
+`price_vs_va`, `mtf_alignment` and `volatility_regime` are given up one at a time, in that order,
+when there is not enough history — and the block **says which** it gave up.
+
+Four things keep it from reading as an instruction:
+
+* it publishes **points and no prices**. A price would render as a level on a card beside a
+  chart, at a plausible distance from the market, which is indistinguishable from a target;
+* below `MIN_COHORT` it publishes **no percentages at all**, only `insufficient` and the n;
+* every rendering carries `SetupReference.caption`, which is the constant "historical reference ·
+  measured cohort · research context" plus the n, "immature history" where the cohort spans fewer
+  than `MATURE_REAL_DAYS` verified broker days, and which dimensions were widened away;
+* it is measured **at open and never rewritten**, so a screenshot can be reproduced and the
+  block answers "what did the record say when this was first noticed".
+
+Nothing reads it to decide anything. A boundary test walks the engine's AST and fails on a
+`.reference` read off anything but `self`.
+
+### What a week says about them
+
+The weekly review — never the daily one — gains a setups section: setups opened, by family, state
+and direction context; how many reached CONFIRMED; how many have a complete horizon and how many
+are still unresolved; the reached count per family with its denominator; the measured excursions
+per family; and how many carried an immature reference. A setup's sequences do not fit inside a
+broker day, so a daily section would report a week's structures three times with a different
+incomplete answer each time.
 
 ---
 

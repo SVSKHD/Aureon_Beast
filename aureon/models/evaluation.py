@@ -15,8 +15,6 @@ stored result meant.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from pydantic import ConfigDict, Field, model_validator
 
 from aureon.models.base import AureonDocument, AureonModel, UtcDatetime
@@ -31,8 +29,15 @@ from aureon.models.enums import (
     Timeframe,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from aureon.models.setup import SetupContextSummary
+# At runtime, not under TYPE_CHECKING, and not deferred into the default factory either.
+#
+# ``SetupEvaluation.context_summary`` is annotated with this type, so pydantic cannot build the
+# class without it -- and a forward reference it cannot resolve does not fail at import: it fails
+# on the first validation, with "SetupEvaluation is not fully defined", at whatever moment
+# something first tried to read a stored outcome. The import is safe because ``models.setup``
+# imports ``models.assessment``, ``models.base`` and ``models.enums`` and nothing from here, so
+# there is no cycle to avoid (T-9).
+from aureon.models.setup import SetupContextSummary
 
 
 def threshold_key(value: float) -> str:
@@ -251,7 +256,41 @@ class HorizonResult(AureonModel):
         return self.reached.get(threshold_key(threshold))
 
 
-class SetupEvaluation(AureonDocument):
+class HorizonView:
+    """The three status accessors, shared by every document that holds ``HorizonResult``s.
+
+    A mixin rather than a copy on each class, because the rule it enforces is the one §22 exists
+    for: a PENDING horizon must never be countable as a miss. Two copies of ``complete_horizons``
+    would be two chances for one of them to drift, and the drift would look like a slightly
+    better hit rate rather than like a bug.
+    """
+
+    horizons: tuple[HorizonResult, ...]
+
+    @property
+    def complete_horizons(self) -> tuple[HorizonResult, ...]:
+        """The ONLY accessor review code may use (Phase 3).
+
+        Phase 7 aggregates through this property so a PENDING horizon can never be silently
+        counted as a miss. A lint test greps ``aureon/reviews`` for direct ``.horizons`` access
+        to keep it that way.
+        """
+        return tuple(h for h in self.horizons if h.status is HorizonStatus.COMPLETE)
+
+    @property
+    def pending_horizons(self) -> tuple[HorizonResult, ...]:
+        return tuple(h for h in self.horizons if h.status is HorizonStatus.PENDING)
+
+    @property
+    def invalid_horizons(self) -> tuple[HorizonResult, ...]:
+        return tuple(h for h in self.horizons if h.status is HorizonStatus.INVALID)
+
+    @property
+    def is_fully_evaluated(self) -> bool:
+        return not self.pending_horizons
+
+
+class SetupEvaluation(HorizonView, AureonDocument):
     """What a setup did after it confirmed, under one rule (12, T-7).
 
     Stored at ``setup_evaluations/{setup_id}__{rule_id}``, and separate from the setup for the
@@ -283,19 +322,11 @@ class SetupEvaluation(AureonDocument):
     reference_price: ReferencePrice
     reference_value: float | None = None
     horizons: tuple[HorizonResult, ...] = ()
-    context_summary: SetupContextSummary = Field(
-        default_factory=lambda: _default_context_summary()
-    )
+    context_summary: SetupContextSummary = Field(default_factory=SetupContextSummary)
     updated_at: UtcDatetime | None = None
 
 
-def _default_context_summary():
-    from aureon.models.setup import SetupContextSummary as _Summary
-
-    return _Summary()
-
-
-class DetectionEvaluation(AureonDocument):
+class DetectionEvaluation(HorizonView, AureonDocument):
     """Outcomes for one detection under one rule (§22).
 
     Stored at ``detection_evaluations/{detection_id}__{rule_id}``. Separate from
@@ -329,25 +360,3 @@ class DetectionEvaluation(AureonDocument):
         if len(ids) != len(set(ids)):
             raise ValueError(f"{self.detection_id}: duplicate horizon results {ids}")
         return self
-
-    @property
-    def complete_horizons(self) -> tuple[HorizonResult, ...]:
-        """The ONLY accessor review code may use (Phase 3).
-
-        Phase 7 aggregates through this property so a PENDING horizon can never
-        be silently counted as a miss. A lint test greps ``aureon/reviews`` for
-        direct ``.horizons`` access to keep it that way.
-        """
-        return tuple(h for h in self.horizons if h.status is HorizonStatus.COMPLETE)
-
-    @property
-    def pending_horizons(self) -> tuple[HorizonResult, ...]:
-        return tuple(h for h in self.horizons if h.status is HorizonStatus.PENDING)
-
-    @property
-    def invalid_horizons(self) -> tuple[HorizonResult, ...]:
-        return tuple(h for h in self.horizons if h.status is HorizonStatus.INVALID)
-
-    @property
-    def is_fully_evaluated(self) -> bool:
-        return not self.pending_horizons

@@ -226,6 +226,9 @@ class Observer:
         #: 12 T-7. One per symbol, beside the setup engine. Each holds an ``OutcomeTracker`` over
         #: the SAME frozen rule the detections use, so there is one definition of an outcome.
         self.setup_evaluators: dict[str, object] = {}
+        #: 12 T-9. One reference book per symbol, holding the past outcomes a new setup is
+        #: measured against. Empty without a Firestore client, like the engines above.
+        self.setup_references: dict[str, object] = {}
         #: 11A F-3. Read once per connection; see ``_account_mode``.
         self._cached_account_mode: object | None = None
         #: 11A F-15. Optional: an observer without one still observes, it just says nothing
@@ -1496,11 +1499,26 @@ def _wire_setups(observer: Observer, config: AureonConfig, client: object) -> No
     same ``opened_at`` the live session did, or every replayed setup differs from its original in
     a field nobody meant to compare -- and the live-vs-replay check would report a difference
     that is only the clock.
+
+    ## The reference book (T-9)
+
+    Each engine is handed a callable that measures a new setup against the record of past ones.
+    A callable rather than the book itself, so the engine depends on "something that returns a
+    block" and not on Firestore, a rule or an evidence directory -- which is what keeps every
+    lifecycle test in ``test_setup_engine`` constructible without any of the three.
+
+    ``verified_market_dates`` is read ONCE per process here, not per setup. It reads a directory,
+    and a filesystem walk inside the candle loop is the kind of cost that only shows up in
+    production. The consequence is stated rather than hidden: a session verified while the
+    observer is running is not counted until the next restart, which matters for one field on a
+    research block and for nothing else.
     """
     from aureon.config.symbol_tuning import tuning_for
     from aureon.evaluation.rules import get_rule
+    from aureon.services.session_evidence import verified_market_dates
     from aureon.services.setup_engine import SetupEngine
     from aureon.services.setup_evaluation import SetupEvaluator
+    from aureon.services.setup_reference import ReferenceBook
     from aureon.storage.setup_repository import (
         SetupEvaluationRepository,
         SetupRepository,
@@ -1510,6 +1528,15 @@ def _wire_setups(observer: Observer, config: AureonConfig, client: object) -> No
     evaluations = SetupEvaluationRepository(client)
     for symbol in config.symbols:
         point = tuning_for(symbol).point
+        rule = get_rule(config.rule_id_for(symbol))
+        book = ReferenceBook(
+            symbol=symbol,
+            rule=rule,
+            repository=evaluations,
+            real_days=verified_market_dates(symbol),
+            now=lambda: observer._setup_clock,
+        )
+        observer.setup_references[symbol] = book
         observer.setups[symbol] = SetupEngine(
             account_scope=config.account_scope,
             symbol=symbol,
@@ -1517,10 +1544,11 @@ def _wire_setups(observer: Observer, config: AureonConfig, client: object) -> No
             repository=repository,
             point=point,
             market_tz=config.market_tz,
+            reference=book.for_setup,
             now=lambda: observer._setup_clock,
         )
         observer.setup_evaluators[symbol] = SetupEvaluator(
-            rule=get_rule(config.rule_id_for(symbol)),
+            rule=rule,
             market_tz=config.market_tz,
             point=point,
             repository=evaluations,

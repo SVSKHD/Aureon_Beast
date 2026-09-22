@@ -51,7 +51,7 @@ the one deliberate choice -- because a distance in points is different money per
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -723,6 +723,7 @@ class SetupEngine:
         point: float,
         market_tz: str,
         families: Sequence[Family] = FAMILIES,
+        reference: Callable[[Setup], Any] | None = None,
         now: Any = utc_now,
     ) -> None:
         self.account_scope = account_scope
@@ -732,6 +733,10 @@ class SetupEngine:
         self.point = point
         self.market_tz = market_tz
         self.families = tuple(families)
+        #: T-9. Given a setup about to be created, returns the measured historical block to
+        #: attach. Optional and never consulted for anything else: the engine's decisions do not
+        #: read it, and an engine constructed without one tracks exactly the same setups.
+        self.reference = reference
         self._now = now
         self._tracked: dict[str, Setup] = {}
         self._loaded_date: str | None = None
@@ -939,6 +944,14 @@ class SetupEngine:
             setup_version=tuning.version,
             params_snapshot=tuning.snapshot(),
         )
+        if self.reference is not None:
+            # Measured once, at open, and never rewritten -- see ``setup_reference``. A failure
+            # here costs the block, not the setup: an unmeasured reference says "nothing measured
+            # yet", which is the truth, and observation continues either way.
+            try:
+                setup = setup.model_copy(update={"reference": self.reference(setup)})
+            except Exception:  # noqa: BLE001
+                log.exception("could not attach a reference to setup %s", identifier)
         try:
             stored = self.repository.open(setup, now=moment)
         except Exception:  # noqa: BLE001 - a storage failure must not stop observation
