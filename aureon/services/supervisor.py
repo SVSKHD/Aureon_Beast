@@ -117,22 +117,47 @@ class AureonSupervisor:
                     return code if code != 0 else 1
             time.sleep(poll_seconds)
 
-    def stop(self, *, timeout_seconds: float = 10.0) -> None:
+    def stop(
+        self,
+        *,
+        cooperative_seconds: float = 3.0,
+        terminate_seconds: float = 7.0,
+    ) -> None:
+        """Stop the stack without turning Ctrl-C into an immediate hard kill.
+
+        On Windows a console Ctrl-C is delivered to the parent and its children.
+        Aureon's child entrypoints already handle that signal and flush/close their
+        own resources. Give them a short window to do so first. Only children still
+        alive after that are terminated, then killed as the final fallback.
+        """
         alive = [(name, p) for name, p in self.processes.items() if p.poll() is None]
+        if not alive:
+            return
+
+        cooperative_deadline = time.monotonic() + cooperative_seconds
         for name, process in reversed(alive):
-            log.info("stopping %s", name)
+            remaining = max(0.0, cooperative_deadline - time.monotonic())
+            try:
+                process.wait(timeout=remaining)
+                log.info("%s stopped cleanly", name)
+            except subprocess.TimeoutExpired:
+                pass
+
+        stubborn = [(name, p) for name, p in alive if p.poll() is None]
+        for name, process in reversed(stubborn):
+            log.warning("%s still running; terminating it", name)
             try:
                 process.terminate()
             except OSError:
                 pass
 
-        deadline = time.monotonic() + timeout_seconds
-        for name, process in reversed(alive):
-            remaining = max(0.0, deadline - time.monotonic())
+        terminate_deadline = time.monotonic() + terminate_seconds
+        for name, process in reversed(stubborn):
+            remaining = max(0.0, terminate_deadline - time.monotonic())
             try:
                 process.wait(timeout=remaining)
             except subprocess.TimeoutExpired:
-                log.warning("%s did not stop cleanly; killing it", name)
+                log.error("%s refused termination; killing it", name)
                 try:
                     process.kill()
                 except OSError:
@@ -150,7 +175,7 @@ class AureonSupervisor:
             log.info("Aureon is running (%s)", ", ".join(self.processes))
             return self.wait()
         except KeyboardInterrupt:
-            log.info("interrupted")
+            log.info("interrupted; waiting for child services to flush and stop")
             return 0
         except Exception:
             log.exception("supervisor startup/runtime failure")
