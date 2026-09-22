@@ -1102,6 +1102,7 @@ Lifecycle of a human-initiated trade request (§25).
 | `REQUESTED` | `requested` |
 | `CONFIRMED` | `confirmed` |
 | `EXECUTING` | `executing` |
+| `RECONCILING` | `reconciling` |
 | `PENDING` | `pending` |
 | `PARTIALLY_FILLED` | `partially_filled` |
 | `FILLED` | `filled` |
@@ -1297,7 +1298,8 @@ Every status write goes through `aureon.models.enums.assert_transition`
 |---|---|
 | `requested` | `cancelled`, `confirmed`, `expired` |
 | `confirmed` | `cancelled`, `executing`, `failed`, `failed_stale` |
-| `executing` | `failed`, `failed_reconciliation`, `filled`, `partially_filled`, `pending` |
+| `executing` | `failed`, `failed_reconciliation`, `filled`, `partially_filled`, `pending`, `reconciling` |
+| `reconciling` | `failed_reconciliation`, `filled`, `partially_filled`, `pending` |
 | `pending` | `cancelled`, `expired`, `failed_reconciliation`, `filled`, `partially_filled` |
 | `partially_filled` | `cancelled`, `expired`, `failed_reconciliation`, `filled`, `partially_filled` |
 | `filled` | _terminal_ |
@@ -1367,6 +1369,538 @@ the instant the detection became knowable.
 sha256(request_id) = 10 chars, inside MT5's 31-character
 comment field (decision 5). Deterministic so an executor that crashed mid-send
 re-derives exactly the token it stamped.
+
+---
+
+## Tables (local PostgreSQL)
+
+**Generated from `aureon/storage/postgres/tables.py`.** The application truth from
+Phase 13 (plan §2). MT5 remains broker truth, parquet remains the candle archive,
+and the SQLite outbox remains local durability.
+
+Schema revision **0001** (`alembic_version`). `python
+scripts/migrate.py check` FAILS when the database is behind this OR ahead of it:
+an older build against a newer schema writes NULL into every column it does not
+know about, silently (C-7).
+
+24 tables. Column rule (plan §7): relational for anything filtered,
+ordered, identified, claimed or transitioned on; `JSONB` for frozen context read
+back whole. Tick data is never stored here.
+
+| table | columns | indexes |
+|---|---|---|
+| `alerts` | 14 | 2 |
+| `assessments` | 17 | 3 |
+| `audit_logs` | 12 | 3 |
+| `control_requests` | 14 | 2 |
+| `daily_reviews` | 7 | 1 |
+| `detection_evaluations` | 10 | 1 |
+| `detections` | 24 | 4 |
+| `heartbeats` | 5 | 0 |
+| `market_day_frames` | 10 | 1 |
+| `market_days` | 16 | 2 |
+| `notifications` | 10 | 2 |
+| `ops_events` | 10 | 2 |
+| `sessions` | 20 | 1 |
+| `settings` | 6 | 0 |
+| `setup_evaluations` | 16 | 1 |
+| `setup_events` | 12 | 1 |
+| `setups` | 22 | 4 |
+| `symbol_specs` | 4 | 0 |
+| `sync_batches` | 8 | 1 |
+| `system_state` | 7 | 1 |
+| `trade_notes` | 6 | 1 |
+| `trade_requests` | 35 | 4 |
+| `trades` | 29 | 4 |
+| `weekly_reviews` | 8 | 1 |
+
+### `alerts`
+
+| column | type | null |
+|---|---|---|
+| `alert_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `symbol` | `VARCHAR` | no |
+| `level` | `FLOAT` | no |
+| `side` | `VARCHAR` | no |
+| `status` | `VARCHAR` | no |
+| `requested_by` | `VARCHAR` | no |
+| `note` | `VARCHAR` | yes |
+| `cancelled_by` | `VARCHAR` | yes |
+| `created_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `expires_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `fired_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `fired_price` | `FLOAT` | yes |
+| `fired_snapshot` | `JSONB` | yes |
+
+Indexes: `ix_alerts_armed`, `ix_alerts_expires`
+
+### `assessments`
+
+| column | type | null |
+|---|---|---|
+| `assessment_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `detection_id` | `VARCHAR` | yes |
+| `symbol` | `VARCHAR` | no |
+| `rule_id` | `VARCHAR` | no |
+| `n` | `INTEGER` | no |
+| `insufficient` | `BOOLEAN` | no |
+| `disagrees_with_detection` | `BOOLEAN` | no |
+| `history_source` | `VARCHAR` | yes |
+| `real_days` | `INTEGER` | yes |
+| `created_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `trend_read` | `JSONB` | no |
+| `cohort_filter` | `JSONB` | no |
+| `confirmations` | `JSONB` | no |
+| `tp_estimates` | `JSONB` | no |
+| `sl_estimates` | `JSONB` | no |
+| `paired` | `JSONB` | yes |
+
+Indexes: `ix_assessments_detection`, `ix_assessments_provenance`, `ix_assessments_symbol_created`
+
+### `audit_logs`
+
+| column | type | null |
+|---|---|---|
+| `audit_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `actor` | `VARCHAR` | no |
+| `action` | `VARCHAR` | no |
+| `collection` | `VARCHAR` | yes |
+| `document_id` | `VARCHAR` | yes |
+| `from_status` | `VARCHAR` | yes |
+| `to_status` | `VARCHAR` | yes |
+| `reason` | `VARCHAR` | yes |
+| `reconciliation` | `BOOLEAN` | no |
+| `detail` | `JSONB` | no |
+
+Indexes: `ix_audit_logs_actor`, `ix_audit_logs_at`, `ix_audit_logs_document`
+
+### `control_requests`
+
+| column | type | null |
+|---|---|---|
+| `control_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `kind` | `VARCHAR` | no |
+| `status` | `VARCHAR` | no |
+| `target` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | yes |
+| `volume` | `FLOAT` | yes |
+| `requested_by` | `VARCHAR` | no |
+| `requested_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `completed_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `executor_instance_id` | `VARCHAR` | yes |
+| `lease_expires_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `failure_code` | `VARCHAR` | yes |
+| `failure_message` | `VARCHAR` | yes |
+
+Indexes: `ix_control_requests_claim`, `ix_control_requests_lease`
+
+### `daily_reviews`
+
+| column | type | null |
+|---|---|---|
+| `id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `market_date` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | yes |
+| `generated_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `evaluation_rule_id` | `VARCHAR` | yes |
+| `review` | `JSONB` | no |
+
+Indexes: `ix_daily_reviews_date`
+
+### `detection_evaluations`
+
+| column | type | null |
+|---|---|---|
+| `id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `detection_id` | `VARCHAR` | no |
+| `rule_id` | `VARCHAR` | no |
+| `evaluation_rule_id` | `VARCHAR` | yes |
+| `reference_price` | `VARCHAR` | no |
+| `reference_value` | `FLOAT` | yes |
+| `context_tags` | `JSONB` | no |
+| `horizons` | `JSONB` | no |
+| `updated_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+
+Indexes: `ix_detection_evaluations_rule`
+
+Unique: `uq_detection_evaluation`
+
+### `detections`
+
+| column | type | null |
+|---|---|---|
+| `detection_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `account_scope` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | no |
+| `timeframe` | `VARCHAR` | no |
+| `agent_name` | `VARCHAR` | no |
+| `agent_version` | `VARCHAR` | no |
+| `event_key` | `VARCHAR` | no |
+| `direction` | `VARCHAR` | yes |
+| `candle_close_utc` | `TIMESTAMP WITH TIME ZONE` | no |
+| `candle_time_utc` | `TIMESTAMP WITH TIME ZONE` | no |
+| `timezone` | `VARCHAR` | no |
+| `market_date` | `VARCHAR` | no |
+| `price` | `FLOAT` | no |
+| `sequence_today` | `INTEGER` | no |
+| `sequence_session` | `INTEGER` | no |
+| `session` | `VARCHAR` | no |
+| `session_config_version` | `VARCHAR` | no |
+| `agent_params_snapshot` | `JSONB` | no |
+| `indicators` | `JSONB` | yes |
+| `levels` | `JSONB` | no |
+| `volume_profile_ref` | `JSONB` | yes |
+| `volatility` | `JSONB` | yes |
+| `mtf` | `JSONB` | yes |
+
+Indexes: `ix_detections_agent_close`, `ix_detections_market_date`, `ix_detections_symbol_close`, `ix_detections_symbol_date`
+
+### `heartbeats`
+
+| column | type | null |
+|---|---|---|
+| `service` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `updated_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `instance_id` | `VARCHAR` | yes |
+| `detail` | `JSONB` | no |
+
+### `market_day_frames`
+
+| column | type | null |
+|---|---|---|
+| `id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `symbol` | `VARCHAR` | no |
+| `market_date` | `VARCHAR` | no |
+| `timeframe` | `VARCHAR` | no |
+| `timezone` | `VARCHAR` | no |
+| `truncated` | `BOOLEAN` | no |
+| `complete` | `BOOLEAN` | no |
+| `updated_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `bars` | `JSONB` | no |
+
+Indexes: `ix_market_day_frames_key` (unique)
+
+### `market_days`
+
+| column | type | null |
+|---|---|---|
+| `id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `symbol` | `VARCHAR` | no |
+| `market_date` | `VARCHAR` | no |
+| `timezone` | `VARCHAR` | no |
+| `complete` | `BOOLEAN` | no |
+| `open` | `FLOAT` | yes |
+| `high` | `FLOAT` | yes |
+| `low` | `FLOAT` | yes |
+| `close` | `FLOAT` | yes |
+| `bars` | `INTEGER` | no |
+| `tick_volume` | `BIGINT` | no |
+| `first_bar_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `last_bar_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `updated_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `frames` | `JSONB` | no |
+
+Indexes: `ix_market_days_complete`, `ix_market_days_symbol_date` (unique)
+
+### `notifications`
+
+| column | type | null |
+|---|---|---|
+| `notification_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `kind` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | no |
+| `ref_id` | `VARCHAR` | no |
+| `channel_id` | `VARCHAR` | no |
+| `status` | `VARCHAR` | no |
+| `sent_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `message_id` | `VARCHAR` | yes |
+| `failure_message` | `VARCHAR` | yes |
+
+Indexes: `ix_notifications_ref`, `ix_notifications_status`
+
+### `ops_events`
+
+| column | type | null |
+|---|---|---|
+| `event_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `name` | `VARCHAR` | no |
+| `scope` | `VARCHAR` | yes |
+| `service` | `VARCHAR` | yes |
+| `active` | `BOOLEAN` | no |
+| `since` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `updated_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `onsets` | `INTEGER` | no |
+| `detail` | `JSONB` | no |
+
+Indexes: `ix_ops_events_active`, `ix_ops_events_updated`
+
+### `sessions`
+
+| column | type | null |
+|---|---|---|
+| `session_doc_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `session_id` | `VARCHAR` | no |
+| `account_scope` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | no |
+| `timeframe` | `VARCHAR` | no |
+| `session` | `VARCHAR` | no |
+| `market_date` | `VARCHAR` | no |
+| `session_config_version` | `VARCHAR` | no |
+| `started_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `ended_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `open` | `FLOAT` | yes |
+| `high` | `FLOAT` | yes |
+| `low` | `FLOAT` | yes |
+| `close` | `FLOAT` | yes |
+| `trend` | `VARCHAR` | yes |
+| `change` | `FLOAT` | yes |
+| `change_points` | `FLOAT` | yes |
+| `range` | `FLOAT` | yes |
+| `candle_count` | `INTEGER` | no |
+
+Indexes: `ix_sessions_symbol_date`
+
+### `settings`
+
+| column | type | null |
+|---|---|---|
+| `name` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `settings_version` | `INTEGER` | no |
+| `updated_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `updated_by` | `VARCHAR` | yes |
+| `value` | `JSONB` | no |
+
+### `setup_evaluations`
+
+| column | type | null |
+|---|---|---|
+| `id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `setup_id` | `VARCHAR` | no |
+| `rule_id` | `VARCHAR` | no |
+| `evaluation_rule_id` | `VARCHAR` | yes |
+| `family` | `VARCHAR` | no |
+| `direction_context` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | no |
+| `timeframe` | `VARCHAR` | no |
+| `market_date` | `VARCHAR` | no |
+| `setup_version` | `VARCHAR` | no |
+| `reference_price` | `VARCHAR` | no |
+| `reference_value` | `FLOAT` | yes |
+| `context_summary` | `JSONB` | no |
+| `horizons` | `JSONB` | no |
+| `updated_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+
+Indexes: `ix_setup_evaluations_cohort`
+
+Unique: `uq_setup_evaluation`
+
+### `setup_events`
+
+| column | type | null |
+|---|---|---|
+| `event_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `setup_id` | `VARCHAR` | no |
+| `event_type` | `VARCHAR` | no |
+| `from_state` | `VARCHAR` | no |
+| `to_state` | `VARCHAR` | no |
+| `linked_detection_id` | `VARCHAR` | yes |
+| `market_time_utc` | `TIMESTAMP WITH TIME ZONE` | no |
+| `timezone` | `VARCHAR` | no |
+| `created_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `context_snapshot` | `JSONB` | no |
+| `reason` | `VARCHAR` | yes |
+
+Indexes: `ix_setup_events_setup_created`
+
+### `setups`
+
+| column | type | null |
+|---|---|---|
+| `setup_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `account_scope` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | no |
+| `timeframe` | `VARCHAR` | no |
+| `family` | `VARCHAR` | no |
+| `direction_context` | `VARCHAR` | no |
+| `state` | `VARCHAR` | no |
+| `market_date` | `VARCHAR` | no |
+| `invalidation_price` | `FLOAT` | yes |
+| `opened_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `updated_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `confirmed_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `closed_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `last_event_id` | `VARCHAR` | yes |
+| `event_count` | `INTEGER` | no |
+| `setup_version` | `VARCHAR` | no |
+| `anchor` | `JSONB` | no |
+| `linked_detection_ids` | `JSONB` | no |
+| `context_summary` | `JSONB` | no |
+| `reference` | `JSONB` | yes |
+| `params_snapshot` | `JSONB` | no |
+
+Indexes: `ix_setups_family_state`, `ix_setups_symbol_date`, `ix_setups_symbol_state`, `ix_setups_updated`
+
+### `symbol_specs`
+
+| column | type | null |
+|---|---|---|
+| `symbol` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `updated_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `spec` | `JSONB` | no |
+
+### `sync_batches`
+
+| column | type | null |
+|---|---|---|
+| `batch_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `status` | `VARCHAR` | no |
+| `started_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `finished_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `tables_sent` | `JSONB` | no |
+| `row_counts` | `JSONB` | no |
+| `failure_message` | `VARCHAR` | yes |
+
+Indexes: `ix_sync_batches_started`
+
+### `system_state`
+
+| column | type | null |
+|---|---|---|
+| `id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `symbol` | `VARCHAR` | no |
+| `timeframe` | `VARCHAR` | no |
+| `market_state` | `VARCHAR` | no |
+| `updated_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `state` | `JSONB` | no |
+
+Indexes: `ix_system_state_symbol` (unique)
+
+### `trade_notes`
+
+| column | type | null |
+|---|---|---|
+| `note_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `trade_id` | `VARCHAR` | no |
+| `author` | `VARCHAR` | no |
+| `text` | `VARCHAR` | no |
+| `at` | `TIMESTAMP WITH TIME ZONE` | no |
+
+Indexes: `ix_trade_notes_trade`
+
+### `trade_requests`
+
+| column | type | null |
+|---|---|---|
+| `request_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `status` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | no |
+| `order_type` | `VARCHAR` | no |
+| `volume` | `FLOAT` | no |
+| `price` | `FLOAT` | yes |
+| `sl` | `FLOAT` | yes |
+| `tp` | `FLOAT` | yes |
+| `deviation_points` | `INTEGER` | no |
+| `filling_mode` | `VARCHAR` | yes |
+| `requested_by` | `VARCHAR` | no |
+| `requested_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `confirmed_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `confirmed_by` | `VARCHAR` | yes |
+| `expires_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `confirmation_version` | `INTEGER` | no |
+| `detection_id` | `VARCHAR` | yes |
+| `link_type` | `VARCHAR` | yes |
+| `executor_instance_id` | `VARCHAR` | yes |
+| `lease_expires_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `execution_started_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `execution_attempt_id` | `VARCHAR` | yes |
+| `comment_token` | `VARCHAR` | yes |
+| `magic` | `BIGINT` | yes |
+| `order_ticket` | `BIGINT` | yes |
+| `position_id` | `BIGINT` | yes |
+| `deal_ids` | `JSONB` | no |
+| `fill_price` | `FLOAT` | yes |
+| `filled_volume` | `FLOAT` | yes |
+| `failure_code` | `VARCHAR` | yes |
+| `failure_message` | `VARCHAR` | yes |
+| `quote` | `JSONB` | yes |
+| `last_reconciled_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `last_synced_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+
+Indexes: `ix_trade_requests_claim`, `ix_trade_requests_detection`, `ix_trade_requests_lease`, `ix_trade_requests_symbol_status`
+
+### `trades`
+
+| column | type | null |
+|---|---|---|
+| `trade_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `mt5_position_id` | `BIGINT` | no |
+| `trade_request_id` | `VARCHAR` | yes |
+| `source` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | no |
+| `direction` | `VARCHAR` | no |
+| `volume` | `FLOAT` | no |
+| `open_price` | `FLOAT` | no |
+| `open_time_utc` | `TIMESTAMP WITH TIME ZONE` | no |
+| `timezone` | `VARCHAR` | no |
+| `sl` | `FLOAT` | yes |
+| `tp` | `FLOAT` | yes |
+| `magic` | `BIGINT` | yes |
+| `status` | `VARCHAR` | no |
+| `closed_volume` | `FLOAT` | no |
+| `close_price` | `FLOAT` | yes |
+| `close_time_utc` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `close_reason` | `VARCHAR` | no |
+| `close_reason_raw` | `VARCHAR` | yes |
+| `realized_pnl` | `FLOAT` | yes |
+| `commission` | `FLOAT` | no |
+| `swap` | `FLOAT` | no |
+| `detection_id` | `VARCHAR` | yes |
+| `link_type` | `VARCHAR` | yes |
+| `deal_ids` | `JSONB` | no |
+| `excursion` | `JSONB` | no |
+| `last_reconciled_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `last_synced_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+
+Indexes: `ix_trades_open_time`, `ix_trades_position` (unique), `ix_trades_request`, `ix_trades_symbol_status`
+
+### `weekly_reviews`
+
+| column | type | null |
+|---|---|---|
+| `id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `iso_year` | `INTEGER` | no |
+| `iso_week` | `INTEGER` | no |
+| `symbol` | `VARCHAR` | yes |
+| `generated_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `evaluation_rule_id` | `VARCHAR` | yes |
+| `review` | `JSONB` | no |
+
+Indexes: `ix_weekly_reviews_week`
 
 ---
 

@@ -18,6 +18,7 @@ from collections.abc import Iterator
 import pytest
 
 from aureon.storage.postgres.database import Database, redacted
+from aureon.storage.postgres.models import Base
 from tests.postgres_support import (
     admin_url,
     create_test_database,
@@ -69,3 +70,28 @@ def database(postgres_url: str) -> Iterator[Database]:
         yield instance
     finally:
         instance.dispose()
+
+
+@pytest.fixture
+def schema(database: Database) -> Iterator[Database]:
+    """A database with the tables created and emptied, per test.
+
+    Created with ``metadata.create_all`` rather than by running the migration, because
+    these tests are about the REPOSITORIES: running alembic per test would make every one
+    of them also a test of the migration, and a migration failure would then look like a
+    repository bug in forty places at once. ``tests/postgres/test_migrations.py`` is where
+    the migration is the subject.
+
+    Emptied between tests by truncating rather than dropping: dropping and recreating 24
+    tables per test is slow enough to change how often the suite gets run.
+    """
+    from sqlalchemy import text
+
+    from aureon.storage.postgres import tables  # noqa: F401  -- registers every table
+
+    with database.transaction() as connection:
+        Base.metadata.create_all(connection)
+    names = ", ".join(f'"{name}"' for name in Base.metadata.tables)
+    with database.transaction() as connection:
+        connection.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
+    yield database

@@ -112,6 +112,40 @@ def test_every_collection_appears_in_the_contracts_file() -> None:
     )
 
 
+def test_every_table_appears_in_the_contracts_file() -> None:
+    """The PostgreSQL half of the same rule (13 S-2).
+
+    ``docs/CONTRACTS.md``'s tables section is generated from ``Base.metadata``, so this
+    cannot drift while the generator is run -- which is exactly the failure it guards
+    against: a table added, the generator not run, and the checked-in contract silently
+    describing a schema that no longer exists. ``python scripts/gen_contracts.py --check``
+    is the other half and fails the same way.
+    """
+    from aureon.storage.postgres import tables as pg_tables  # noqa: F401  -- registers them
+    from aureon.storage.postgres.models import Base
+
+    contracts = (DOCS / "CONTRACTS.md").read_text(encoding="utf-8")
+    missing = [name for name in sorted(Base.metadata.tables) if f"### `{name}`" not in contracts]
+    assert not missing, (
+        "these tables are in the models and not in CONTRACTS.md -- run "
+        f"`python scripts/gen_contracts.py`: {missing}"
+    )
+
+
+def test_the_contracts_file_names_the_schema_revision() -> None:
+    """So a reader can tell which schema the checked-in contract describes.
+
+    A contracts file that did not say would be read as current whatever the code had moved
+    on to, which is the drift this whole file exists to catch.
+    """
+    from aureon.storage.postgres.schema import EXPECTED_REVISION
+
+    contracts = (DOCS / "CONTRACTS.md").read_text(encoding="utf-8")
+    assert f"**{EXPECTED_REVISION}**" in contracts, (
+        f"CONTRACTS.md does not name schema revision {EXPECTED_REVISION}"
+    )
+
+
 def test_no_collection_is_documented_that_does_not_exist() -> None:
     """The other direction: a collection removed from the code and left in the docs.
 

@@ -533,6 +533,15 @@ def test_no_bare_collection_literal_outside_paths() -> None:
     ``"detections"`` when everything else uses ``"aureon_beast_detections"`` silently
     touches a second, empty collection -- which looks exactly like "no data yet".
 
+    **The hazard is the PREFIX.** That is why the exemptions below are what they are, and
+    why Phase 13's files are on the list rather than the rule being softened: a Firestore
+    collection name carries a prefix that a bare literal omits, so the literal addresses
+    something real and empty. A PostgreSQL table name carries no prefix -- there is nothing
+    to omit, and ``Base.metadata.tables["detections"]`` is a lookup in the naming
+    authority's own registry, the exact equivalent of ``paths.DETECTIONS``. C-9 replaced
+    the prefix with a database NAME for this reason, and the conftest refusal is what
+    guards that instead (decision 348).
+
     Checked as string CONSTANTS via the AST, so a docstring or a dict key derived from a
     path does not trip it while a real ``client.collection("trades")`` does.
     """
@@ -542,15 +551,43 @@ def test_no_bare_collection_literal_outside_paths() -> None:
     # only a positive one fails -- if there happens to be one.
     scanned = [*AUREON.rglob("*.py"), *(REPO_ROOT / "tests").rglob("*.py")]
     # paths.py builds the names; its own test has to pass bare ones to test the builder;
-    # this file lists them to check for them. Those three, and nothing else.
+    # this file lists them to check for them.
+    #
+    # Phase 13 adds three more, on the SAME principle rather than as a widening: a file is
+    # exempt when it IS the naming authority, not when the rule is inconvenient there.
+    #
+    # * ``postgres/tables.py`` declares ``__tablename__ = "detections"``. That statement is
+    #   the definition of the name, exactly as ``paths.py``'s constants are -- it is the
+    #   relational store's ``paths.py``.
+    # * the alembic revisions are generated DDL. ``op.create_table("detections", ...)`` is
+    #   the table being created; there is no indirection available and a migration that
+    #   went through a helper could not be read against the schema it produces.
+    # * ``postgres/schema.py`` names the four money tables C-7 protects, as a literal tuple
+    #   the migration and the tests both assert against.
+    #
+    # Everything ELSE under aureon/storage/postgres -- every repository, in S-3 -- stays
+    # covered, which is the part that matters: a repository is where a wrong name silently
+    # reads an empty table.
     exempt = {
         paths_module,
         Path(__file__).resolve(),
         (REPO_ROOT / "tests" / "unit" / "test_paths.py").resolve(),
+        (AUREON / "storage" / "postgres" / "tables.py").resolve(),
+        (AUREON / "storage" / "postgres" / "schema.py").resolve(),
+        # The two S-2 tests whose SUBJECT is the set of table names: one pins C-5's 24 as a
+        # literal, the other C-7's four. A test that asserts a list of names has to spell
+        # them, which is exactly why ``test_paths.py`` is already here.
+        (REPO_ROOT / "tests" / "unit" / "test_schema_revision.py").resolve(),
+        (REPO_ROOT / "tests" / "postgres" / "test_migrations.py").resolve(),
+        # 13 S-3: pins which repositories must audit inside their transaction, by name. A
+        # test whose SUBJECT is a list of names has to spell them, same as the two above.
+        (REPO_ROOT / "tests" / "postgres" / "test_audit_discipline.py").resolve(),
     }
+    migrations = (AUREON / "storage" / "postgres" / "migrations").resolve()
     offenders: list[str] = []
     for path in sorted(scanned):
-        if path.resolve() in exempt:
+        resolved = path.resolve()
+        if resolved in exempt or resolved.is_relative_to(migrations):
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         innocent = _innocent_string_nodes(tree)

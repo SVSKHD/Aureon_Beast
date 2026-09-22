@@ -284,7 +284,10 @@ def test_skip_mt5_skips_and_never_passes(tmp_path) -> None:
     for name in terminal_checks:
         assert report.get(name).status is Status.SKIP
     assert report.ok, "a skip does not fail the run"
-    assert "5 checks not run" in report.summary(), (
+    # Six, not five: the migrations row also skips while the storage backend is still
+    # Firestore (13 S-2, decision 346). Counted rather than listed, because the point of
+    # the assertion is that a skip can never be read as a clean pass.
+    assert "6 checks not run" in report.summary(), (
         "and it must not be possible to read the summary as a clean pass"
     )
 
@@ -535,6 +538,9 @@ def test_a_clean_run_is_ready_and_exits_zero(tmp_path) -> None:
         "archive_dir",
         "credentials",
         "firestore",
+        # 13 S-2. SKIPs while the backend is still Firestore, and becomes a real check the
+        # moment S-4 switches it; it fails in both directions from then on (C-7).
+        "migrations",
         "trading_enabled",
         "mt5_init",
         "mt5_account",
