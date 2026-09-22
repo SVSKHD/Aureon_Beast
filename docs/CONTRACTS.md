@@ -859,6 +859,8 @@ What Discord announces, held at ``settings/notifications`` (9C).
 | `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
 | `enabled_kinds` | `tuple[str]` | no | `('ema_cross', 'wick', 'liquidity', 'breakout')` | agent_name values Discord posts an embed for (9C). |
 | `detections_enabled` | `bool` | no | `True` |  |
+| `setup_states` | `tuple[str]` | no | `('observing', 'watch', 'developing', 'confirmed', 'pullback', 'continuation', 'fakeout_risk', 'completed', 'invalidated', 'repeated_level_test', 'breakout_pressure', 'volume_expansion_at_level')` | Setup states and watch-event types Discord posts or edits a card for. |
+| `setups_enabled` | `bool` | no | `True` |  |
 | `updated_at` | `AwareDatetime \| null` | no | `None` |  |
 | `updated_by` | `str \| null` | no | `None` |  |
 

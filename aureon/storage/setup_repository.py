@@ -151,6 +151,34 @@ class SetupRepository:
                 found.append(setup)
         return sorted(found, key=lambda one: (one.opened_at, one.setup_id))
 
+    def changed_since(self, *, symbol: str, since: datetime) -> list[Setup]:
+        """Every setup for this symbol touched since ``since``, oldest change first.
+
+        The notifier's window read. ``updated_at`` rather than ``opened_at``, because a card is
+        posted or edited when a setup CHANGES and a setup opened yesterday can transition today.
+
+        Includes terminal setups, deliberately: COMPLETED and INVALIDATED are the two transitions
+        a reader most wants told about, and ``open_setups`` excludes exactly those. A notifier
+        built on ``open_setups`` would fall silent at the moment the story ended.
+
+        Filtered in Python after a symbol-scoped read, like every other window read in this
+        repository: the alternative is a composite index declared and deployed for a poll that
+        runs every few seconds over a collection holding tens of documents a day.
+        """
+        first = to_utc(since)
+        query = self._client.collection(paths.SETUPS).where("symbol", "==", symbol.upper())
+        found: list[Setup] = []
+        for document in query.stream():
+            try:
+                setup = Setup.model_validate(document.to_dict())
+            except Exception:  # noqa: BLE001 - one bad row must not hide the rest
+                log.warning("unreadable setup %s", getattr(document, "id", "?"), exc_info=True)
+                continue
+            touched = setup.updated_at or setup.opened_at
+            if to_utc(touched) >= first:
+                found.append(setup)
+        return sorted(found, key=lambda one: (one.updated_at or one.opened_at, one.setup_id))
+
     # ── writes ────────────────────────────────────────────────────────────────
 
     def open(self, setup: Setup, *, now: datetime | None = None) -> Setup:

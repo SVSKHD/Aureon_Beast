@@ -191,6 +191,35 @@ def reminder_embed(screen: Any) -> Any:
     return embed
 
 
+def setup_embed(screen: Any) -> Any:
+    """A setup card (12, T-11).
+
+    The neutral INFO colour whatever the state, like every other embed here and for the same
+    reason: a green card for CONFIRMED and a red one for INVALIDATED is approval and disapproval
+    drawn in colour, and a reader reaches the colour long before they reach the footer that says
+    the opposite. The state is a text badge instead.
+
+    The events go in the DESCRIPTION rather than a field, because they are the part that reads as
+    a story and Discord renders a description at full width. The reference block goes in its own
+    field, with its caption first, so the numbers can never appear without the words that say what
+    they are.
+    """
+    description = [screen.description] if screen.description else []
+    embed = _embed(screen.title, colour=COLOUR_INFO, description="\n".join(description) or None)
+    for name, value in screen.fields:
+        embed.add_field(name=name, value=value or "—", inline=True)
+    if screen.reference:
+        embed.add_field(
+            name="Historical reference",
+            value="\n".join(screen.reference),
+            inline=False,
+        )
+    if screen.chart_filename:
+        embed.set_image(url=f"attachment://{screen.chart_filename}")
+    embed.set_footer(text=screen.footer)
+    return embed
+
+
 def monitor_embed(screen: Any) -> Any:
     """A `/monitor` readout (9D).
 

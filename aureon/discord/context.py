@@ -33,6 +33,7 @@ from aureon.storage.settings_repository import (
     ExecutionSettingsRepository,
     NotificationSettingsRepository,
 )
+from aureon.storage.setup_reader import MarketDayReader, SetupReader
 from aureon.storage.symbol_repository import SymbolRepository
 from aureon.storage.system_state_repository import HeartbeatRepository, SystemStateRepository
 from aureon.storage.trade_repository import TradeRepository
@@ -84,6 +85,12 @@ class BotContext:
     #: only place they are read, and a reader-only wrapper for a collection nothing in Discord
     #: writes would be ceremony rather than a boundary.
     ops_events: OpsEventRepository | None = None
+    #: 12 T-11. Both deliberately READERS. ``setups`` is the observer's exclusively -- §71 does
+    #: not permit Discord to write it, and the transaction in ``SetupRepository.record`` is safe
+    #: precisely because one process writes. The day frames are the same: a chart reads bars, and
+    #: a bot that could rewrite one could make its own picture agree with itself.
+    setups: SetupReader | None = None
+    market_days: MarketDayReader | None = None
 
     @property
     def authorized_user_ids(self) -> tuple[str, ...]:

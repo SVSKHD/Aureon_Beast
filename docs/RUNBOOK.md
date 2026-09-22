@@ -434,6 +434,8 @@ re-running one overwrites the same document.
 | `/remind cancel id:` | disarms one of your own alerts |
 | `/monitor symbol: [detection:]` | what the **measured record** says about a detection: the observer's published trend read with its evidence, the cohort of prior detections that matched it and what had to be dropped to reach thirty, how often each threshold was reached with n and a 95% interval, and target/adverse quantiles of measured excursions. Below thirty prior detections it says "insufficient history (n=…)" and shows **no percentage at all**. Nothing here is a forecast and nothing prefills an order |
 | `/note trade:<id\|last> text:` | your own words about a trade, stored **beside** it so a CLOSED trade stays untouched (§45). `#tags` group the week in the weekly review. Nothing automated ever reads a note |
+| `/setups symbol:` | what structures are being tracked on that instrument right now: one line each with the family, the direction **context**, the state and the anchor. Open setups only — a completed one is history and belongs to the weekly review |
+| `/setup id:` | one setup's card, the same card the channel posts: state badge, anchor, invalidation price (labelled **not a stop**), its last events, the detections that advanced it, and its measured historical reference with the caption that says what the numbers are. Takes the full id or the short prefix `/setups` lists; an ambiguous prefix is refused by name rather than resolved to the first match |
 | `/trading status` | is trading enabled, and who last changed it |
 | `/trading enable` | requires a confirmation, and lists what to check first |
 | `/trading disable` | immediate, audited, effective on the next request |

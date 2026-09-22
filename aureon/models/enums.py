@@ -398,6 +398,10 @@ class NotificationStatus(StrEnum):
 class NotificationKind(StrEnum):
     DETECTION = "detection"
     ALERT = "alert"
+    #: 12 T-11. One document per SETUP, not per transition: the card is edited in place as the
+    #: setup advances, so "have we said anything about this setup" is one question with one
+    #: answer, and the document carries the message id that answer needs.
+    SETUP = "setup"
 
 
 # ── Evaluation (§21-§23) ──────────────────────────────────────────────────────

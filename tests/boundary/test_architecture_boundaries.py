@@ -84,6 +84,44 @@ MT5_PERMITTED = {
 }
 
 
+def test_discord_never_imports_a_writable_observation_repository() -> None:
+    """§71: Discord writes ``trade_requests``, ``settings.trading_enabled`` and ``audit_logs``.
+
+    ``setups`` and ``market_day_frames`` are the observer's, and the transaction in
+    ``SetupRepository.record`` is safe precisely because one process writes them. So Discord holds
+    READERS (``aureon/storage/setup_reader.py``), and the way that is enforced is structural: the
+    package may not import the writable classes at all.
+
+    An ANNOTATION is not a guard. The first version of this rule was the type hint
+    ``setups: SetupReader | None`` on ``BotContext``, and a plant that widened it to ``Any``
+    survived every test in the suite -- because a dataclass does not check its annotations at
+    runtime and the fixture happened to pass the right object anyway (12, T-11).
+    """
+    # The two collections T-11 introduced a Discord read of, and only those.
+    #
+    # ``DetectionRepository`` is deliberately NOT here, and that is a finding rather than an
+    # omission: ``BotContext`` has imported it since 9C, it can write ``detections``, and by the
+    # same argument it should be a reader too. Adding it here would fail on shipped code, and
+    # fixing that is a change to 9C rather than to this task -- so it is recorded as decision 317
+    # and left for a deliberate follow-up. A guard that quietly grew to cover code nobody had
+    # looked at would be a guard somebody deletes.
+    forbidden = {"SetupRepository", "MarketDayRepository"}
+    offenders: list[str] = []
+    for path in _python_files("discord"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            named = {alias.name for alias in node.names} & forbidden
+            if named:
+                offenders.append(
+                    f"{path.relative_to(REPO_ROOT)}:{node.lineno} imports {sorted(named)}"
+                )
+    assert not offenders, (
+        "Discord may not import a writable observation repository:\n" + "\n".join(offenders)
+    )
+
+
 def test_every_observation_package_is_named_in_the_list() -> None:
     """Pinned as a literal, because THE LIST IS THE GUARD.
 
@@ -333,16 +371,22 @@ def _innocent_string_nodes(tree: ast.AST) -> set[int]:
     ``client.collection("assessments")`` as well -- the check went quiet on exactly the kind of
     bug it exists to find. Planting that call is what caught it.
 
-    Three positions are innocent, and nothing else:
+    Four positions are innocent, and nothing else:
 
     * a **dict key** -- ``{"trade_notes": ...}`` builds a document, it does not name a
       collection;
     * a **string subscript** -- ``fields["trade_notes"]`` reads one back out of a dict; there
       is no API in this codebase where a collection is reached by indexing;
-    * the **attribute-name argument** of ``getattr``/``setattr``/``hasattr``.
+    * the **attribute-name argument** of ``getattr``/``setattr``/``hasattr``;
+    * a ``name=`` **keyword argument** -- ``@tree.command(name="setups")`` names a Discord
+      slash command (12, T-11). This one was added when `/setups` collided with the ``setups``
+      collection, and it is safe for a structural reason rather than a hopeful one: no Firestore
+      API in this codebase takes its path as ``name=``. ``collection()`` and ``document()`` take
+      it positionally, so a real call cannot hide here.
 
     An argument to ``.collection(...)`` or ``.document(...)`` is never innocent, whatever the
-    string says.
+    string says -- not by a second check, but because a positional call argument is none of the
+    four positions above.
     """
     innocent: set[int] = set()
     for node in ast.walk(tree):
@@ -359,6 +403,13 @@ def _innocent_string_nodes(tree: ast.AST) -> set[int]:
                 second = node.args[1]
                 if isinstance(second, ast.Constant) and isinstance(second.value, str):
                     innocent.add(id(second))
+            for keyword in node.keywords:
+                if keyword.arg != "name":
+                    continue
+                if isinstance(keyword.value, ast.Constant) and isinstance(
+                    keyword.value.value, str
+                ):
+                    innocent.add(id(keyword.value))
     return innocent
 
 

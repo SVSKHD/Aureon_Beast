@@ -1951,3 +1951,156 @@ def trading_change_summary(enabled: bool, actor: str, reason: str | None = None)
     if enabled:
         return f"Trading ENABLED by {actor}."
     return f"Trading DISABLED by {actor}" + (f" — {reason}" if reason else ".")
+
+
+# ── 12 T-11: the setup card ───────────────────────────────────────────────────
+
+
+@dataclass
+class SetupScreen:
+    """One setup's card, as strings. Nothing computed here -- see ``build_setup_card``."""
+
+    title: str
+    symbol: str
+    setup_id: str
+    state: str
+    badge: str
+    description: str
+    fields: list[tuple[str, str]] = field(default_factory=list)
+    reference: list[str] = field(default_factory=list)
+    footer: str = ""
+    #: What the chart attachment is called, or ``None`` when there is no chart. The card is
+    #: complete without one: a picture that failed to draw must not take the words with it.
+    chart_filename: str | None = None
+
+
+#: The badge for each state. Text, not colour: the embed stays the neutral INFO colour whatever
+#: the setup is doing, for the reason ``notification_embed`` gives -- a green card for CONFIRMED
+#: and a red one for INVALIDATED is approval and disapproval drawn in colour, which the footer
+#: then denies in words. A reader reaches the colour first.
+STATE_BADGES: dict[str, str] = {
+    "observing": "◻ observing",
+    "watch": "◪ watching",
+    "developing": "◨ developing",
+    "confirmed": "◼ confirmed",
+    "pullback": "◫ pulling back",
+    "continuation": "◼ continuing",
+    "fakeout_risk": "⚠ fakeout risk",
+    "completed": "✓ completed",
+    "invalidated": "✗ invalidated",
+}
+
+#: How many events a card carries. Five, because a card is a summary and the sub-collection is
+#: the history; a setup that ran all day has a hundred and nobody scrolls a card.
+CARD_EVENTS = 5
+
+#: How many linked detection ids a card names before it says "and N more".
+CARD_DETECTIONS = 4
+
+#: The words under every setup card, in place of a detection's side line. A setup has a direction
+#: CONTEXT and never a side, and the card must not let a reader supply one.
+SETUP_FOOTER_NOTE = "a setup is an observation · no order is implied · CONFIRM is still required"
+
+
+def build_setup_card(
+    setup: Any,
+    *,
+    events: Sequence[Any] = (),
+    chart_filename: str | None = None,
+) -> SetupScreen:
+    """A setup's card, built entirely from the stored setup and its stored events (T-11).
+
+    Discord computes nothing (CLAUDE.md). The anchor, the invalidation price, the context labels
+    and the reference block are all read off the document the observer wrote; the events are read
+    off its sub-collection. A field this cannot fill reads "—" rather than being dropped, so two
+    cards of the same family always have the same shape.
+
+    ``direction_context`` is rendered as BULLISH/BEARISH/NEUTRAL and never as BUY/SELL. That is
+    not a formatting preference: the word a card uses is the word a reader acts on, and "BUY" on a
+    card of observations is an instruction nobody issued. A test asserts the side vocabulary
+    appears on no setup card.
+    """
+    from aureon.services.setup_reference import render_reference
+
+    state = setup.state.value
+    family = _family_words(setup.family.value)
+    screen = SetupScreen(
+        title=f"{setup.symbol} · {family} · {setup.direction_context.value}",
+        symbol=setup.symbol,
+        setup_id=setup.setup_id,
+        state=state,
+        badge=STATE_BADGES.get(state, state),
+        description="",
+        footer=f"{SETUP_FOOTER_NOTE} · {setup.setup_id}",
+        chart_filename=chart_filename,
+    )
+
+    anchor = setup.anchor
+    screen.fields = [
+        ("State", screen.badge),
+        ("Timeframe", setup.timeframe.value),
+        ("Anchor", f"{_fmt(anchor.price)} · {anchor.level_type or anchor.kind.value}"),
+        (
+            "Invalidation",
+            # Spelled out on every card. A price under a candle chart, beside a state badge, is
+            # read as a stop by anybody who has traded; this is where the structure stops being
+            # true, and nothing in this system places an order from it.
+            f"{_fmt(setup.invalidation_price)} — not a stop"
+            if setup.invalidation_price is not None
+            else UNKNOWN,
+        ),
+        ("Context", _setup_context_line(setup)),
+        ("Events", f"{setup.event_count}"),
+    ]
+
+    recent = list(events)[-CARD_EVENTS:]
+    screen.description = _setup_event_lines(recent) if recent else "no events recorded yet"
+    screen.fields.append(("Linked detections", _linked_line(setup.linked_detection_ids)))
+    screen.reference = render_reference(setup.reference)
+    return screen
+
+
+def _family_words(family: str) -> str:
+    """``liquidity_reversal`` → ``liquidity reversal``. The enum is for storage, not for a card."""
+    return family.replace("_", " ")
+
+
+def _setup_context_line(setup: Any) -> str:
+    context = setup.context_summary
+    parts = [
+        context.session.value if context.session is not None else None,
+        context.volatility_regime,
+        context.price_vs_va,
+        f"mtf {context.mtf_alignment.value}",
+    ]
+    return " · ".join(part for part in parts if part) or UNKNOWN
+
+
+def _setup_event_lines(events: Sequence[Any]) -> str:
+    """The last few events, newest LAST, each with the time it happened.
+
+    Newest last because the card reads top to bottom as the story it is: a reader following a
+    setup wants "then this, then this", and a reversed list makes them read the ending first.
+    """
+    lines = []
+    for event in events:
+        when = event.market_time.utc.strftime("%H:%M")
+        words = event.event_type.value.replace("_", " ")
+        reason = f" — {event.reason}" if getattr(event, "reason", None) else ""
+        lines.append(f"`{when}` {words}{reason}")
+    return "\n".join(lines)
+
+
+def _linked_line(ids: Sequence[str]) -> str:
+    """The detections that advanced this setup, newest last, truncated with a count.
+
+    Ids rather than a summary, because an id is checkable: a reader can look the detection up and
+    see the candle it was made on. A prose summary would be Discord describing a detection, which
+    is Discord deciding what is true.
+    """
+    if not ids:
+        return UNKNOWN
+    shown = list(ids)[-CARD_DETECTIONS:]
+    rendered = ", ".join(f"`{one}`" for one in shown)
+    hidden = len(ids) - len(shown)
+    return rendered + (f" · and {hidden} more" if hidden else "")
