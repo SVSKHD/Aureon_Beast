@@ -133,7 +133,7 @@ def test_since_records_when_the_state_began_not_when_it_was_last_seen(
 def test_a_persisting_condition_costs_no_further_writes(register, firestore) -> None:
     """One write per TRANSITION, not per poll.
 
-    Ten conditions polled every second across four processes would otherwise be forty
+    Every condition polled every second across five processes would otherwise be dozens of
     Firestore writes a second, for a value that has not changed — the same reasoning the
     ``system_state`` throttle rests on. ``since`` already answers "how long has this been
     true", so there is nothing a refresh would add.
@@ -214,7 +214,13 @@ def test_every_named_condition_has_an_onset_and_a_recovery(spec, register) -> No
     assert len(ops.post.messages) == 2
 
 
-def test_all_ten_conditions_the_phase_names_exist() -> None:
+def test_every_named_condition_is_the_closed_set_it_claims_to_be() -> None:
+    """The whole set, spelled out, because the register refuses an unknown name.
+
+    An exact set rather than a count: a count passes when one condition is renamed and
+    another added, which is how a runbook comes to document a name nothing posts. 11A named
+    ten; 12 T-1 added ``supervisor_stack_down``, which the launcher owns.
+    """
     assert set(BY_NAME) == {
         "observer_stale",
         "executor_stale",
@@ -226,6 +232,7 @@ def test_all_ten_conditions_the_phase_names_exist() -> None:
         "symbol_feed_stale",
         "mt5_reconnect",
         "live_account_detected",
+        "supervisor_stack_down",
     }
 
 

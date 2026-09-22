@@ -23,7 +23,50 @@ any of them can be restarted alone.
 
 If you remember one thing: **the observer cannot trade, and the executor cannot decide.**
 
-Long-running: observer, executor, monitor, Discord. `main_review.py` is a command.
+Long-running: observer, executor, monitor, Discord, and `main_review.py watch`. The same
+`main_review.py` also runs one-off daily and weekly reports as a command.
+
+## Starting and stopping the whole stack
+
+    python main_aureon.py
+
+That is the documented way to run Aureon. It loads `.env` once, runs the preflight, and starts
+the five processes in order — **observer → monitor → executor → Discord → review watcher** — as
+separate children of one launcher. It is not a sixth service: there is no shared event loop and
+no runtime object, only five `Popen` handles.
+
+| flag | what it does |
+|---|---|
+| `--env-file PATH` | load that instead of `./.env` |
+| `--no-observer` `--no-monitor` `--no-executor` `--no-discord` `--no-review` | leave that service out |
+| `--no-preflight` | start without checking anything. Logs a warning. Development only. |
+
+**Starting it never enables trading.** `settings/execution.trading_enabled` lives in Firestore,
+defaults to false, and the launcher does not touch it. The executor may well start on a
+real-money account; `AUREON_ALLOW_LIVE_EXECUTION` and the guard's first rule are what stop it
+acting.
+
+**A preflight FAIL starts nothing** and exits non-zero with the table printed. Fix the red rows.
+
+**One child dying takes the whole stack down.** The launcher logs `child_exited` with the service
+and its code, records the `supervisor_stack_down` condition in `ops_events` so it outlives the
+terminal scrollback, stops the rest in reverse order and exits non-zero. There is no automatic
+restart, deliberately: a half-running stack is the dangerous state — an executor with no monitor
+means positions nobody reconciles, and it looks healthy from the one screen you have. If you want
+it back up, that is systemd's job or yours, after reading why it went down.
+
+Discord with no token is one of those deaths, on purpose: a bot that cannot answer anybody is not
+a service. `--no-discord` is how you run without it.
+
+**Ctrl+C is cooperative.** The launcher interrupts the children in reverse start order and waits
+`AUREON_SHUTDOWN_GRACE_SECONDS` (default 20) before terminating anything, because the observer's
+shutdown drains the outbox, flushes the parquet archive and saves its cursor. Each service logs
+`shutdown_flushed` when it has finished; grep for it if you want to know whether the queue got
+out. A service that ignores the interrupt is terminated after the grace, then killed.
+
+Do not press Ctrl+C twice expecting it to hurry. The second one lands during the outbox drain,
+which is the one part of shutdown that loses data if abandoned; the grace period is already the
+bound on how long you wait.
 
 ## Getting it running the first time
 

@@ -1,10 +1,11 @@
-"""The ten named conditions, and the once-on-onset once-on-recovery rule (11A, F-15).
+"""The named operational conditions, and the once-on-onset once-on-recovery rule (11A, F-15).
 
-The failure this exists for is not a crash. The supervisor handles those. It is a service that
-is still running and no longer doing its job: an observer whose candle loop stopped while the
-market is open, an outbox whose deliveries have been failing for a minute, a reconciliation that
-ended ambiguous and left a trade nobody has looked at. None of those produces a log line anybody
-reads or an alert anybody gets.
+The failure this exists for is mostly not a crash -- ``aureon/services/supervisor.py`` handles
+those, and records the one condition here that it owns (``supervisor_stack_down``). It is a
+service still running and no longer doing its job: an observer whose candle loop stopped
+while the market is open, an outbox whose deliveries have been failing for a minute, a
+reconciliation that ended ambiguous and left a trade nobody has looked at. None of those
+produces a log line anybody reads or an alert anybody gets.
 
 ## The rule, and why it is the whole design
 
@@ -128,6 +129,11 @@ SPECS: tuple[OpsEventSpec, ...] = (
         "live_account_detected",
         "this process is connected to a real-money account",
         "this process is connected to a practice account",
+    ),
+    OpsEventSpec(
+        "supervisor_stack_down",
+        "a service process exited and the launcher stopped the rest — Aureon is NOT running",
+        "the full stack is running again",
     ),
 )
 

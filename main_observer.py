@@ -40,10 +40,8 @@ terminal is logged out), and the ops register.
 from __future__ import annotations
 
 import logging
-import signal
 import sys
 from datetime import datetime, timedelta
-from types import FrameType
 
 from aureon.agents.base_agent import BaseAgent
 from aureon.agents.breakout_agent import BreakoutAgent
@@ -76,6 +74,7 @@ from aureon.services.market_snapshot import MarketSnapshot
 from aureon.services.market_state_service import MarketStateService, WeeklySchedule
 from aureon.services.observer_state import ObserverState
 from aureon.services.ops_events import OpsRegister
+from aureon.services.shutdown import flushed, install_handlers
 from aureon.services.sleep_cycle import SleepCycle, SleepGate
 from aureon.storage import paths
 from aureon.storage.market_day_repository import MarketDayRepository
@@ -1166,6 +1165,11 @@ class Observer:
             log.warning("%d detection(s) remain queued; they will be delivered next start", still)
         self.state.save()
         self.provider.close()
+        flushed(
+            paths.SERVICE_OBSERVER,
+            queued=still,
+            delivered_at_shutdown=remaining,
+        )
 
 
 def _rosters(
@@ -1349,13 +1353,7 @@ def main(argv: list[str] | None = None) -> int:
     config = AureonConfig.from_env()
     observer = build_observer(config)
 
-    def handle(signum: int, _frame: FrameType | None) -> None:
-        log.info("received signal %s", signum)
-        observer.market_engine.stop()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, handle)
-
+    install_handlers(observer.market_engine.stop, service=paths.SERVICE_OBSERVER)
     observer.run()
     return 0
 
