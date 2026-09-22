@@ -10,7 +10,12 @@ only the operating half.
 
 ## The shape of it
 
-Five entry points. They do not talk to each other except through Firestore, which is why
+`docs/ARCHITECTURE.md` is the as-built description: what the processes are, what writes what, and
+which rules a test enforces rather than merely stating. It answers "which process writes `trades`?"
+and "what stops a detection from trading?". This file answers "what do I type, and what do I do
+when it breaks". Regenerate its ownership table with `make architecture` after adding a collection.
+
+Five entry points, and a launcher that starts them. They do not talk to each other except through Firestore, which is why
 any of them can be restarted alone.
 
 | process | what it does | what it may never do |

@@ -46,6 +46,8 @@ TABLE = """# Phases
 | 9B | Volume profile | profile-tagged detections | partial |
 | 11A | Flaw register | each item green | partial |
 | 11B | Sleep and wake | 48 simulated hours | partial |
+| 12 T-1 | One-command launcher | stack up, one child down stops it | partial |
+| 12 T-2 | ARCHITECTURE.md as built | a reader can answer both questions | partial |
 | — | **Corrections slice** (identity, EMA) | suite green | partial |
 | — | **Defect register D-1…D-15** | each item green | closed |
 
@@ -250,9 +252,19 @@ def test_the_committed_table_reports_what_is_genuinely_missing() -> None:
     assert cells["6"].startswith("⬜"), cells["6"]
     # 9A's own real-session leg: nothing has run against a terminal for silver either.
     assert "⬜" in cells["9A"], cells["9A"]
-    # 11A still owes the frozen spec, which has to be SUPPLIED and cannot be written here.
-    assert "missing: the frozen spec" in cells["11A"], cells["11A"]
-    assert len(CATALOGUE) == 15
+    # The frozen spec is still owed, and no cell may claim otherwise. It moved from 11A's row
+    # to 12 T-2's when the as-built ARCHITECTURE.md landed, so this asks the table as a whole
+    # rather than one row -- a row-specific assertion would have gone green by relocation.
+    whole = PHASES.read_text(encoding="utf-8")
+    assert "missing: the frozen spec" in whole
+    assert "✅ [the frozen spec]" not in whole, (
+        "some Evidence cell claims the frozen spec is present. It has never been in this "
+        "repository, and the as-built ARCHITECTURE.md is a different document."
+    )
+    # 12 T-1: the five real services have never started together here (MetaTrader5 is
+    # Windows-only), and the launcher's row has to keep saying so.
+    assert "⬜" in cells["12 T-1"], cells["12 T-1"]
+    assert len(CATALOGUE) == 17
 
 
 # ── 11C F-1: both symbols, or neither counts ─────────────────────────────────

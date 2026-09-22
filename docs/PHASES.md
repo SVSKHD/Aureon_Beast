@@ -1,7 +1,8 @@
 # Aureon — phase plan and gates
 
-Source of truth for scope is `docs/ARCHITECTURE.md` (frozen, §94). This file
-tracks only *which* phase is open and *what gate* closes it.
+Source of truth for scope is the frozen spec the `§` numbers cite, which the operator holds.
+`docs/ARCHITECTURE.md` describes the system **as built** and says so in its first paragraph; it
+is not that spec. This file tracks only *which* phase is open and *what gate* closes it.
 
 **Freeze rule (§94): do not start a phase until the previous phase's "Done when"
 passes.** Partial passes do not count.
@@ -23,9 +24,10 @@ passes.** Partial passes do not count.
 | 9D | `/monitor` — the measured record on a detection — and `/note` | `/monitor` on a bullish London cross returns a bias with its evidence, a cohort of n≥30 with what was dropped to reach it, per-horizon confirmation with 95% intervals, and TP/SL quantiles, and stores the assessment; below thirty it says "insufficient history (n=…)" and publishes no rate; the weekly review shows `assessment_hit_rate` and the trader's notes | 🟡 code + emulator suite green; **real-session leg outstanding** | ✅ emulator: the observer's published trend read rendered by `/monitor`; the readout stored and scored; `/note` leaving a CLOSED trade byte for byte<br>⬜ missing: a cohort built from a REAL evaluated history rather than a synthetic one (needs the verified sessions 9A and 9B still owe) |
 | 11D | Higher timeframes from the M5 already in hand, and a broker-day cache | M15/M30/H1/H4/D1 are aggregated from closed M5 with no extra broker call; a bucket is emitted only when complete and contiguous; every detection carries `mtf` and an `mtf_alignment`, and each finished broker day is cached as `market_days` + `market_day_frames` | ✅ code + unit, boundary and emulator suites green; agent versions bumped (ema_cross 2.2.0) so the populations fork | — |
 | 11C | Evidence per symbol, a tuning report, and where a readout's history came from | Phase 2's Evidence cell goes green only when EVERY observed symbol has a verified session; `scripts/tune_report.py --symbol X --days N` writes `docs/TUNING_X.md` and has no `--apply`; every stored assessment records `history_source` and `real_days`, and `/monitor` says so above the numbers | ✅ code + unit and boundary suites green; **no symbol has a verified session**, so every cohort this repository can build is SYNTHETIC and every screen says so | — |
-| 11A | Flaw register — credentials preflight, the live-account guard, tick-volume honesty, a generated collection registry, the docs checks and the named ops conditions | `scripts/preflight.py` names a missing service-account key as a missing key; a REAL or UNKNOWN terminal is refused by the guard's first rule unless `AUREON_ALLOW_LIVE_EXECUTION` is exactly `true`; `paths.ALL_COLLECTIONS` is generated and re-derived a second way by a test; `/ops` lists every named condition, each announced once on onset and once on recovery | ✅ code + unit and boundary suites green; **the frozen spec is still owed** and `test_docs_consistency` carries an `xfail(strict=True)` that turns red the moment it lands | ✅ [ops register](../aureon/services/ops_events.py)<br>⬜ missing: the frozen spec (`supplied by the operator; see docs/DOCS_CHECK.md`) |
+| 11A | Flaw register — credentials preflight, the live-account guard, tick-volume honesty, a generated collection registry, the docs checks and the named ops conditions | `scripts/preflight.py` names a missing service-account key as a missing key; a REAL or UNKNOWN terminal is refused by the guard's first rule unless `AUREON_ALLOW_LIVE_EXECUTION` is exactly `true`; `paths.ALL_COLLECTIONS` is generated and re-derived a second way by a test; `/ops` lists every named condition, each announced once on onset and once on recovery | ✅ code + unit and boundary suites green; **the frozen spec is still owed** — 12 T-2 added the as-built `docs/ARCHITECTURE.md`, which is a different document and says so | ✅ [ops register](../aureon/services/ops_events.py)<br>✅ [ARCHITECTURE.md (as built, not the frozen spec)](ARCHITECTURE.md) |
 | 11B | Market-closed sleep and auto-wake — the four services stay up across the weekend and bring themselves back | Forty-eight simulated hours on the emulator: all four sleep at a confirmed close and wake before the open in order, zero restarts, Saturday `/status` renders the weekly review and names the next open | ✅ code + unit, boundary and emulator suites green; **no real weekend has passed** — only a deployed session can give one | ✅ 2 weekend cycle checks |
-| 12 T-1 | One command starts the whole backend, and one dying child stops it | `python main_aureon.py` loads `.env` once, gates on the preflight and starts the five processes in §75 order; a child exiting logs `child_exited`, records `supervisor_stack_down` and takes the stack down non-zero; Ctrl+C interrupts in reverse order and waits `AUREON_SHUTDOWN_GRACE_SECONDS` so the observer drains its outbox | ✅ code + tests green, every process-shaped claim checked against real subprocesses | ✅ [launcher](../main_aureon.py)<br>⬜ the five real services have never come up together here: `main_observer.py` needs MetaTrader5, which is Windows-only |
+| 12 T-1 | One command starts the whole backend, and one dying child stops it | `python main_aureon.py` loads `.env` once, gates on the preflight and starts the five processes in §75 order; a child exiting logs `child_exited`, records `supervisor_stack_down` and takes the stack down non-zero; Ctrl+C interrupts in reverse order and waits `AUREON_SHUTDOWN_GRACE_SECONDS` so the observer drains its outbox | ✅ code + tests green, every process-shaped claim checked against real subprocesses | ✅ [launcher](../main_aureon.py)<br>✅ 28 real-subprocess launcher tests<br>⬜ missing: a real five-service start (`python main_aureon.py on the Windows VPS, with the terminal up`) |
+| 12 T-2 | `docs/ARCHITECTURE.md`, written from the code | Process boundaries, the three data flows, broker truth vs application truth, what Discord may write, the claim-before-post tradeoff, the invariants, and an ownership table generated from `paths.py` via `aureon/storage/ownership.py`; a reader can answer "which process writes `trades`?" and "what stops a detection from trading?" from the document alone | ✅ every collection covered in both ARCHITECTURE.md and CONTRACTS.md by test; the 11A strict xfail is deleted because the file landed | ✅ [ARCHITECTURE.md (as built)](ARCHITECTURE.md)<br>✅ [ownership table](../aureon/storage/ownership.py)<br>⬜ missing: the frozen spec (`supplied by the operator; no artefact in this repository is it`) |
 | — | **Corrections slice** (§12 identity, EMA 20/50, outcome V2, context tags, live snapshot, safety gaps, collection prefix, live-vs-replay tooling) | pytest green with and without the emulator; baseline carries a 20/50 section; `/status` shows the full snapshot; boundary tests cover identity components, bare collection literals and raw Firestore access | ✅ code done; **real-session leg outstanding** | ⬜ missing: verified real session (`scripts/session_run.py, then scripts/session_verify.py`) |
 | — | **Defect register D-1…D-15** | each item green | ✅ closed — D-1…D-3, D-5…D-14 landed in the corrections slice (PR #1); D-4 needed only its missing proof (the tracker already filtered on direction, not agent name); D-7 needed its last label (`last updated`); D-15 recorded as placeholders with a per-symbol hook | ✅ [decisions 118–120](PHASE1_DECISIONS.md) |
 
@@ -47,11 +49,15 @@ passes.** Partial passes do not count.
 - [ ] New decisions appended to the decisions doc **with the spec §**.
 - [ ] Nothing from a later phase was started early (§94).
 
-## Standing caveat: `docs/ARCHITECTURE.md` is still absent
+## Standing caveat: the frozen spec is still absent
 
-Phase 1 was built from the supplied `docs/PHASE1_DECISIONS.md`, which resolves the
-spec's ambiguities by section number. The frozen spec itself is still not in this
-repository, so anything the decisions doc does not cover was inferred and logged
+`docs/ARCHITECTURE.md` now exists, but it is the **as-built** document written from the code
+(12, T-2) — not the frozen spec the `§` numbers point at. That spec is still not in this
+repository, and nothing in this repository can stand in for it: the as-built document can say
+what the code does and cannot say what the spec required.
+
+Phase 1 was built from the supplied `docs/PHASE1_DECISIONS.md`, which resolves the spec's
+ambiguities by section number. Anything the decisions doc does not cover was inferred and logged
 as a new decision row (16–27).
 
 One row still wants confirmation against the real section text:
