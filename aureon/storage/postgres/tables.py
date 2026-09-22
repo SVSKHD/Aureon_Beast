@@ -250,7 +250,15 @@ class SetupEvaluation(Base):
 
 
 class SessionSummary(Base):
-    """§18 (Phase 1). One row per (broker day, session, symbol, timeframe)."""
+    """§18 (Phase 1). One row per (broker day, session, symbol, timeframe).
+
+    ``timezone`` is here for the reason detections, setup events, trades and market days
+    each carry one: ``started_at`` and ``ended_at`` are ``MarketTime``, and a ``MarketTime``
+    cannot be rebuilt from an instant alone. Reconstructing it from the running config
+    instead would mean a session stored under one broker's zone rendering itself in
+    another's the day the config changes -- which is the drift `MarketTime` exists to make
+    impossible (decision 357).
+    """
 
     __tablename__ = "sessions"
 
@@ -263,6 +271,7 @@ class SessionSummary(Base):
     timeframe: Mapped[str] = mapped_column(String)
     session: Mapped[str] = mapped_column(String)
     market_date: Mapped[str] = mapped_column(String)
+    timezone: Mapped[str] = mapped_column(String)
     session_config_version: Mapped[str] = mapped_column(String)
 
     started_at: Mapped[datetime | None] = mapped_column()
@@ -551,6 +560,15 @@ class Setting(Base):
     value: Mapped[dict[str, Any]] = mapped_column(Json)
 
 
+#: The two rows ``settings`` holds. Here rather than in the repository because this module
+#: is the naming authority for the relational store, and a row name in a key-value table is
+#: part of the schema exactly as a table name is (decision 356). It also keeps the repository
+#: free of the bare literal ``"notifications"``, which §83's guard reads -- correctly -- as a
+#: store name spelled by hand.
+EXECUTION_SETTINGS_ROW = "execution"
+NOTIFICATION_SETTINGS_ROW = "notifications"
+
+
 class SymbolSpec(Base):
     """Decision 79. Broker metadata published for Discord. A convenience copy, never an
     authority: the execution guard re-reads the live symbol at execution time."""
@@ -583,7 +601,10 @@ class OpsEvent(Base):
     since: Mapped[datetime | None] = mapped_column()
     updated_at: Mapped[datetime | None] = mapped_column()
     onsets: Mapped[int] = mapped_column(Integer)
-    detail: Mapped[dict[str, Any]] = mapped_column(Json)
+    # Free text, not a payload: ``OpsEvent.detail`` is the one line an operator reads in
+    # `/ops`. JSONB here would store a JSON string -- round-tripping correctly and lying
+    # about the shape to everything that inspects the schema (decision 358).
+    detail: Mapped[str] = mapped_column(String)
 
     __table_args__ = (
         Index("ix_ops_events_active", "active", "name"),

@@ -211,3 +211,264 @@ def a_trade(position_id: int = 123456789012, **overrides: object):
         open_time=MarketTime.from_utc(CLOSE, TZ),
     )
     return Trade(**(base | overrides))
+
+
+# ── S-3b: the smaller tables ──────────────────────────────────────────────────
+
+
+def a_symbol_state(symbol: str = "XAUUSD", **overrides: object):
+    """One symbol's live panel."""
+    from aureon.models.enums import MarketState
+    from aureon.models.system import SymbolState
+
+    base = dict(
+        symbol=symbol,
+        timeframe=Timeframe.M5,
+        market_state=MarketState.OPEN,
+        last_closed_candle_time=CLOSE,
+        detections_today=2,
+        ema_fast=2403.1,
+        ema_slow=2401.9,
+    )
+    return SymbolState(**(base | overrides))
+
+
+def a_system_state(*symbols, **overrides: object):
+    """The whole snapshot, carrying however many symbol panels it was given."""
+    from aureon.models.system import SystemState
+
+    base = dict(
+        updated_at=CLOSE,
+        symbols=tuple(symbols) if symbols else (a_symbol_state(),),
+        trading_enabled=True,
+    )
+    return SystemState(**(base | overrides))
+
+
+def a_symbol_spec(symbol: str = "XAUUSD", **overrides: object):
+    """Broker metadata as MT5 reports it."""
+    from aureon.models.market import SymbolInfo
+
+    base = dict(
+        symbol=symbol,
+        point=0.01,
+        digits=2,
+        volume_min=0.01,
+        volume_max=50.0,
+        volume_step=0.01,
+    )
+    return SymbolInfo(**(base | overrides))
+
+
+def an_ops_event(name: str = "observer_stale", scope: str | None = "XAUUSD", **overrides):
+    """A named condition, currently true.
+
+    ``event_id`` is the id the repository derives, so a round trip compares equal. A test
+    that wants the disagreeing case passes ``event_id=`` explicitly.
+    """
+    from aureon.models.ops import OpsEvent
+
+    base = dict(
+        event_id=f"{name}__{scope.upper()}" if scope else name,
+        name=name,
+        scope=scope,
+        service="observer",
+        active=True,
+        since=CLOSE,
+        onsets=1,
+        detail="no candle for 3 intervals",
+    )
+    return OpsEvent(**(base | overrides))
+
+
+def an_alert(alert_id: str = "a1", **overrides: object):
+    """An armed price alert."""
+    from aureon.models.alerts import PriceAlert
+
+    base = dict(
+        alert_id=alert_id,
+        symbol="XAUUSD",
+        level=2410.0,
+        side="above",
+        requested_by="trader",
+    )
+    return PriceAlert(**(base | overrides))
+
+
+def an_assessment(assessment_id: str = "as1", **overrides: object):
+    """A measured-only readout over a REAL-history cohort (9D)."""
+    from aureon.models.assessment import Assessment, CohortFilter, TrendRead
+    from aureon.models.enums import HistorySource, TrendBias
+
+    base = dict(
+        assessment_id=assessment_id,
+        detection_id="d1",
+        symbol="XAUUSD",
+        rule_id="XAU_OUTCOME_V2",
+        trend_read=TrendRead(bias=TrendBias.BULLISH, candles=120),
+        cohort_filter=CohortFilter(
+            symbol="XAUUSD", agent_name="ema_cross", direction=Direction.BUY
+        ),
+        n=42,
+        history_source=HistorySource.REAL,
+        real_days=30,
+        created_at=CLOSE,
+    )
+    return Assessment(**(base | overrides))
+
+
+def a_trade_note(note_id: str = "n1", **overrides: object):
+    """A trader's own words about a trade."""
+    from aureon.models.assessment import TradeNote
+
+    base = dict(
+        note_id=note_id,
+        trade_id="t1",
+        author="trader",
+        text="took half off at the first target",
+        at=CLOSE,
+    )
+    return TradeNote(**(base | overrides))
+
+
+def a_setup_evaluation(setup_id: str = "s1", rule_id: str = "XAU_OUTCOME_V2", **overrides):
+    """One setup's outcome under one rule."""
+    from aureon.models import threshold_key
+    from aureon.models.enums import (
+        DirectionContext,
+        HorizonStatus,
+        ReferencePrice,
+        SetupFamily,
+    )
+    from aureon.models.evaluation import HorizonResult, SetupEvaluation
+
+    base = dict(
+        setup_id=setup_id,
+        rule_id=rule_id,
+        family=SetupFamily.TREND_PULLBACK,
+        direction_context=DirectionContext.BULLISH,
+        symbol="XAUUSD",
+        timeframe=Timeframe.M5,
+        market_date="2026-09-22",
+        setup_version="1.0.0",
+        reference_price=ReferencePrice.CLOSE,
+        reference_value=2403.5,
+        horizons=(
+            HorizonResult(
+                horizon_id="h5",
+                status=HorizonStatus.COMPLETE,
+                future_high=2411.0,
+                future_low=2401.5,
+                mfe=7.5,
+                mae=-2.0,
+                candles_seen=5,
+                reached={threshold_key(3.0): True},
+                time_to={threshold_key(3.0): 2.0},
+                completed_at=CLOSE + timedelta(minutes=25),
+            ),
+        ),
+    )
+    return SetupEvaluation(**(base | overrides))
+
+
+def a_session_summary(market_date: str = "2026-09-22", **overrides: object):
+    """One broker day's London session."""
+    from aureon.models.session import SessionSummary
+
+    base = dict(
+        session_id=f"{market_date}__london",
+        account_scope="primary",
+        symbol="XAUUSD",
+        timeframe=Timeframe.M5,
+        session=SessionName.LONDON,
+        market_date=market_date,
+        session_config_version="1",
+        started_at=MarketTime.from_utc(OPEN, TZ),
+        ended_at=MarketTime.from_utc(CLOSE, TZ),
+        open=2400.0,
+        high=2411.0,
+        low=2399.0,
+        close=2403.5,
+        trend="up",
+        change=3.5,
+        change_points=350.0,
+        range=12.0,
+        candle_count=96,
+    )
+    return SessionSummary(**(base | overrides))
+
+
+def a_market_day(market_date: str = "2026-09-22", **overrides: object):
+    """One finished broker day's shape."""
+    from aureon.models.market_day import MarketDay
+
+    base = dict(
+        symbol="XAUUSD",
+        market_date=market_date,
+        market_tz=TZ,
+        open=2400.0,
+        high=2411.0,
+        low=2399.0,
+        close=2403.5,
+        bars=288,
+        tick_volume=123456,
+        first_bar_at=OPEN,
+        last_bar_at=CLOSE,
+        complete=True,
+        frames=(Timeframe.M15, Timeframe.H1),
+    )
+    return MarketDay(**(base | overrides))
+
+
+def a_market_day_frame(market_date: str = "2026-09-22", **overrides: object):
+    """One day's aggregated bars at one timeframe."""
+    from aureon.models.market_day import FrameBar, MarketDayFrame
+
+    base = dict(
+        symbol="XAUUSD",
+        market_date=market_date,
+        timeframe=Timeframe.M15,
+        market_tz=TZ,
+        bars=(
+            FrameBar(at=OPEN, open=2400.0, high=2405.0, low=2399.0, close=2404.0),
+            FrameBar(at=CLOSE, open=2404.0, high=2411.0, low=2403.0, close=2403.5),
+        ),
+        truncated=False,
+        complete=True,
+    )
+    return MarketDayFrame(**(base | overrides))
+
+
+def a_daily_review(market_date: str = "2026-09-22", **overrides: object):
+    """A daily review for one symbol."""
+    from aureon.models.review import DailyReview
+
+    base = dict(
+        period_start=OPEN,
+        period_end=CLOSE,
+        market_tz=TZ,
+        generated_at=CLOSE,
+        evaluation_rule_id="XAU_OUTCOME_V2",
+        symbol="XAUUSD",
+        market_date=market_date,
+        detections_total=7,
+    )
+    return DailyReview(**(base | overrides))
+
+
+def a_weekly_review(iso_year: int = 2026, iso_week: int = 39, **overrides: object):
+    """A weekly review for one symbol."""
+    from aureon.models.review import WeeklyReview
+
+    base = dict(
+        period_start=OPEN,
+        period_end=CLOSE,
+        market_tz=TZ,
+        generated_at=CLOSE,
+        evaluation_rule_id="XAU_OUTCOME_V2",
+        symbol="XAUUSD",
+        iso_year=iso_year,
+        iso_week=iso_week,
+        detections_total=31,
+    )
+    return WeeklyReview(**(base | overrides))
