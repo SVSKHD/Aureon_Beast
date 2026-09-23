@@ -311,12 +311,27 @@ class Notifier:
             else []
         )
         trend_context = build_setup_trend_context(symbol_state, sessions)
-        chart, filename = await self._setup_chart(setup, events, trend_context)
         confirmation = build_setup_confirmation(
             setup,
             events=events,
             symbol_state=symbol_state,
             trend_context=trend_context,
+        )
+        detections = (
+            await context.run(
+                context.detections.for_market_date,
+                setup.symbol,
+                setup.market_date,
+            )
+            if context.detections is not None
+            else []
+        )
+        chart, filename = await self._setup_chart(
+            setup,
+            events,
+            trend_context,
+            confirmation,
+            detections,
         )
         screen = build_setup_card(
             setup,
@@ -404,7 +419,12 @@ class Notifier:
         return True
 
     async def _setup_chart(
-        self, setup: Any, events: Any = (), trend_context: Any = None
+        self,
+        setup: Any,
+        events: Any = (),
+        trend_context: Any = None,
+        confirmation: Any = None,
+        detections: Any = (),
     ) -> tuple[bytes | None, str | None]:
         """The chart to attach, or ``(None, None)``.
 
@@ -429,7 +449,14 @@ class Notifier:
             )
             spec = await context.run(context.symbols.get, setup.symbol)
             png = await context.run(
-                _render_chart, setup, bars, spec, events, trend_context
+                _render_chart,
+                setup,
+                bars,
+                spec,
+                events,
+                trend_context,
+                confirmation,
+                detections,
             )
         except Exception:  # noqa: BLE001 - a missing picture must not cost the card
             log.exception("could not draw the chart for setup %s", setup.setup_id)
@@ -523,7 +550,13 @@ def side_for(setup: Any) -> str | None:
 
 
 def _render_chart(
-    setup: Any, bars: Any, spec: Any, events: Any = (), trend_context: Any = None
+    setup: Any,
+    bars: Any,
+    spec: Any,
+    events: Any = (),
+    trend_context: Any = None,
+    confirmation: Any = None,
+    detections: Any = (),
 ) -> bytes:
     """Draw a setup chart from stored candles and frozen setup-event context.
 
@@ -531,6 +564,7 @@ def _render_chart(
     setup-event snapshots written by the observer; the picture only renders those facts.
     """
     from aureon.discord.service import (
+        _directional_early_ema,
         _early_ema_status,
         _ema_relation,
         _event_snapshot_float,
@@ -545,6 +579,13 @@ def _render_chart(
     fast = _event_snapshot_float(latest, "ema_fast") if latest is not None else None
     slow = _event_snapshot_float(latest, "ema_slow") if latest is not None else None
     snapshot = getattr(latest, "context_snapshot", None) or {} if latest is not None else {}
+    previous = None
+    if latest is not None:
+        from aureon.discord.service import _previous_snapshot_event
+        previous = _previous_snapshot_event(event_list, latest)
+    prev_fast = _event_snapshot_float(previous, "ema_fast") if previous is not None else None
+    prev_slow = _event_snapshot_float(previous, "ema_slow") if previous is not None else None
+    directional_early = _directional_early_ema(prev_fast, prev_slow, fast, slow)
 
     levels = []
     if fast is not None:
@@ -566,11 +607,51 @@ def _render_chart(
             )
         )
 
+    detection_marks = []
+    for detection in detections:
+        if getattr(detection, "timeframe", None) != setup.timeframe:
+            continue
+        direction = getattr(getattr(detection, "direction", None), "value", None)
+        direction_context = (
+            "bullish" if direction == "buy"
+            else "bearish" if direction == "sell"
+            else None
+        )
+        session = getattr(
+            getattr(getattr(detection, "session", None), "session", None),
+            "value",
+            "unknown",
+        )
+        if detection.agent_name == "ema_cross":
+            label = (
+                f"BULL CROSS · {session}"
+                if direction == "buy"
+                else f"BEAR CROSS · {session}"
+                if direction == "sell"
+                else f"EMA CROSS · {session}"
+            )
+        elif detection.agent_name == "wick":
+            label = f"WICK · {detection.event_key.replace('_', ' ')}"
+        elif detection.agent_name == "liquidity":
+            label = f"LIQ · {detection.event_key.replace('_', ' ')}"
+        elif detection.agent_name == "breakout":
+            label = f"BREAK · {detection.event_key.replace('_', ' ')}"
+        else:
+            continue
+        detection_marks.append(
+            chart_renderer.ChartMark(
+                at=detection.candle_open_time.utc,
+                price=detection.price,
+                label=label,
+                direction_context=direction_context,
+            )
+        )
+
     notes = [render_reference(setup.reference)[0]]
     if latest is not None:
         notes.extend(
             [
-                f"EMA: {_ema_relation(fast, slow)} · {_early_ema_status(event_list, latest)}",
+                f"EMA: {_ema_relation(fast, slow)} · {directional_early}",
                 f"RSI: {_rsi_status(event_list, latest)}",
                 f"setup snapshot trend: {snapshot.get('trend', 'unknown')} · mtf {snapshot.get('mtf_alignment', 'unknown')}",
             ]
@@ -590,11 +671,18 @@ def _render_chart(
             analysis_lines.extend(
                 f"• {line[:52]}" for line in trend_context.evidence[:4]
             )
+    if confirmation is not None:
+        analysis_lines.append(f"CLEAR    {confirmation.clearance}")
+        analysis_lines.append("MTF")
+        analysis_lines.extend(f"  {line}" for line in confirmation.mtf[:5])
+        if confirmation.blockers:
+            analysis_lines.append("BLOCK")
+            analysis_lines.extend(f"• {line[:48]}" for line in confirmation.blockers[:3])
     if latest is not None:
         analysis_lines.extend(
             [
                 f"EMA      {_ema_relation(fast, slow)}",
-                f"EARLY    {_early_ema_status(event_list, latest)}",
+                f"EARLY    {directional_early}",
                 f"RSI      {_rsi_status(event_list, latest)}",
                 f"SNAPSHOT {snapshot.get('trend', 'unknown')}",
             ]
@@ -606,6 +694,7 @@ def _render_chart(
         levels=tuple(levels),
         anchor_price=setup.anchor.price,
         invalidation_price=setup.invalidation_price,
+        detections=tuple(detection_marks),
         events=tuple(marks),
         notes=tuple(notes),
         analysis_lines=tuple(analysis_lines),
