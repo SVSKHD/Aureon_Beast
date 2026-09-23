@@ -83,7 +83,6 @@ from aureon.services.ops_events import OpsRegister
 from aureon.services.shutdown import flushed, install_handlers
 from aureon.services.sleep_cycle import SleepCycle, SleepGate
 from aureon.storage import paths
-from aureon.storage.market_day_repository import MarketDayRepository
 
 log = logging.getLogger("aureon.observer")
 
@@ -1415,17 +1414,7 @@ def default_agents(
 def build_observer(config: AureonConfig) -> Observer:
     """Assemble a live observer from configuration."""
     from aureon.data.mt5_provider import MT5DataProvider
-    from aureon.storage.alert_repository import PriceAlertRepository
-    from aureon.storage.detection_repository import DetectionRepository
-    from aureon.storage.evaluation_repository import EvaluationRepository
-    from aureon.storage.firebase_service import get_client
-    from aureon.storage.ops_repository import OpsEventRepository
-    from aureon.storage.session_repository import SessionRepository
-    from aureon.storage.symbol_repository import SymbolRepository
-    from aureon.storage.system_state_repository import (
-        HeartbeatRepository,
-        SystemStateRepository,
-    )
+    from aureon.storage.runtime import build_storage
 
     provider = MT5DataProvider(
         market_tz=config.market_tz,
@@ -1434,15 +1423,14 @@ def build_observer(config: AureonConfig) -> Observer:
         server=config.mt5_server,
         terminal_path=config.mt5_terminal_path,
     )
-    client = get_client(
-        project_id=config.firebase_project_id, emulator_host=config.firestore_emulator_host
+    storage = build_storage(
+        account_scope=config.account_scope,
+        state_heartbeat_seconds=config.state_heartbeat_seconds,
     )
-    detections = DetectionRepository(client)
+    detections = storage.detections
     outbox = LocalOutbox(config.outbox_path)
     worker = OutboxWorker(outbox, detections.upsert_payload)
-    heartbeat_repo = HeartbeatRepository(
-        client, min_interval_seconds=config.state_heartbeat_seconds
-    )
+    heartbeat_repo = storage.heartbeats
 
     observer = Observer(
         config,
@@ -1451,12 +1439,10 @@ def build_observer(config: AureonConfig) -> Observer:
         worker=worker,
         state=ObserverState(config.observer_state_path),
         market_state=MarketStateService(provider),
-        state_repository=SystemStateRepository(
-            client, min_interval_seconds=config.state_heartbeat_seconds
-        ),
-        session_repository=SessionRepository(client),
-        symbol_repository=SymbolRepository(client),
-        evaluation_repository=EvaluationRepository(client),
+        state_repository=storage.system_state,
+        session_repository=storage.sessions,
+        symbol_repository=storage.symbols,
+        evaluation_repository=storage.evaluations,
         outcome_trackers={
             # Each symbol's own rule AND its own tick. The tick matters as much as the
             # rule: XAG_OUTCOME_V1's $0.10 is 100 points at silver's 0.001 and would be
@@ -1473,21 +1459,19 @@ def build_observer(config: AureonConfig) -> Observer:
         heartbeat=HeartbeatService(heartbeat_repo, paths.SERVICE_OBSERVER),
         # 9C: the observer answers the price alerts Discord armed, from the quotes it is
         # already reading.
-        alert_repository=PriceAlertRepository(client),
+        alert_repository=storage.alerts,
     )
     # 11A F-15. Assigned after construction rather than passed in, so an Observer built by a
     # test has no register and reports nothing -- which is what a test of observation wants.
-    observer.ops = OpsRegister(
-        OpsEventRepository(client), service=paths.SERVICE_OBSERVER
-    )
+    observer.ops = OpsRegister(storage.ops, service=paths.SERVICE_OBSERVER)
     # 11D, and assigned the same way for the same reason: a test of observation should not
     # have to stand up a day cache to watch a candle close.
-    observer.market_days = MarketDayRepository(client)
-    _wire_setups(observer, config, client)
+    observer.market_days = storage.market_days
+    _wire_setups(observer, config, storage)
     return observer
 
 
-def _wire_setups(observer: Observer, config: AureonConfig, client: object) -> None:
+def _wire_setups(observer: Observer, config: AureonConfig, storage: object) -> None:
     """One setup engine per configured symbol (12, T-7).
 
     Per symbol rather than one shared engine, for the reason every other per-symbol thing in this
@@ -1519,13 +1503,8 @@ def _wire_setups(observer: Observer, config: AureonConfig, client: object) -> No
     from aureon.services.setup_engine import SetupEngine
     from aureon.services.setup_evaluation import SetupEvaluator
     from aureon.services.setup_reference import ReferenceBook
-    from aureon.storage.setup_repository import (
-        SetupEvaluationRepository,
-        SetupRepository,
-    )
-
-    repository = SetupRepository(client)
-    evaluations = SetupEvaluationRepository(client)
+    repository = storage.setups
+    evaluations = storage.setup_evaluations
     for symbol in config.symbols:
         point = tuning_for(symbol).point
         rule = get_rule(config.rule_id_for(symbol))

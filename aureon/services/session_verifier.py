@@ -29,7 +29,7 @@ evidence blocks rather than summarised into a verdict nobody can re-derive.
 6. ``observer_ran_to_the_close`` -- the observer's heartbeat against the last archived
    candle. This is the one that catches a process that died at lunchtime.
 
-Nothing here writes to Firestore: it reads through ``PeriodReader``, which has no write
+Nothing here writes to cloud storage: it reads through ``PeriodReader``, which has no write
 method, so a verification cannot alter what it is verifying.
 """
 
@@ -104,11 +104,11 @@ class SessionVerifier:
         return self._client
 
     def _default_client(self) -> Any:
-        from aureon.storage.firebase_service import get_client
+        from aureon.storage.runtime import build_storage
 
-        return get_client(
-            project_id=self.config.firebase_project_id,
-            emulator_host=self.config.firestore_emulator_host,
+        return build_storage(
+            account_scope=self.config.account_scope,
+            state_heartbeat_seconds=self.config.state_heartbeat_seconds,
         )
 
     def _default_comparison(self) -> Comparison:
@@ -341,7 +341,7 @@ class SessionVerifier:
         )
 
     def check_detections_stored(self) -> CheckResult:
-        """Firestore holds the day's detections, and how many of each agent.
+        """Local application storage holds the day's detections, and how many of each agent.
 
         Separate from the comparison on purpose: the comparison answers "do live and
         replay agree", which is also satisfied by both producing nothing.
@@ -349,13 +349,10 @@ class SessionVerifier:
         from collections import Counter
 
         from aureon.reviews.periods import day_period
-        from aureon.storage.period_reader import PeriodReader
-
         period = day_period(self.market_date, self.config.market_tz)
         try:
-            reader = PeriodReader(
-                self._client_or_none(), account_scope=self.config.account_scope
-            )
+            storage = self._client_or_none()
+            reader = storage.period_reader
             self._detections = [
                 d
                 for d in reader.detections_in(period.start, period.end)
@@ -422,7 +419,7 @@ class SessionVerifier:
                 Status.FAIL,
                 detail,
                 remedy=(
-                    f"{pending} detection(s) never reached Firestore, so every stored "
+                    f"{pending} detection(s) never reached local storage, so every stored "
                     "count in this document is a lower bound and the comparison above "
                     "will report them as missing."
                 ),
@@ -436,8 +433,6 @@ class SessionVerifier:
         produces an archive, detections and outcomes that all look normal and simply stop.
         """
         from aureon.storage import paths
-        from aureon.storage.system_state_repository import HeartbeatRepository
-
         if not self._candles:
             return CheckResult(
                 "observer_ran_to_the_close",
@@ -445,9 +440,7 @@ class SessionVerifier:
                 "not checked: no archive to compare a heartbeat against",
             )
         try:
-            beat = HeartbeatRepository(self._client_or_none()).read(
-                paths.SERVICE_OBSERVER
-            )
+            beat = self._client_or_none().heartbeats.read(paths.SERVICE_OBSERVER)
         except Exception as exc:
             return CheckResult(
                 "observer_ran_to_the_close",
@@ -480,7 +473,7 @@ class SessionVerifier:
                 remedy=(
                     "The archive extends past the last heartbeat, which means the "
                     "process was gone while candles were still arriving. Everything "
-                    "after that point is missing from Firestore, not from the market."
+                    "after that point is missing from local storage, not from the market."
                 ),
             )
         return CheckResult("observer_ran_to_the_close", Status.PASS, detail)

@@ -136,13 +136,19 @@ class DrillContext:
     now: Callable[[], datetime] = utc_now
 
     def __post_init__(self) -> None:
-        from aureon.storage.control_request_repository import ControlRequestRepository
-        from aureon.storage.trade_repository import TradeRepository
-        from aureon.storage.trade_request_repository import TradeRequestRepository
+        if hasattr(self.client, "trade_requests"):
+            self.requests = self.client.trade_requests
+            self.controls = self.client.controls
+            self.trades = self.client.trades
+        else:
+            # Legacy unit doubles can still supply the old repository-shaped client.
+            from aureon.storage.control_request_repository import ControlRequestRepository
+            from aureon.storage.trade_repository import TradeRepository
+            from aureon.storage.trade_request_repository import TradeRequestRepository
 
-        self.requests = TradeRequestRepository(self.client)
-        self.controls = ControlRequestRepository(self.client)
-        self.trades = TradeRepository(self.client)
+            self.requests = TradeRequestRepository(self.client)
+            self.controls = ControlRequestRepository(self.client)
+            self.trades = TradeRepository(self.client)
         # Where this drill's own broker calls start. A real terminal cannot be handed to
         # each drill fresh, so "the broker was never asked to send" has to mean "not by
         # THIS drill" -- measured from here rather than from an empty log.

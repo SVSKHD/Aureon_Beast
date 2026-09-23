@@ -2,7 +2,7 @@
 """Run the nine execution drills and record what they showed (P-4).
 
     python scripts/demo_drills.py --list
-    python scripts/demo_drills.py --all --broker fake     # against the emulator, first
+    python scripts/demo_drills.py --all --broker fake     # against local storage, first
     python scripts/demo_drills.py --drill 2 --broker mt5   # on a DEMO account
     python scripts/demo_drills.py --all --broker mt5 --evidence docs/evidence/demo_drills.md
 
@@ -136,17 +136,17 @@ def main(argv: list[str] | None = None, *, context_factory=None) -> int:
         broker_factory = build_broker_factory(
             args.broker, config=config, allow_real=args.allow_real
         )
-        from aureon.storage.firebase_service import get_client
+        from aureon.storage.runtime import build_storage
 
-        client = get_client(
-            project_id=config.firebase_project_id,
-            emulator_host=config.firestore_emulator_host,
+        storage = build_storage(
+            account_scope=config.account_scope,
+            state_heartbeat_seconds=config.state_heartbeat_seconds,
         )
         settings = drill_settings(config)
 
         def context_factory() -> DrillContext:
             return DrillContext(
-                client=client,
+                client=storage,
                 broker=broker_factory(),
                 settings=settings,
                 magic=config.aureon_magic,

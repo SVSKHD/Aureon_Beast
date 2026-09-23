@@ -1,13 +1,9 @@
-"""Reporting a request's outcome back to Discord (§8, §37).
+"""Report a confirmed request's eventual outcome back to Discord.
 
-A confirmation is not an answer. The human pressed CONFIRM; what they need next is what
-the broker did -- and that is the executor's account, arriving in Firestore, not something
-the button could have told them.
-
-So this listens to one request document and reports when it reaches a terminal state.
-**Never silent:** a failure is reported as loudly as a fill, with the reason the executor
-recorded. A human who authorised real money and heard nothing back has been failed worse
-than one who was told it was rejected.
+The runtime is local-only, so there is no Firestore document watch. A lightweight local
+poll checks the authoritative trade_request row; this is intentionally independent of
+broker execution and can never place an order. The poll is cheap SQLite I/O and stops as
+soon as the first reportable state is observed.
 """
 
 from __future__ import annotations
@@ -19,11 +15,9 @@ from typing import Any
 
 from aureon.models.enums import TradeRequestStatus
 from aureon.models.trade import TradeRequest
-from aureon.storage.trade_request_repository import TradeRequestRepository
 
 log = logging.getLogger(__name__)
 
-#: Statuses worth reporting. Every one of these is an answer the human is owed.
 REPORTABLE: frozenset[TradeRequestStatus] = frozenset(
     {
         TradeRequestStatus.FILLED,
@@ -39,73 +33,58 @@ REPORTABLE: frozenset[TradeRequestStatus] = frozenset(
 
 
 class RequestResultListener:
-    """Watches one trade request and reports its outcome once."""
+    """Poll one local request row and report its outcome once."""
 
     def __init__(
         self,
-        client: Any,
+        repository: Any,
         request_id: str,
         report: Callable[[TradeRequest], Awaitable[None]],
         *,
         loop: asyncio.AbstractEventLoop | None = None,
+        poll_seconds: float = 2.0,
     ) -> None:
-        # A repository, not a raw client: every Firestore call goes through one
-        # (CLAUDE.md, decision 107). ``client`` is still accepted so callers need no
-        # change.
-        self._requests = TradeRequestRepository(client)
+        # Callers may pass the repository directly (new runtime) or a storage bundle.
+        self._requests = getattr(repository, "trade_requests", repository)
         self.request_id = request_id
         self._report = report
         self._loop = loop
-        self._watch: Any | None = None
+        self._poll_seconds = max(0.5, poll_seconds)
+        self._task: Any | None = None
+        self._stop = asyncio.Event()
         self.reported = False
 
     def start(self) -> None:
-        """Begin watching. Failures here are logged, never raised.
-
-        A listener that cannot start is a missing notification, not a reason to fail the
-        trade that was already confirmed.
-        """
-        try:
-            self._watch = self._requests.watch_document(
-                self.request_id, self._on_snapshot
-            )
-        except Exception:  # noqa: BLE001
-            log.exception("could not watch request %s", self.request_id)
-
-    def _on_snapshot(self, docs: Any, changes: Any, read_time: Any) -> None:
-        """Firestore calls this on a background thread, so hop back to the loop."""
-        if self.reported:
-            return
-        for doc in docs:
-            data = doc.to_dict()
-            if not data:
-                continue
-            try:
-                request = TradeRequest.model_validate(data)
-            except Exception:  # noqa: BLE001
-                log.exception("unreadable request document %s", self.request_id)
-                continue
-            if request.status not in REPORTABLE:
-                continue
-            self.reported = True
-            self.stop()
-            self._dispatch(request)
-            return
-
-    def _dispatch(self, request: TradeRequest) -> None:
+        """Start a local poll without blocking the Discord event loop."""
         if self._loop is None:
-            log.info(
-                "request %s reached %s (no loop to report on)",
-                request.request_id,
-                request.status.value,
-            )
-            return
-        asyncio.run_coroutine_threadsafe(self._report(request), self._loop)
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                log.warning("cannot watch request %s: no event loop", self.request_id)
+                return
+        self._task = asyncio.run_coroutine_threadsafe(self._poll(), self._loop)
+
+    async def _poll(self) -> None:
+        while not self._stop.is_set() and not self.reported:
+            try:
+                request = await asyncio.to_thread(self._requests.get, self.request_id)
+                if request is not None and request.status in REPORTABLE:
+                    self.reported = True
+                    await self._report(request)
+                    self._stop.set()
+                    return
+            except Exception:  # noqa: BLE001
+                log.exception("could not read local request %s", self.request_id)
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=self._poll_seconds)
+            except TimeoutError:
+                pass
 
     def stop(self) -> None:
-        if self._watch is not None:
+        self._stop.set()
+        if self._task is not None:
             try:
-                self._watch.unsubscribe()
+                self._task.cancel()
             except Exception:  # noqa: BLE001
                 pass
-            self._watch = None
+            self._task = None

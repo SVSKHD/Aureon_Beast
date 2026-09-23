@@ -74,11 +74,15 @@ class ReviewService:
         self.market_tz = market_tz
         self.infer_window_minutes = infer_window_minutes
         self.account_scope = account_scope
-        self.reviews = ReviewRepository(client)
-        # Every read goes through a repository (CLAUDE.md, decision 107). The service
-        # used to stream collections off the client directly; a boundary test now fails
-        # on any .collection( or .document( outside aureon/storage.
-        self.source = PeriodReader(client, account_scope=account_scope)
+        if hasattr(client, "period_reader") and hasattr(client, "reviews"):
+            # Local runtime bundle: repository capabilities are already composed and no
+            # cloud client exists.
+            self.reviews = client.reviews
+            self.source = client.period_reader
+        else:
+            # Kept for isolated legacy unit doubles; production runtime never takes this path.
+            self.reviews = ReviewRepository(client)
+            self.source = PeriodReader(client, account_scope=account_scope)
 
     # ── Loading ───────────────────────────────────────────────────────────────
 

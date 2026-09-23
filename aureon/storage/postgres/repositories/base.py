@@ -25,7 +25,6 @@ from datetime import datetime
 from typing import Any, TypeVar
 
 from sqlalchemy import Table, text
-from sqlalchemy.dialects.postgresql import insert
 
 from aureon.models.base import to_utc
 from aureon.storage.postgres.database import Database
@@ -106,6 +105,11 @@ class PostgresRepository:
         """
         target = self.table if table is None else table
         columns = [c.name for c in target.primary_key.columns] if key is None else list(key)
+        dialect = self._db.engine.dialect.name
+        if dialect == "sqlite":
+            from sqlalchemy.dialects.sqlite import insert
+        else:
+            from sqlalchemy.dialects.postgresql import insert
         statement = insert(target).values(**values)
         statement = statement.on_conflict_do_update(
             index_elements=columns,
@@ -144,6 +148,10 @@ class PostgresRepository:
 
         Released by the commit or the rollback, so there is no path that leaks one.
         """
+        if self._db.engine.dialect.name == "sqlite":
+            # SQLite's BEGIN IMMEDIATE serialises writers for the duration of this short
+            # transaction. There is no advisory-lock primitive to take in addition.
+            return
         connection.execute(
             text("SELECT pg_advisory_xact_lock(:namespace, :key)"),
             {"namespace": ADVISORY_NAMESPACE, "key": advisory_key(name)},
