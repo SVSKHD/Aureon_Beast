@@ -19,10 +19,8 @@ resolves straight to FAILED with the code.
 
 ## Waking up
 
-A Firestore ``on_snapshot`` listener for immediacy, plus a poll as the backstop (§29).
-Both, because a listener can silently drop -- and a missed CONFIRMED request is a human
-watching a spinner that never resolves. The poll makes the listener an optimisation
-rather than a dependency.
+The local runtime polls durable ``trade_requests`` for CONFIRMED requests. There is no
+Firestore snapshot listener in the SQLite path; polling is the single wake-up mechanism.
 """
 
 from __future__ import annotations
@@ -110,7 +108,6 @@ class ExecutionWorker:
         self.leases = LeaseManager(repository, self.executor_id, lease_seconds=lease_seconds)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._listener: object | None = None
         self.executed = 0
         self.refused = 0
         self.left_executing = 0
@@ -432,25 +429,6 @@ class ExecutionWorker:
                 handled += 1
         return handled
 
-    def start_listener(self) -> None:
-        """Watch ``trade_requests where status == CONFIRMED`` (§29).
-
-        Best-effort: a failure here is logged, not raised, because the poll is the
-        actual guarantee.
-        """
-        try:
-            def on_snapshot(docs, changes, read_time) -> None:  # noqa: ANN001
-                for doc in docs:
-                    try:
-                        self.process(doc.id)
-                    except Exception:  # noqa: BLE001
-                        log.exception("listener failed on %s", doc.id)
-
-            self._listener = self.repository.watch_confirmed(on_snapshot)
-            log.info("listening for CONFIRMED trade requests")
-        except Exception:  # noqa: BLE001
-            log.exception("could not start the snapshot listener; polling only")
-
     def run(self) -> None:
         while not self._stop.is_set():
             if self.before_poll is not None:
@@ -475,18 +453,11 @@ class ExecutionWorker:
             return self.poll_seconds
 
     def start(self) -> None:
-        self.start_listener()
         self._thread = threading.Thread(target=self.run, name="executor", daemon=True)
         self._thread.start()
 
     def stop(self, *, timeout: float = 5.0) -> None:
         self._stop.set()
-        if self._listener is not None:
-            try:
-                self._listener.unsubscribe()  # type: ignore[attr-defined]
-            except Exception:  # noqa: BLE001
-                pass
-            self._listener = None
         if self._thread is not None:
             self._thread.join(timeout=timeout)
             self._thread = None

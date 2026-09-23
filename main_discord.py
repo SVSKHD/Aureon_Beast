@@ -6,8 +6,9 @@ mistake: it writes ``trade_requests`` for a human to confirm, ``control_requests
 executor to perform, ``settings.trading_enabled``, and audit rows. Everything else it does
 is reading.
 
-Requires ``AUREON_DISCORD_TOKEN``, ``AUREON_DISCORD_GUILD_ID`` and
-``AUREON_AUTHORIZED_USER_IDS``. It refuses to start without the token or the allowlist:
+Requires ``AUREON_DISCORD_TOKEN`` and ``AUREON_AUTHORIZED_USER_IDS``.
+``AUREON_DISCORD_GUILD_ID`` is optional: when present Aureon syncs commands only to that
+guild; when absent it syncs globally.
 an empty allowlist authorises nobody, so starting would produce a bot that answers no one
 while looking healthy -- worse than a clear failure.
 """
@@ -38,12 +39,6 @@ def check_configuration(config: AureonConfig) -> None:
         problems.append(
             "AUREON_AUTHORIZED_USER_IDS is empty — an empty allowlist authorises nobody, "
             "so the bot would answer no one while appearing healthy"
-        )
-    if not config.discord_guild_id:
-        problems.append(
-            "AUREON_DISCORD_GUILD_ID is not set — Aureon will not start with unsynced "
-            "slash commands because Discord can keep showing stale commands that then "
-            "end in 'Application did not respond'"
         )
     if problems:
         raise MissingConfiguration("; ".join(problems))

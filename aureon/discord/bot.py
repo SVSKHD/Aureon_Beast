@@ -140,10 +140,11 @@ class AureonBot(discord.Client):
         self._awake_poll = self.notifier.poll_seconds
 
     async def setup_hook(self) -> None:
-        """Register commands, scoped to the configured guild (§71).
+        """Register commands and sync them where the operator asked.
 
-        Guild-scoped rather than global on purpose: a global command is visible in every
-        server the application is added to, and this one places trades.
+        With ``AUREON_DISCORD_GUILD_ID`` set, commands are guild-scoped for immediate
+        updates. Without it, the id is optional and commands are synced globally instead.
+        Authorization remains enforced by the allowlist before handlers run.
         """
         from aureon.discord.commands import register_all
 
@@ -153,9 +154,10 @@ class AureonBot(discord.Client):
             await self.tree.sync(guild=self._guild)
             log.info("commands synced to guild %s", self._guild.id)
         else:
-            log.warning(
-                "AUREON_DISCORD_GUILD_ID is not set; commands are NOT synced. Set it — a "
-                "global trading command would appear in every server this app joins."
+            await self.tree.sync()
+            log.info(
+                "AUREON_DISCORD_GUILD_ID is not set; commands synced globally "
+                "(authorized-user checks still apply)"
             )
 
         if self.context.config.alert_channel_id is None:
