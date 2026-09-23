@@ -533,14 +533,9 @@ def test_a_clean_run_is_ready_and_exits_zero(tmp_path) -> None:
     report = build(tmp_path).run()
     assert [r.name for r in report.results] == [
         "config",
-        "collection_prefix",
         "outbox",
         "archive_dir",
-        "credentials",
-        "firestore",
-        # 13 S-2. SKIPs while the backend is still Firestore, and becomes a real check the
-        # moment S-4 switches it; it fails in both directions from then on (C-7).
-        "migrations",
+        "local_storage",
         "trading_enabled",
         "mt5_init",
         "mt5_account",
