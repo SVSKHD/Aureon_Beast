@@ -535,6 +535,7 @@ def _render_chart(
         _event_snapshot_float,
         _latest_snapshot_event,
         _rsi_status,
+        _setup_risk_fields,
     )
     from aureon.services.setup_reference import render_reference
     from aureon.visuals import chart_renderer
@@ -575,7 +576,12 @@ def _render_chart(
             ]
         )
 
-    analysis_lines = []
+    analysis_lines = [
+        f"SETUP    {setup.state.value.upper()} · {setup.direction_context.value.upper()}"
+    ]
+    for name, value in _setup_risk_fields(setup, trend_context):
+        label = "CLEAR" if name == "Setup clearance" else "RELATION"
+        analysis_lines.append(f"{label:<8} {value}")
     if trend_context is not None:
         analysis_lines.extend(
             [
@@ -600,7 +606,10 @@ def _render_chart(
         )
 
     overlays = chart_renderer.Overlays(
-        title=f"{setup.symbol} {setup.timeframe.value} · {setup.family.value.replace('_', ' ')}",
+        title=(
+            f"{setup.symbol} {setup.timeframe.value} · "
+            f"{setup.family.value.replace('_', ' ')} · {setup.direction_context.value}"
+        ),
         subtitle=setup.state.value,
         levels=tuple(levels),
         anchor_price=setup.anchor.price,
