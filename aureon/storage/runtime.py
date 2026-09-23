@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from aureon.storage.backend import StorageBackend, selected_backend
 from aureon.storage.local_database import LocalDatabase, get_database
 from aureon.storage.postgres.repositories.alerts import PriceAlertRepository
 from aureon.storage.postgres.repositories.control_requests import ControlRequestRepository
@@ -137,6 +138,12 @@ def build_storage(
     account_scope: str = "primary",
     state_heartbeat_seconds: float = 5.0,
 ) -> StorageRuntime:
+    backend = selected_backend()
+    if backend is StorageBackend.POSTGRES:
+        raise RuntimeError(
+            "PostgreSQL is reserved for next week's storage decision and is not enabled "
+            "in the current local-only runtime. Set AUREON_STORAGE_BACKEND=sqlite."
+        )
     db = get_database()
     return StorageRuntime(
         database=db,
