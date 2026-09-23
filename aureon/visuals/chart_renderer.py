@@ -592,14 +592,38 @@ def build(
         index = _nearest(times, mark.at)
         if index is None:
             continue
+        marker = (
+            "^"
+            if mark.direction_context == "bullish"
+            else "v"
+            if mark.direction_context == "bearish"
+            else "o"
+        )
         price.scatter(
             [index],
             [mark.price],
-            marker="^" if mark.direction_context == "bullish" else "v",
-            s=42,
+            marker=marker,
+            s=46,
             color=ANCHOR_COLOUR,
             zorder=6,
         )
+        if mark.label:
+            y_offset = 12 if mark.direction_context != "bearish" else -18
+            price.annotate(
+                mark.label,
+                xy=(index, mark.price),
+                xytext=(4, y_offset),
+                textcoords="offset points",
+                fontsize=6.5,
+                color=ANCHOR_COLOUR,
+                zorder=7,
+                bbox=dict(
+                    boxstyle="round,pad=0.14",
+                    fc="white",
+                    ec=ANCHOR_COLOUR,
+                    alpha=0.82,
+                ),
+            )
     for mark in overlays.events:
         index = _nearest(times, mark.at)
         if index is None:
