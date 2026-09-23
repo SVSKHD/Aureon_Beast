@@ -34,6 +34,7 @@ from aureon.models.mtf import MtfContext, TimeframeRead
 from aureon.services.market_day_builder import (
     build_day,
     build_frame,
+    build_live_analysis_frame,
     candles_from,
 )
 
@@ -151,6 +152,23 @@ def test_an_m5_frame_holds_the_bars_as_given() -> None:
     assert len(frame.bars) == 12
     assert frame.bars[0].at == START
     assert not frame.truncated
+
+
+def test_live_analysis_frame_carries_ema_rsi_and_swing_context() -> None:
+    frame = build_live_analysis_frame(
+        SYMBOL,
+        DAY,
+        m5(80),
+        market_tz=MARKET_TZ,
+        ema_fast_period=20,
+        ema_slow_period=50,
+        rsi_period=14,
+    )
+    assert frame.complete is False
+    assert frame.bars[-1].ema_fast is not None
+    assert frame.bars[-1].ema_slow is not None
+    assert frame.bars[-1].rsi is not None
+    assert any(bar.swing_high or bar.swing_low for bar in frame.bars)
 
 
 def test_a_higher_frame_is_aggregated_rather_than_fetched() -> None:
