@@ -91,6 +91,9 @@ class BotContext:
     #: a bot that could rewrite one could make its own picture agree with itself.
     setups: SetupReader | None = None
     market_days: MarketDayReader | None = None
+    # Read-only SQL adapter: completed Asia/London session summaries used only to explain
+    # setup cards. Discord still cannot write session truth.
+    sessions: Any | None = None
 
     @property
     def authorized_user_ids(self) -> tuple[str, ...]:
@@ -137,4 +140,5 @@ def build_context(config: AureonConfig, storage: Any) -> BotContext:
         ops_events=storage.ops,
         setups=storage.setup_reader,
         market_days=storage.market_days,
+        sessions=storage.session_reader,
     )
