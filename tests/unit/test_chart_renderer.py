@@ -232,6 +232,38 @@ def test_the_unavailable_image_says_which_absence_it_is() -> None:
 # ── what is on it ─────────────────────────────────────────────────────────────
 
 
+def test_confirmed_structure_labels_are_drawn_on_the_price_chart() -> None:
+    made = list(bars("XAUUSD", 30))
+    made[8] = cr.ChartBar(
+        at=made[8].at,
+        open=made[8].open,
+        high=made[8].high,
+        low=made[8].low,
+        close=made[8].close,
+        tick_volume=made[8].tick_volume,
+        structure_labels=("LH",),
+    )
+    made[16] = cr.ChartBar(
+        at=made[16].at,
+        open=made[16].open,
+        high=made[16].high,
+        low=made[16].low,
+        close=made[16].close,
+        tick_volume=made[16].tick_volume,
+        structure_labels=("LL",),
+    )
+    figure = cr.build(
+        "XAUUSD",
+        "M5",
+        tuple(made),
+        spec_for("XAUUSD"),
+        cr.Overlays(),
+    )
+    drawn = texts(figure)
+    assert "LH" in drawn
+    assert "LL" in drawn
+
+
 def test_the_invalidation_line_is_never_offered_as_a_stop() -> None:
     """A red dashed line at a round number under a candle chart is read as a stop by everyone who
     has ever traded. This one is where the structure stops being true, and nothing places an
