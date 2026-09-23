@@ -445,13 +445,32 @@ class TradeRequestRepository(PostgresRepository):
         row = self._row(request_id)
         return None if row is None else TradeRequest.model_validate(self._to_model_dict(row))
 
-    def with_status(self, status: TradeRequestStatus) -> list[TradeRequest]:
+    def list_by_status(
+        self,
+        status: TradeRequestStatus | list[TradeRequestStatus],
+        *,
+        limit: int = 100,
+    ) -> list[TradeRequest]:
+        """Compatibility read used by executor, monitor and reconciliation.
+
+        The legacy Firestore repository exposed list_by_status and accepted either one
+        status or a list. Service code depends on that repository contract, so the local
+        SQL backend implements the same shape rather than making services storage-aware.
+        """
+        statuses = [status] if isinstance(status, TradeRequestStatus) else list(status)
+        if not statuses:
+            return []
         statement = (
             select(self.table)
-            .where(self.table.c.status == status.value)
+            .where(self.table.c.status.in_([one.value for one in statuses]))
             .order_by(self.table.c.requested_at)
+            .limit(limit)
         )
         return self._parse_all(self._rows(statement), TradeRequest, what="trade_request")
+
+    def with_status(self, status: TradeRequestStatus) -> list[TradeRequest]:
+        """Single-status convenience retained for SQL-native callers."""
+        return self.list_by_status(status)
 
     def expired_leases(self, *, now: datetime | None = None) -> list[TradeRequest]:
         """EXECUTING requests whose lease has run out (§5's reconciliation input).
