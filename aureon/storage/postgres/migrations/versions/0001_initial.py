@@ -120,7 +120,7 @@ def upgrade() -> None:
     sa.Column('schema_version', sa.Integer(), nullable=False),
     sa.Column('market_date', sa.String(), nullable=False),
     sa.Column('symbol', sa.String(), nullable=True),
-    sa.Column('generated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('generated_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('evaluation_rule_id', sa.String(), nullable=True),
     sa.Column('review', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.PrimaryKeyConstraint('id')
@@ -417,7 +417,7 @@ def upgrade() -> None:
     sa.Column('iso_year', sa.Integer(), nullable=False),
     sa.Column('iso_week', sa.Integer(), nullable=False),
     sa.Column('symbol', sa.String(), nullable=True),
-    sa.Column('generated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('generated_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('evaluation_rule_id', sa.String(), nullable=True),
     sa.Column('review', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.PrimaryKeyConstraint('id')

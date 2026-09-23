@@ -284,10 +284,12 @@ def test_skip_mt5_skips_and_never_passes(tmp_path) -> None:
     for name in terminal_checks:
         assert report.get(name).status is Status.SKIP
     assert report.ok, "a skip does not fail the run"
-    # Six, not five: the migrations row also skips while the storage backend is still
-    # Firestore (13 S-2, decision 346). Counted rather than listed, because the point of
-    # the assertion is that a skip can never be read as a clean pass.
-    assert "6 checks not run" in report.summary(), (
+    # Five, one per terminal check above. It was six while the run carried an Alembic
+    # ``migrations`` row that skipped on a non-PostgreSQL backend; the local SQLite runtime
+    # builds its schema from the models on open, so there is no revision to be behind and
+    # the row left the startup path with it. Counted rather than listed, because the point
+    # of the assertion is that a skip can never be read as a clean pass.
+    assert f"{len(terminal_checks)} checks not run" in report.summary(), (
         "and it must not be possible to read the summary as a clean pass"
     )
 
@@ -557,11 +559,26 @@ def test_one_failure_makes_the_whole_run_non_zero(tmp_path) -> None:
     assert report.get("mt5_account").status is Status.SKIP
 
 
-def test_warnings_alone_do_not_block(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(paths, "PREFIX", paths.DEFAULT_COLLECTION_PREFIX)
-    report = build(tmp_path).run()
-    assert report.warnings
-    assert report.exit_code == 0
+def test_warnings_alone_do_not_block(tmp_path) -> None:
+    """A warning is something to read, not something to stop for.
+
+    Driven through the OUTBOX's warning -- rows left undelivered by a previous run -- rather
+    than the collection-prefix warning it used to use: that check named a Firestore prefix,
+    which says nothing about where a local SQLite session writes, and left the startup path
+    with the rest of the Firestore rows. The claim is unchanged; the reachable warning is
+    not.
+    """
+    from aureon.outbox.local_outbox import LocalOutbox
+    from tests.postgres.factories import a_detection
+
+    outbox_path = tmp_path / "outbox.db"
+    with LocalOutbox(outbox_path) as outbox:
+        assert outbox.enqueue(a_detection("d-left-over"))
+        assert outbox.pending_count() == 1
+
+    report = build(tmp_path, outbox_path=outbox_path).run()
+    assert [r.name for r in report.warnings] == ["outbox"]
+    assert report.exit_code == 0, "a warning must not block a session"
 
 
 def test_the_rendered_table_carries_every_check_and_its_remedy(tmp_path) -> None:

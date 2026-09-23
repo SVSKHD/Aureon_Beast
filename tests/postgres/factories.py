@@ -282,7 +282,13 @@ def an_ops_event(name: str = "observer_stale", scope: str | None = "XAUUSD", **o
 
 
 def an_alert(alert_id: str = "a1", **overrides: object):
-    """An armed price alert."""
+    """An armed price alert.
+
+    ``created_at`` is stamped although the MODEL allows it to be absent: ``arm`` sets it on
+    every real alert and the column is NOT NULL, so a fixture without one describes an alert
+    the store would never hold. Tests that go through ``arm`` never noticed, because ``arm``
+    supplies it; one that writes a settled alert directly does.
+    """
     from aureon.models.alerts import PriceAlert
 
     base = dict(
@@ -291,6 +297,7 @@ def an_alert(alert_id: str = "a1", **overrides: object):
         level=2410.0,
         side="above",
         requested_by="trader",
+        created_at=CLOSE,
     )
     return PriceAlert(**(base | overrides))
 

@@ -71,7 +71,7 @@ class SetupReadAdapter:
 class PeriodReadAdapter:
     """Read-only aggregate source for the review service."""
 
-    def __init__(self, storage: "StorageRuntime") -> None:
+    def __init__(self, storage: StorageRuntime) -> None:
         self._s = storage
 
     def detections_in(self, start: datetime, end: datetime) -> list[Any]:

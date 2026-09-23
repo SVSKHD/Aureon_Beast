@@ -70,7 +70,19 @@ class SetupEventRepository(PostgresRepository):
         statement = (
             select(self.table)
             .where(self.table.c.setup_id == setup_id)
-            .order_by(self.table.c.created_at, self.table.c.event_id)
+            # Ordered by the CANDLE CLOSE, which is what the Firestore query ordered by
+            # and what actually orders a market timeline. The port ordered by
+            # ``created_at``, the wall-clock moment of the write, and the two are not the
+            # same thing: a replay writes four candles' events inside one millisecond, so
+            # ``created_at`` ties and the order falls through to the hashed ``event_id``,
+            # which is arbitrary -- the rendered lifecycle then came back shuffled
+            # (decision 382). The other two stay as tie-breakers, so two events at the SAME
+            # close (which T-8 allows) still come back in a stable order.
+            .order_by(
+                self.table.c.market_time_utc,
+                self.table.c.created_at,
+                self.table.c.event_id,
+            )
         )
         if limit is not None:
             statement = statement.limit(limit)
@@ -135,19 +147,26 @@ class SetupRepository(PostgresRepository):
 
     # ── Opening ───────────────────────────────────────────────────────────────
 
-    def open(self, setup: Setup) -> Setup:
+    def open(self, setup: Setup, *, now: datetime | None = None) -> Setup:
         """Create a setup at its deterministic id, or return the one already there.
 
         Idempotent rather than raising, because the id is a pure function of what opened
         it: a re-processed candle produces the same setup, and refusing would turn a
         restart into an error the observer would have to special-case.
+
+        ``updated_at`` is stamped on the way in, with the ``now`` the engine has always
+        passed. The Firestore repository did both and the SQL port dropped them, which left
+        a freshly-opened setup with ``updated_at = None`` -- and ``changed_since`` is the
+        notifier's sweep (12 T-11), so the card that announces "a setup appeared" could
+        never be posted (decision 381).
         """
+        stamped = setup.model_copy(update={"updated_at": to_utc(now or utc_now())})
         with self._db.transaction() as connection:
-            existing = self._row(setup.setup_id, connection=connection)
+            existing = self._row(stamped.setup_id, connection=connection)
             if existing is not None:
                 return Setup.model_validate(self._to_model_dict(existing))
-            self._insert_only(self._to_row(setup), connection=connection)
-        return setup
+            self._insert_only(self._to_row(stamped), connection=connection)
+        return stamped
 
     # ── The transaction (§12) ─────────────────────────────────────────────────
 

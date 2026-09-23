@@ -59,6 +59,7 @@ from sqlalchemy import or_, select
 from aureon.models.audit import AuditRecord
 from aureon.models.base import to_utc, utc_now
 from aureon.models.enums import (
+    TERMINAL_REQUEST_STATUSES,
     FailureCode,
     TradeRequestStatus,
     assert_trade_request_transition,
@@ -74,6 +75,16 @@ from aureon.storage.postgres.repositories.base import PostgresRepository
 #: names, and §83's guard against bare collection literals keeps covering this module
 #: (decision 356).
 COLLECTION = tables.TradeRequest.__tablename__
+
+#: §58. The only fields a terminal request may still take. Both are observational: they
+#: record when it was last LOOKED at and assert nothing about what happened.
+RECONCILIATION_ONLY_FIELDS: frozenset[str] = frozenset(
+    {"last_reconciled_at", "last_synced_at"}
+)
+
+
+class TerminalWriteRejected(RuntimeError):
+    """An attempt to write to a request whose status is terminal."""
 
 
 class ClaimRejected(RuntimeError):
@@ -404,6 +415,12 @@ class TradeRequestRepository(PostgresRepository):
             # that came with it -- including the comment_token the executor stamps before
             # sending, leaving reconciliation nothing to search for. PARTIALLY_FILLED is
             # additionally re-entrant, as each further fill lands.
+            payload_keys = set(updates or ())
+            if failure_code is not None:
+                payload_keys.add("failure_code")
+            if failure_message is not None:
+                payload_keys.add("failure_message")
+
             nothing_to_write = (
                 current.status is new_status
                 and new_status is not TradeRequestStatus.PARTIALLY_FILLED
@@ -415,7 +432,27 @@ class TradeRequestRepository(PostgresRepository):
                 return current
 
             if current.status is not new_status:
+                # A status CHANGE is the transition table's business, terminal or not, so an
+                # illegal edge out of a terminal status keeps reporting itself as one.
                 assert_trade_request_transition(current.status, new_status)
+            elif current.status in TERMINAL_REQUEST_STATUSES:
+                # The gap the table cannot see: a SAME-status write carrying updates.
+                # FILLED -> FILLED is not a transition, so nothing above stops this path
+                # rewriting a settled request's volume or a FAILED one's reason -- which
+                # would make the P&L, and every review built on it, unfalsifiable. Only the
+                # reconciliation stamps may still land, because they record when it was last
+                # LOOKED at rather than what happened (§58).
+                #
+                # The Firestore repository had this branch and the SQL port dropped it. The
+                # seven tests that assert the property all passed throughout, because they
+                # still constructed the Firestore repository (decision 375).
+                disallowed = sorted(payload_keys - RECONCILIATION_ONLY_FIELDS)
+                if disallowed:
+                    raise TerminalWriteRejected(
+                        f"{request_id} is {current.status.value}, which is terminal; "
+                        f"refusing to write {disallowed}. Only "
+                        f"{sorted(RECONCILIATION_ONLY_FIELDS)} may still be written."
+                    )
 
             payload: dict[str, Any] = {"status": new_status, **(updates or {})}
             if failure_code is not None:

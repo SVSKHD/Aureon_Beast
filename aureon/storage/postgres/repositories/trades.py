@@ -157,7 +157,11 @@ class TradeRepository(PostgresRepository):
             self._audit(
                 connection,
                 actor=actor,
-                action="trade.transition",
+                # The OUTCOME, not the verb: ``trade.closed`` is what an operator greps
+                # for, and what §60's assertions name. ``to_status`` carries it too, but
+                # the action is the index. The Firestore repository wrote
+                # ``f"trade.{new_status.value}"`` and the port flattened it (decision 376).
+                action=f"trade.{new_status.value}",
                 trade_id=trade_id,
                 from_status=current.status,
                 to_status=new_status,

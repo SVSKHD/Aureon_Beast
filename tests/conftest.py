@@ -410,5 +410,39 @@ class _FakeCollection:
 
 
 @pytest.fixture
+def local_store(tmp_path):
+    """A REAL local database on a temp file, wired in as the process-wide one.
+
+    ``build_storage()`` reads the process-wide handle, so a test that wants the storage
+    runtime the services actually receive sets that handle rather than injecting a double.
+    SQLite makes this cheap: the whole schema is built per test from the same metadata the
+    services use, with no server to install and nothing shared between tests.
+
+    That is the point, and it is worth stating because the alternative was here until S-4:
+    an in-memory Firestore double satisfied SOME call paths of a repository it was never
+    meant for and failed others, so a test using it proved nothing about what ships
+    (decision 384).
+    """
+    from aureon.storage.local_database import LocalDatabase, set_database
+
+    database = LocalDatabase(tmp_path / "aureon.db")
+    database.ensure_schema()
+    set_database(database)
+    try:
+        yield database
+    finally:
+        set_database(None)
+        database.dispose()
+
+
+@pytest.fixture
+def storage(local_store):
+    """The ``StorageRuntime`` the services receive, over ``local_store``."""
+    from aureon.storage.runtime import build_storage
+
+    return build_storage()
+
+
+@pytest.fixture
 def firestore() -> InMemoryFirestore:
     return InMemoryFirestore()

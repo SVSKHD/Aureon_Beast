@@ -100,7 +100,7 @@ class NotificationRepository(PostgresRepository):
         return self._patch(kind, ref_id, {"message_id": message_id})
 
     def mark_failed(
-        self, kind: NotificationKind | str, ref_id: str, failure_message: str
+        self, kind: NotificationKind | str, ref_id: str, *, message: str
     ) -> Notification | None:
         """Record that the send failed.
 
@@ -113,7 +113,12 @@ class NotificationRepository(PostgresRepository):
             ref_id,
             {
                 "status": NotificationStatus.FAILED,
-                "failure_message": failure_message,
+                # The PARAMETER is ``message`` because that is what the notifier calls
+                # it -- and it called it that while this took ``failure_message``
+                # positionally, so every failed post raised a TypeError inside the
+                # except block that was trying to record the failure. The COLUMN keeps
+                # the unambiguous name.
+                "failure_message": message,
             },
         )
 

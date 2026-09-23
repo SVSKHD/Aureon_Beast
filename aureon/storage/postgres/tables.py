@@ -749,7 +749,12 @@ class DailyReview(Base):
 
     market_date: Mapped[str] = mapped_column(String)
     symbol: Mapped[str | None] = mapped_column(String)
-    generated_at: Mapped[datetime] = mapped_column()
+    # NULLABLE, because ``ReviewBase.generated_at`` is. A review regenerated to be compared
+    # against an earlier one is asked for WITHOUT a stamp, so that its bytes are a pure
+    # function of the data it aggregates and two runs can be diffed (§61). NOT NULL made
+    # that call fail at the database instead -- a schema opinion the model does not hold,
+    # and invisible until the one caller that relies on the looseness runs (decision 373).
+    generated_at: Mapped[datetime | None] = mapped_column()
     evaluation_rule_id: Mapped[str | None] = mapped_column(String)
 
     review: Mapped[dict[str, Any]] = mapped_column(Json)
@@ -772,7 +777,8 @@ class WeeklyReview(Base):
     iso_year: Mapped[int] = mapped_column(Integer)
     iso_week: Mapped[int] = mapped_column(Integer)
     symbol: Mapped[str | None] = mapped_column(String)
-    generated_at: Mapped[datetime] = mapped_column()
+    #: Nullable for the same reason as the daily review's (decision 373).
+    generated_at: Mapped[datetime | None] = mapped_column()
     evaluation_rule_id: Mapped[str | None] = mapped_column(String)
 
     review: Mapped[dict[str, Any]] = mapped_column(Json)
