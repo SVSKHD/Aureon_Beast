@@ -58,17 +58,17 @@ log = logging.getLogger("aureon.review")
 
 
 def build_service(config: AureonConfig, symbol: str | None = None) -> ReviewService:
-    from aureon.storage.firebase_service import get_client
+    from aureon.storage.runtime import build_storage
 
-    client = get_client(
-        project_id=config.firebase_project_id,
-        emulator_host=config.firestore_emulator_host,
+    storage = build_storage(
+        account_scope=config.account_scope,
+        state_heartbeat_seconds=config.state_heartbeat_seconds,
     )
     # That symbol's rule, not the process's (decision 141): the rule id goes on the document
     # as a claim about how its numbers were produced.
     rule_id = config.rule_id_for(symbol) if symbol else config.evaluation_rule_id
     return ReviewService(
-        client,
+        storage,
         get_rule(rule_id),
         market_tz=config.market_tz,
         infer_window_minutes=config.infer_window_minutes,

@@ -233,8 +233,7 @@ def build_monitor(config: AureonConfig) -> Monitor:
     from aureon.data.mt5_provider import MT5DataProvider
     from aureon.execution.mt5_broker import MT5Broker
     from aureon.services.market_state_service import MarketStateService
-    from aureon.storage.firebase_service import get_client
-    from aureon.storage.system_state_repository import HeartbeatRepository
+    from aureon.storage.runtime import build_storage
 
     broker = MT5Broker(
         market_tz=config.market_tz,
@@ -243,9 +242,9 @@ def build_monitor(config: AureonConfig) -> Monitor:
         server=config.mt5_server,
         terminal_path=config.mt5_terminal_path,
     )
-    client = get_client(
-        project_id=config.firebase_project_id,
-        emulator_host=config.firestore_emulator_host,
+    storage = build_storage(
+        account_scope=config.account_scope,
+        state_heartbeat_seconds=config.state_heartbeat_seconds,
     )
     provider = MT5DataProvider(market_tz=config.market_tz)
     # The same market-state service the observer and executor use, and its schedule, so
@@ -255,10 +254,10 @@ def build_monitor(config: AureonConfig) -> Monitor:
     return Monitor(
         config,
         broker,
-        TradeRepository(client, account_scope=config.account_scope),
-        TradeRequestRepository(client),
+        storage.trades,
+        storage.trade_requests,
         candle_provider=provider,
-        heartbeat=HeartbeatService(HeartbeatRepository(client), paths.SERVICE_MONITOR),
+        heartbeat=HeartbeatService(storage.heartbeats, paths.SERVICE_MONITOR),
         market_state_provider=lambda symbol: market_state.state_for(symbol).state,
         schedule=market_state.schedule,
         now=provider.now_utc,

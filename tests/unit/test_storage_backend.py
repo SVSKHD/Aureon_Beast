@@ -18,6 +18,7 @@ from aureon.storage.backend import (
     DEFAULT_BACKEND,
     StorageBackend,
     is_postgres,
+    is_sqlite,
     selected_backend,
 )
 from aureon.storage.postgres.database import (
@@ -53,15 +54,10 @@ GOOD_TEST = f"{DRIVER}://aureon:secret@127.0.0.1:5432/{TEST_DATABASE_NAME}"
 # ── The backend selector ──────────────────────────────────────────────────────
 
 
-def test_the_default_backend_is_still_firestore() -> None:
-    """Pinned so S-4's flip is a visible line in the commit that earns it.
-
-    S-1 adds the PostgreSQL package beside a working system; the repositories do not exist
-    until S-3. A default flipped here would produce a commit in which nothing runs, and
-    CLAUDE.md does not admit one ("each phase ends with its acceptance test green").
-    """
-    assert DEFAULT_BACKEND is StorageBackend.FIRESTORE
-    assert selected_backend({}) is StorageBackend.FIRESTORE
+def test_the_default_backend_is_local_sqlite() -> None:
+    assert DEFAULT_BACKEND is StorageBackend.SQLITE
+    assert selected_backend({}) is StorageBackend.SQLITE
+    assert is_sqlite({}) is True
     assert is_postgres({}) is False
 
 
@@ -86,7 +82,7 @@ def test_an_unknown_backend_refuses_to_start() -> None:
         selected_backend({BACKEND_ENV: "postgress"})
     message = str(raised.value)
     assert "postgress" in message
-    assert "postgres" in message and "firestore" in message, "the message must list the known set"
+    assert "postgres" in message and "sqlite" in message, "the message must list the known set"
 
 
 def test_every_backend_is_reachable_through_the_environment() -> None:

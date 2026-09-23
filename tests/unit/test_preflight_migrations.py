@@ -192,16 +192,15 @@ def test_a_broken_database_url_is_reported_rather_than_raised(postgres_backend) 
 # ── It is wired into the run ───────────────────────────────────────────────────
 
 
-def test_the_row_is_part_of_the_preflight_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A check nobody calls is a check that does not exist.
-
-    The S-1 lesson (decision 339): a guard tested at its definition and never at its
-    installation can be switched off silently. ``run()`` is the installation.
-    """
+def test_postgres_migration_row_is_not_in_the_local_default_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PostgreSQL is a next-step placeholder, not a prerequisite for local startup."""
     monkeypatch.delenv("AUREON_STORAGE_BACKEND", raising=False)
     preflight = _preflight(database_factory=lambda: _FakeDatabase())
     names = [check.__name__ for check in _run_order(preflight)]
-    assert "check_migrations" in names
+    assert "check_migrations" not in names
+    assert "check_local_storage" in names
 
 
 def _run_order(preflight: Preflight) -> list[Any]:

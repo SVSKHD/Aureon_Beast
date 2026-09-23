@@ -119,22 +119,18 @@ class Preflight:
         )
 
     def _default_database(self) -> Any:
-        """A ``Database`` from ``AUREON_DATABASE_URL``.
+        from aureon.storage.local_database import get_database
 
-        Constructed lazily and never connected here: building one cannot fail, so a broken
-        URL is REPORTED by the migrations row rather than crashing the preflight that
-        exists to report it.
-        """
-        from aureon.storage.postgres.database import Database, database_url
-
-        return Database(database_url())
+        return get_database()
 
     def _default_client(self) -> Any:
-        from aureon.storage.firebase_service import get_client
+        # Kept under the historical attribute name so test injection remains compatible.
+        # Production receives a local repository bundle, not a cloud client.
+        from aureon.storage.runtime import build_storage
 
-        return get_client(
-            project_id=self.config.firebase_project_id,
-            emulator_host=self.config.firestore_emulator_host,
+        return build_storage(
+            account_scope=self.config.account_scope,
+            state_heartbeat_seconds=self.config.state_heartbeat_seconds,
         )
 
     # ── The run ───────────────────────────────────────────────────────────────
@@ -144,12 +140,9 @@ class Preflight:
         report = CheckReport()
         for check in (
             self.check_config,
-            self.check_collection_prefix,
             self.check_outbox,
             self.check_archive_dir,
-            self.check_credentials,
-            self.check_firestore,
-            self.check_migrations,
+            self.check_local_storage,
             self.check_trading_enabled,
             self.check_mt5_init,
             self.check_mt5_account,
@@ -312,6 +305,24 @@ class Preflight:
                 remedy=f"Under {MIN_FREE_MEGABYTES:.0f} MB free.",
             )
         return CheckResult("archive_dir", Status.PASS, detail)
+
+    def check_local_storage(self) -> CheckResult:
+        """Local SQLite is required; no cloud credentials are involved."""
+        try:
+            self._client = self._client_factory()
+            database = self._database_factory()
+            database.probe()
+            database.transaction_probe()
+            path = getattr(database, "path", getattr(database, "name", "local"))
+            return CheckResult("local_storage", Status.PASS, f"sqlite WAL · {path}")
+        except Exception as exc:
+            self._client = None
+            return CheckResult(
+                "local_storage",
+                Status.FAIL,
+                f"{type(exc).__name__}: {exc}",
+                remedy="Check AUREON_LOCAL_DB_PATH and local file permissions.",
+            )
 
     # ── Firestore ─────────────────────────────────────────────────────────────
 
@@ -517,17 +528,20 @@ class Preflight:
         run wants it false, a demo execution drill wants it true -- so preflight refuses
         to have an opinion and refuses to let it go unseen.
         """
-        from aureon.storage.settings_repository import ExecutionSettingsRepository
-
         if self._client is None:
             return CheckResult(
                 "trading_enabled",
                 Status.SKIP,
-                "not read: no Firestore client",
-                remedy="Fix the firestore check first.",
+                "not read: local storage unavailable",
+                remedy="Fix the local_storage check first.",
             )
         try:
-            settings = ExecutionSettingsRepository(self._client).read()
+            if hasattr(self._client, "settings"):
+                settings = self._client.settings.read()
+            else:
+                # Compatibility for the in-memory repository double used by legacy unit tests.
+                from aureon.storage.settings_repository import ExecutionSettingsRepository
+                settings = ExecutionSettingsRepository(self._client).read()
         except Exception as exc:
             return CheckResult(
                 "trading_enabled", Status.FAIL, f"{type(exc).__name__}: {exc}"
@@ -747,14 +761,17 @@ class Preflight:
             return CheckResult(
                 "symbol_specs_published",
                 Status.SKIP,
-                "not run: no Firestore client",
-                remedy="Fix the firestore check first.",
+                "not run: local storage unavailable",
+                remedy="Fix the local_storage check first.",
             )
-        from aureon.storage.symbol_repository import SymbolRepository
-
         try:
             info = self._provider.symbol_info(self.symbol)
-            repository = SymbolRepository(self._client)
+            if hasattr(self._client, "symbols"):
+                repository = self._client.symbols
+            else:
+                # Compatibility for the in-memory repository double used by unit tests.
+                from aureon.storage.symbol_repository import SymbolRepository
+                repository = SymbolRepository(self._client)
             path = repository.publish(info, now=self.now())
             stored = repository.get(self.symbol)
         except Exception as exc:

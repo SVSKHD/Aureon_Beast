@@ -52,18 +52,17 @@ def check_configuration(config: AureonConfig) -> None:
 async def run(config: AureonConfig) -> None:
     from aureon.discord.bot import AureonBot
     from aureon.discord.context import build_context
-    from aureon.storage.firebase_service import get_client
-    from aureon.storage.system_state_repository import HeartbeatRepository
+    from aureon.storage.runtime import build_storage
 
-    client = get_client(
-        project_id=config.firebase_project_id,
-        emulator_host=config.firestore_emulator_host,
+    storage = build_storage(
+        account_scope=config.account_scope,
+        state_heartbeat_seconds=config.state_heartbeat_seconds,
     )
-    context = build_context(config, client)
+    context = build_context(config, storage)
     bot = AureonBot(context)
 
     heartbeat = HeartbeatService(
-        HeartbeatRepository(client),
+        storage.heartbeats,
         paths.SERVICE_DISCORD,
         detail_provider=lambda: {"guild": config.discord_guild_id},
     )

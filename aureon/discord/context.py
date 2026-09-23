@@ -1,10 +1,10 @@
 """What the Discord layer is allowed to reach (§71, CLAUDE.md).
 
 A single object holding every repository the bot may use -- and, just as importantly, not
-holding a broker or a data provider. Discord reads Firestore and writes only
+holding a broker or a data provider. Discord reads local application storage and writes only
 ``trade_requests``, ``control_requests``, ``settings.trading_enabled`` and ``audit_logs``.
 
-Firestore's Python client is **synchronous**. Called directly from a discord.py handler it
+The local SQL repositories are **synchronous**. Called directly from a discord.py handler it
 would block the event loop, and a blocked loop means missed heartbeats and interactions
 that time out at three seconds. So every call goes through ``run`` , which pushes it to a
 worker thread.
@@ -97,7 +97,7 @@ class BotContext:
         return self.config.authorized_user_ids
 
     async def run(self, fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
-        """Run a blocking Firestore call off the event loop.
+        """Run a blocking storage call off the event loop.
 
         Not an optimisation: discord.py must answer an interaction within three seconds,
         and a synchronous Firestore round trip on the loop can miss that and lose the
@@ -110,24 +110,31 @@ class BotContext:
         return await self.run(self.settings.read_or_default)
 
 
-def build_context(config: AureonConfig, client: Any) -> BotContext:
-    """Assemble a context from a Firestore client."""
+def build_context(config: AureonConfig, storage: Any) -> BotContext:
+    """Assemble Discord from the local repository bundle.
+
+    Discord still receives no broker and no market-data provider. The only change is that
+    its persistence capabilities now come from local SQL repositories rather than a
+    Firebase client.
+    """
     return BotContext(
         config=config,
-        requests=TradeRequestRepository(client),
-        controls=ControlRequestRepository(client),
-        trades=TradeRepository(client, account_scope=config.account_scope),
-        detections=DetectionRepository(client),
-        settings=ExecutionSettingsRepository(client),
-        reviews=ReviewReader(client),
-        symbols=SymbolRepository(client),
-        system_state=SystemStateRepository(client),
-        heartbeats=HeartbeatRepository(client),
-        alerts=PriceAlertRepository(client),
-        notifications=NotificationRepository(client),
-        notification_settings=NotificationSettingsRepository(client),
-        evaluations=EvaluationReader(client),
-        assessments=AssessmentRepository(client),
-        notes=TradeNoteRepository(client),
-        ops_events=OpsEventRepository(client),
+        requests=storage.trade_requests,
+        controls=storage.controls,
+        trades=storage.trades,
+        detections=storage.detections,
+        settings=storage.settings,
+        reviews=storage.review_reader,
+        symbols=storage.symbols,
+        system_state=storage.system_state,
+        heartbeats=storage.heartbeats,
+        alerts=storage.alerts,
+        notifications=storage.notifications,
+        notification_settings=storage.notification_settings,
+        evaluations=storage.evaluations,
+        assessments=storage.assessments,
+        notes=storage.notes,
+        ops_events=storage.ops,
+        setups=storage.setup_reader,
+        market_days=storage.market_days,
     )
