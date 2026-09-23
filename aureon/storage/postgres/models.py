@@ -21,7 +21,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import DateTime
+from sqlalchemy import JSON, DateTime
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.types import TypeDecorator
@@ -31,7 +31,7 @@ from aureon.models.base import to_utc
 #: Frozen context: market snapshots, MTF context, setup reference blocks, metadata,
 #: research snapshots. Re-exported here so a table declares ``Json`` and no repository has
 #: to know that the dialect-specific type lives in a SQLAlchemy submodule.
-Json = JSONB
+Json = JSON().with_variant(JSONB(), "postgresql")
 
 
 class NaiveTimestamp(ValueError):
@@ -100,6 +100,11 @@ class UtcTimestamp(TypeDecorator):
         if value is None:
             return None
         if value.tzinfo is None:
+            # SQLite has no timezone-aware datetime storage. Values are normalized to UTC
+            # on write above, so a naive value returned by SQLite is unambiguously UTC.
+            # PostgreSQL must still return aware timestamptz values.
+            if getattr(dialect, "name", None) == "sqlite":
+                return value.replace(tzinfo=UTC)
             raise NaiveTimestamp(
                 f"the database returned the naive timestamp {value!r}. The column is "
                 "declared without a time zone; it must be timestamptz."
