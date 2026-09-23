@@ -121,6 +121,7 @@ class ChartBar:
     low: float
     close: float
     tick_volume: int = 0
+    structure_labels: tuple[str, ...] = ()
 
     @property
     def rising(self) -> bool:
@@ -209,6 +210,7 @@ def from_frames(frames: Sequence[Any]) -> tuple[ChartBar, ...]:
             low=bar.low,
             close=bar.close,
             tick_volume=int(bar.tick_volume or 0),
+            structure_labels=tuple(getattr(bar, "structure_labels", ()) or ()),
         )
         for frame in frames
         for bar in frame.bars
@@ -522,6 +524,32 @@ def build(
             )
         )
 
+    # ── confirmed market-structure labels ─────────────────────────────────────
+    for index, bar in enumerate(bars):
+        if not bar.structure_labels:
+            continue
+        for offset, label in enumerate(bar.structure_labels):
+            is_high = label in {"SH", "HH", "LH", "EH"}
+            y = bar.high if is_high else bar.low
+            y_offset = 10 + offset * 10 if is_high else -16 - offset * 10
+            price.annotate(
+                label,
+                xy=(index, y),
+                xytext=(0, y_offset),
+                textcoords="offset points",
+                ha="center",
+                fontsize=7,
+                fontweight="bold",
+                color="#222222",
+                zorder=7,
+                bbox=dict(
+                    boxstyle="round,pad=0.12",
+                    fc="white",
+                    ec="#555555",
+                    alpha=0.78,
+                ),
+            )
+
     # ── the indicator lines, as they were computed elsewhere ──────────────────
     for series, colour, name in (
         (overlays.ema_fast, FAST_COLOUR, overlays.ema_fast_label),
@@ -592,14 +620,38 @@ def build(
         index = _nearest(times, mark.at)
         if index is None:
             continue
+        marker = (
+            "^"
+            if mark.direction_context == "bullish"
+            else "v"
+            if mark.direction_context == "bearish"
+            else "o"
+        )
         price.scatter(
             [index],
             [mark.price],
-            marker="^" if mark.direction_context == "bullish" else "v",
-            s=42,
+            marker=marker,
+            s=46,
             color=ANCHOR_COLOUR,
             zorder=6,
         )
+        if mark.label:
+            y_offset = 12 if mark.direction_context != "bearish" else -18
+            price.annotate(
+                mark.label,
+                xy=(index, mark.price),
+                xytext=(4, y_offset),
+                textcoords="offset points",
+                fontsize=6.5,
+                color=ANCHOR_COLOUR,
+                zorder=7,
+                bbox=dict(
+                    boxstyle="round,pad=0.14",
+                    fc="white",
+                    ec=ANCHOR_COLOUR,
+                    alpha=0.82,
+                ),
+            )
     for mark in overlays.events:
         index = _nearest(times, mark.at)
         if index is None:

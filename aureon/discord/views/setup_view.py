@@ -49,6 +49,7 @@ class SetupView(discord.ui.View):
         symbol: str,
         setup_id: str,
         side: str | None = None,
+        cleared: bool = False,
         timeout: float | None = None,
     ) -> None:
         # No timeout: the card is edited in place for as long as the setup lives, and a button
@@ -58,9 +59,10 @@ class SetupView(discord.ui.View):
         self.symbol = symbol
         self.setup_id = setup_id
         self.side = side
-        if side is None:
-            # A NEUTRAL direction context has no side to prefill, and inventing one is exactly
-            # the guess this whole design refuses to make.
+        self.cleared = cleared
+        if side is None or not cleared:
+            # Execute is shown only for a setup that is currently cleared by the review
+            # surface. Raw/early/counter-trend/MTF-conflicted setups stay monitor-only.
             self.remove_item(self.execute)
 
     @discord.ui.button(label="Monitor", style=discord.ButtonStyle.secondary)
@@ -93,6 +95,65 @@ class SetupView(discord.ui.View):
                 embed=notice_embed(
                     "Not authorized",
                     "This channel is readable by more people than may trade (§71).",
+                    bad=True,
+                ),
+                ephemeral=True,
+            )
+            return
+        # Re-read the current setup before opening the modal. A card can be stale for a few
+        # seconds while its setup moves into FAKEOUT_RISK or its MTF context changes.
+        try:
+            from aureon.discord.service import (
+                build_setup_confirmation,
+                build_setup_trend_context,
+                symbol_state_of,
+            )
+
+            setup = await self.context.run(self.context.setups.get, self.setup_id)
+            if setup is None:
+                raise RuntimeError("setup no longer exists")
+            events = await self.context.run(self.context.setups.events, self.setup_id)
+            state_doc = await self.context.run(
+                self.context.system_state.read_symbol,
+                setup.symbol,
+                setup.timeframe,
+            )
+            symbol_state = symbol_state_of(state_doc, setup.symbol)
+            sessions = (
+                await self.context.run(
+                    self.context.sessions.for_market_date,
+                    setup.market_date,
+                    symbol=setup.symbol,
+                )
+                if self.context.sessions is not None
+                else []
+            )
+            trend_context = build_setup_trend_context(symbol_state, sessions)
+            confirmation = build_setup_confirmation(
+                setup,
+                events=events,
+                symbol_state=symbol_state,
+                trend_context=trend_context,
+            )
+        except Exception:
+            log.exception("could not refresh confirmation for setup %s", self.setup_id)
+            await interaction.response.send_message(
+                embed=notice_embed(
+                    "Confirmation unavailable",
+                    "Aureon could not refresh the setup state. Use `/setup` and review it again.",
+                    bad=True,
+                ),
+                ephemeral=True,
+            )
+            return
+
+        if not confirmation.cleared:
+            await interaction.response.send_message(
+                embed=notice_embed(
+                    "Setup not cleared",
+                    confirmation.clearance
+                    + "\n"
+                    + ("\n".join(f"• {one}" for one in confirmation.blockers) or "No details."),
                     bad=True,
                 ),
                 ephemeral=True,

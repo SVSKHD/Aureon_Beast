@@ -21,6 +21,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from aureon.engine.mtf import aggregate
+from aureon.engine.structure import labels_by_time
 from aureon.models.enums import Timeframe
 from aureon.models.market import Candle
 from aureon.models.market_day import (
@@ -39,8 +40,10 @@ def bars_of(candles: Sequence[Candle]) -> list[FrameBar]:
     a duplicate outright -- better to collapse it here, where the reason is visible, than to
     fail a whole day's write on a bar that was simply seen twice.
     """
+    ordered = sorted(candles, key=lambda candle: candle.open_time.utc)
+    structure = labels_by_time(ordered)
     seen: dict[object, FrameBar] = {}
-    for candle in candles:
+    for candle in ordered:
         seen[candle.open_time.utc] = FrameBar(
             at=candle.open_time.utc,
             open=candle.open,
@@ -48,6 +51,7 @@ def bars_of(candles: Sequence[Candle]) -> list[FrameBar]:
             low=candle.low,
             close=candle.close,
             tick_volume=candle.tick_volume,
+            structure_labels=structure.get(candle.open_time.utc, ()),
         )
     return [seen[key] for key in sorted(seen)]
 

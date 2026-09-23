@@ -21,7 +21,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from aureon.discord.service import SetupTrendContext, build_setup_card
+from aureon.discord.service import (
+    SetupTrendContext,
+    build_setup_card,
+    build_setup_confirmation,
+)
 from aureon.models.base import MarketTime
 from aureon.models.enums import (
     DirectionContext,
@@ -30,6 +34,7 @@ from aureon.models.enums import (
     SetupFamily,
     SetupState,
     Timeframe,
+    TrendBias,
 )
 from aureon.models.settings import (
     DEFAULT_SETUP_ANNOUNCEMENTS,
@@ -160,6 +165,130 @@ def test_the_card_shows_frozen_ema_cross_and_rsi_status() -> None:
     assert "58.0" in fields["RSI status"]
     assert "rising" in fields["RSI status"]
     assert fields["Setup trend @ event"] == "BULLISH"
+
+
+def _state_with_mtf(*biases: tuple[Timeframe, TrendBias]):
+    from types import SimpleNamespace
+    from aureon.models.mtf import MtfContext, TimeframeRead
+
+    reads = tuple(
+        TimeframeRead(
+            timeframe=timeframe,
+            at=NOW,
+            ema_fast=101.0 if bias is TrendBias.BULLISH else 99.0,
+            ema_slow=100.0,
+            close=100.5,
+            bias=bias,
+        )
+        for timeframe, bias in biases
+    )
+    return SimpleNamespace(
+        mtf=MtfContext(reads=reads, ema_fast_period=20, ema_slow_period=50)
+    )
+
+
+def _confirmation_events(*, bullish: bool = True) -> list[SetupEvent]:
+    if bullish:
+        first_fast, first_slow, last_fast, last_slow, rsi = 99.0, 100.0, 101.0, 100.0, 56.0
+    else:
+        first_fast, first_slow, last_fast, last_slow, rsi = 101.0, 100.0, 99.0, 100.0, 44.0
+    return [
+        an_event(
+            SetupEventType.EMA_GAP_NARROWING,
+            SetupState.WATCH,
+            context_snapshot={
+                "ema_fast": f"{first_fast}",
+                "ema_slow": f"{first_slow}",
+                "rsi": "49.0" if bullish else "51.0",
+            },
+        ),
+        an_event(
+            SetupEventType.CONFIRMED,
+            SetupState.CONFIRMED,
+            minutes=5,
+            context_snapshot={
+                "ema_fast": f"{last_fast}",
+                "ema_slow": f"{last_slow}",
+                "rsi": f"{rsi}",
+            },
+            reason="the EMA pair crossed",
+        ),
+    ]
+
+
+def test_confirmation_clears_only_when_trend_ema_rsi_and_mtf_agree() -> None:
+    setup = a_setup(direction_context=DirectionContext.BULLISH, state=SetupState.CONFIRMED)
+    read = build_setup_confirmation(
+        setup,
+        events=_confirmation_events(bullish=True),
+        symbol_state=_state_with_mtf(
+            (Timeframe.M15, TrendBias.BULLISH),
+            (Timeframe.H1, TrendBias.BULLISH),
+        ),
+        trend_context=SetupTrendContext(present="BULLISH"),
+    )
+    assert read.cleared is True
+    assert "CLEARED FOR REVIEW" in read.clearance
+    assert "✅ MTF ALIGNED" in read.badges
+    assert "▲ BULLISH EMA CROSS" in read.early_ema
+
+
+def test_confirmation_blocks_when_directional_timeframes_fight() -> None:
+    setup = a_setup(direction_context=DirectionContext.BULLISH, state=SetupState.CONFIRMED)
+    read = build_setup_confirmation(
+        setup,
+        events=_confirmation_events(bullish=True),
+        symbol_state=_state_with_mtf(
+            (Timeframe.M15, TrendBias.BULLISH),
+            (Timeframe.H1, TrendBias.BEARISH),
+        ),
+        trend_context=SetupTrendContext(present="BULLISH"),
+    )
+    assert read.cleared is False
+    assert "NOT CLEARED" in read.clearance
+    assert "⚠ MTF CONFLICT" in read.badges
+    assert any("timeframes disagree" in one for one in read.blockers)
+
+
+def test_early_ema_names_direction_before_the_cross() -> None:
+    events = [
+        an_event(
+            SetupEventType.WATCH_STARTED,
+            SetupState.WATCH,
+            context_snapshot={"ema_fast": "98.0", "ema_slow": "100.0", "rsi": "44.0"},
+        ),
+        an_event(
+            SetupEventType.EMA_GAP_NARROWING,
+            SetupState.WATCH,
+            minutes=5,
+            context_snapshot={"ema_fast": "99.4", "ema_slow": "100.0", "rsi": "47.0"},
+        ),
+    ]
+    read = build_setup_confirmation(
+        a_setup(state=SetupState.WATCH),
+        events=events,
+        symbol_state=_state_with_mtf((Timeframe.M15, TrendBias.BEARISH)),
+        trend_context=SetupTrendContext(present="BEARISH"),
+    )
+    assert "EARLY BULLISH" in read.early_ema
+    assert read.cleared is False
+
+
+def test_card_exposes_confirmation_badges_and_blockers() -> None:
+    screen = build_setup_card(
+        a_setup(direction_context=DirectionContext.BULLISH, state=SetupState.CONFIRMED),
+        events=_confirmation_events(bullish=True),
+        symbol_state=_state_with_mtf(
+            (Timeframe.M15, TrendBias.BULLISH),
+            (Timeframe.H1, TrendBias.BEARISH),
+        ),
+        trend_context=SetupTrendContext(present="BEARISH"),
+    )
+    fields = dict(screen.fields)
+    assert "NOT CLEARED" in fields["Confirmation"]
+    assert "MTF CONFLICT" in fields["Badges"]
+    assert "COUNTER-TREND" in fields["Badges"]
+    assert "timeframes disagree" in fields["Blockers"]
 
 
 def test_the_card_separates_present_asia_and_london_trends() -> None:

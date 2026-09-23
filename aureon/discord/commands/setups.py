@@ -21,7 +21,12 @@ from discord import app_commands
 from aureon.discord.context import BotContext
 from aureon.discord.embeds import notice_embed, setup_embed
 from aureon.discord.notifier import side_for
-from aureon.discord.service import build_setup_card, build_setup_trend_context, symbol_state_of
+from aureon.discord.service import (
+    build_setup_card,
+    build_setup_confirmation,
+    build_setup_trend_context,
+    symbol_state_of,
+)
 from aureon.discord.views.setup_view import SetupView
 
 log = logging.getLogger(__name__)
@@ -102,6 +107,7 @@ async def setup_reply(context: Any, *, setup_id: str) -> tuple[Any, Any]:
 
     events = await context.run(context.setups.events, setup.setup_id)
     trend_context = None
+    state = None
     if getattr(context, "system_state", None) is not None:
         state_doc = await context.run(
             context.system_state.read_symbol, setup.symbol, setup.timeframe
@@ -115,12 +121,24 @@ async def setup_reply(context: Any, *, setup_id: str) -> tuple[Any, Any]:
                 symbol=setup.symbol,
             )
         trend_context = build_setup_trend_context(state, sessions)
-    screen = build_setup_card(setup, events=events, trend_context=trend_context)
+    confirmation = build_setup_confirmation(
+        setup,
+        events=events,
+        symbol_state=state,
+        trend_context=trend_context,
+    )
+    screen = build_setup_card(
+        setup,
+        events=events,
+        trend_context=trend_context,
+        symbol_state=state,
+    )
     view = SetupView(
         context,
         symbol=setup.symbol,
         setup_id=setup.setup_id,
         side=side_for(setup),
+        cleared=confirmation.cleared,
     )
     return setup_embed(screen), view
 
