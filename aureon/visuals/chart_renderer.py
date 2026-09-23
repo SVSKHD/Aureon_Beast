@@ -121,6 +121,11 @@ class ChartBar:
     low: float
     close: float
     tick_volume: int = 0
+    ema_fast: float | None = None
+    ema_slow: float | None = None
+    rsi: float | None = None
+    swing_high: bool = False
+    swing_low: bool = False
 
     @property
     def rising(self) -> bool:
@@ -209,6 +214,11 @@ def from_frames(frames: Sequence[Any]) -> tuple[ChartBar, ...]:
             low=bar.low,
             close=bar.close,
             tick_volume=int(bar.tick_volume or 0),
+            ema_fast=getattr(bar, "ema_fast", None),
+            ema_slow=getattr(bar, "ema_slow", None),
+            rsi=getattr(bar, "rsi", None),
+            swing_high=bool(getattr(bar, "swing_high", False)),
+            swing_low=bool(getattr(bar, "swing_low", False)),
         )
         for frame in frames
         for bar in frame.bars
@@ -523,9 +533,11 @@ def build(
         )
 
     # ── the indicator lines, as they were computed elsewhere ──────────────────
+    fast_series = overlays.ema_fast or tuple(bar.ema_fast for bar in bars)
+    slow_series = overlays.ema_slow or tuple(bar.ema_slow for bar in bars)
     for series, colour, name in (
-        (overlays.ema_fast, FAST_COLOUR, overlays.ema_fast_label),
-        (overlays.ema_slow, SLOW_COLOUR, overlays.ema_slow_label),
+        (fast_series, FAST_COLOUR, overlays.ema_fast_label),
+        (slow_series, SLOW_COLOUR, overlays.ema_slow_label),
     ):
         if not series:
             continue
@@ -640,6 +652,32 @@ def build(
             linespacing=1.55,
             family="monospace",
         )
+        rsi_values = [bar.rsi for bar in bars]
+        if any(value is not None for value in rsi_values):
+            rsi_axes = figure.add_axes([0.735, 0.11, 0.23, 0.22])
+            rsi_axes.plot(
+                xs,
+                [value if value is not None else float("nan") for value in rsi_values],
+                linewidth=1.2,
+            )
+            rsi_axes.axhline(70.0, linestyle="--", linewidth=0.8, color="#888888")
+            rsi_axes.axhline(30.0, linestyle="--", linewidth=0.8, color="#888888")
+            rsi_axes.set_ylim(0, 100)
+            rsi_axes.set_title("RSI(14)", fontsize=9, loc="left")
+            rsi_axes.tick_params(axis="both", labelsize=6)
+            rsi_axes.grid(color=GRID_COLOUR, linewidth=0.4)
+
+    # ── observer-frozen swing trendlines ─────────────────────────────────────
+    swing_highs = [(i, bar.high) for i, bar in enumerate(bars) if bar.swing_high]
+    swing_lows = [(i, bar.low) for i, bar in enumerate(bars) if bar.swing_low]
+    if len(swing_highs) >= 2:
+        (x1, y1), (x2, y2) = swing_highs[-2:]
+        price.plot([x1, x2], [y1, y2], linestyle="--", linewidth=1.4, color=DOWN_COLOUR)
+        price.annotate("swing-high trendline", xy=(x2, y2), fontsize=6.5, color=DOWN_COLOUR)
+    if len(swing_lows) >= 2:
+        (x1, y1), (x2, y2) = swing_lows[-2:]
+        price.plot([x1, x2], [y1, y2], linestyle="--", linewidth=1.4, color=UP_COLOUR)
+        price.annotate("swing-low trendline", xy=(x2, y2), fontsize=6.5, color=UP_COLOUR)
 
     # ── the tick-volume panel, named honestly ─────────────────────────────────
     volume.bar(
@@ -661,7 +699,7 @@ def build(
     price.grid(color=GRID_COLOUR, linewidth=0.5)
     price.tick_params(axis="x", labelbottom=False)
     price.tick_params(axis="y", labelsize=8)
-    if overlays.ema_fast or overlays.ema_slow:
+    if fast_series or slow_series:
         price.legend(loc="upper left", fontsize=7, framealpha=0.8)
 
     ticks, labels = _time_ticks(times)
