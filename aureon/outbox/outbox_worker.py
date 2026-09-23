@@ -55,6 +55,7 @@ class OutboxWorker:
 
         self._backoff = 0.0
         self._stop = threading.Event()
+        self._delivery_lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self.delivered_total = 0
         self.failed_attempts = 0
@@ -64,28 +65,53 @@ class OutboxWorker:
     def drain_once(self, *, respect_stop: bool = True) -> int:
         """Attempt one batch. Returns the number delivered.
 
-        Stops the batch at the first failure rather than continuing: if Firestore is
-        down, the remaining rows in this batch will fail too, and burning through
-        them would inflate every row's attempt count for one outage.
-
-        ``respect_stop=False`` is for the deliberate final drain -- see ``flush``.
+        The delivery lock also serialises this background pass with
+        ``ensure_delivered``. That matters on SQLite: the observer may need a just-created
+        detection to exist before inserting a foreign-keyed evaluation, while the worker
+        thread may be draining the same row concurrently.
         """
-        rows = self.outbox.pending(limit=self.batch_size)
-        if not rows:
+        with self._delivery_lock:
+            rows = self.outbox.pending(limit=self.batch_size)
+            if not rows:
+                self._backoff = 0.0
+                return 0
+
+            delivered = 0
+            for row in rows:
+                if respect_stop and self._stop.is_set():
+                    break
+                if not self._deliver_row(row):
+                    self._grow_backoff()
+                    return delivered
+                delivered += 1
+
             self._backoff = 0.0
-            return 0
+            return delivered
 
-        delivered = 0
-        for row in rows:
-            if respect_stop and self._stop.is_set():
-                break
-            if not self._deliver_row(row):
-                self._grow_backoff()
-                return delivered
-            delivered += 1
+    def ensure_delivered(self, detection_ids: list[str]) -> set[str]:
+        """Synchronously ensure selected queued detections reached the sink.
 
-        self._backoff = 0.0
-        return delivered
+        Used only for ordering-sensitive local dependants such as
+        ``detection_evaluations``. The outbox remains the durability boundary: every
+        detection is queued first, then this method attempts the same idempotent delivery
+        path the background worker uses. A failed row remains pending for the worker.
+        """
+        ready: set[str] = set()
+        with self._delivery_lock:
+            for detection_id in detection_ids:
+                row = self.outbox.get(detection_id)
+                if row is None:
+                    continue
+                if row.delivered:
+                    ready.add(detection_id)
+                    continue
+                if not self._deliver_row(row):
+                    self._grow_backoff()
+                    break
+                ready.add(detection_id)
+            if len(ready) == len(detection_ids):
+                self._backoff = 0.0
+        return ready
 
     def _deliver_row(self, row: OutboxRow) -> bool:
         try:
