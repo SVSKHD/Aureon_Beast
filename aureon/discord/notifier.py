@@ -277,7 +277,7 @@ class Notifier:
             context.notifications.get, NotificationKind.SETUP, setup.setup_id
         )
         events = await context.run(context.setups.events, setup.setup_id)
-        chart, filename = await self._setup_chart(setup)
+        chart, filename = await self._setup_chart(setup, events)
         screen = build_setup_card(setup, events=events, chart_filename=filename)
         embed = setup_embed(screen)
         view = SetupView(
@@ -356,7 +356,7 @@ class Notifier:
             return False
         return True
 
-    async def _setup_chart(self, setup: Any) -> tuple[bytes | None, str | None]:
+    async def _setup_chart(self, setup: Any, events: Any = ()) -> tuple[bytes | None, str | None]:
         """The chart to attach, or ``(None, None)``.
 
         Never raises and never blocks past the renderer's own budget: a card with its words and
@@ -379,7 +379,7 @@ class Notifier:
                 include_today=setup.market_date,
             )
             spec = await context.run(context.symbols.get, setup.symbol)
-            png = await context.run(_render_chart, setup, bars, spec)
+            png = await context.run(_render_chart, setup, bars, spec, events)
         except Exception:  # noqa: BLE001 - a missing picture must not cost the card
             log.exception("could not draw the chart for setup %s", setup.setup_id)
             return None, None
@@ -471,23 +471,66 @@ def side_for(setup: Any) -> str | None:
     return SIDE_FOR_CONTEXT.get(setup.direction_context.value)
 
 
-def _render_chart(setup: Any, bars: Any, spec: Any) -> bytes:
-    """Draw the setup's chart. A module-level function so it can be handed to ``context.run``.
+def _render_chart(setup: Any, bars: Any, spec: Any, events: Any = ()) -> bytes:
+    """Draw a setup chart from stored candles and frozen setup-event context.
 
-    Every overlay here is read off the stored setup: the anchor, the invalidation price and the
-    family. **No indicator series is passed**, because Discord does not have them and must not
-    compute them (§71) -- the observer holds the EMAs, and a chart drawn here shows the candles,
-    the levels the setup is about, and nothing it would have had to derive.
+    Discord still computes no indicators. EMA/RSI values and event labels come from the
+    setup-event snapshots written by the observer; the picture only renders those facts.
     """
+    from aureon.discord.service import (
+        _early_ema_status,
+        _ema_relation,
+        _event_snapshot_float,
+        _latest_snapshot_event,
+        _rsi_status,
+    )
     from aureon.services.setup_reference import render_reference
     from aureon.visuals import chart_renderer
+
+    event_list = list(events)
+    latest = _latest_snapshot_event(event_list)
+    fast = _event_snapshot_float(latest, "ema_fast") if latest is not None else None
+    slow = _event_snapshot_float(latest, "ema_slow") if latest is not None else None
+    snapshot = getattr(latest, "context_snapshot", None) or {} if latest is not None else {}
+
+    levels = []
+    if fast is not None:
+        levels.append(chart_renderer.ChartLevel(price=fast, label="EMA20 now"))
+    if slow is not None:
+        levels.append(chart_renderer.ChartLevel(price=slow, label="EMA50 now"))
+
+    marks = []
+    for event in event_list[-8:]:
+        close = _event_snapshot_float(event, "close")
+        if close is None:
+            continue
+        marks.append(
+            chart_renderer.ChartMark(
+                at=event.market_time.utc,
+                price=close,
+                label=event.event_type.value.replace("_", " "),
+                direction_context=getattr(setup.direction_context, "value", None),
+            )
+        )
+
+    notes = [render_reference(setup.reference)[0]]
+    if latest is not None:
+        notes.extend(
+            [
+                f"EMA: {_ema_relation(fast, slow)} · {_early_ema_status(event_list, latest)}",
+                f"RSI: {_rsi_status(event_list, latest)}",
+                f"trend: {snapshot.get('trend', 'unknown')} · mtf {snapshot.get('mtf_alignment', 'unknown')}",
+            ]
+        )
 
     overlays = chart_renderer.Overlays(
         title=f"{setup.symbol} {setup.timeframe.value} · {setup.family.value.replace('_', ' ')}",
         subtitle=setup.state.value,
+        levels=tuple(levels),
         anchor_price=setup.anchor.price,
         invalidation_price=setup.invalidation_price,
-        notes=(render_reference(setup.reference)[0],),
+        events=tuple(marks),
+        notes=tuple(notes),
     )
     return chart_renderer.render(
         symbol=setup.symbol,

@@ -502,11 +502,10 @@ class Observer:
         archive is flushed, and for the same reason. Writing on every candle instead would be
         288 writes a day per symbol for a document nothing reads until the day is done.
 
-        The day in progress is not written at all, which is a deliberate narrowing of what 11D
-        asked for: a partial day is only useful to a chart, and a chart reading a document
-        flagged ``complete=False`` is one mistake away from an aggregation reading it as
-        finished -- which produces a daily bar whose close is not the close. The M1 parquet
-        archive already serves the live view, and it is the thing that has the bars anyway.
+        The day in progress is published as an M5 frame with ``complete=False`` for Discord
+        charts. Research and MTF readers still request complete frames only, so the live frame
+        cannot be mistaken for a finished broker day. This costs one local upsert per closed
+        M5 candle and avoids Discord receiving zero bars until day rollover.
         """
         if self.market_days is None or candle.timeframe is not Timeframe.M5:
             return
@@ -526,6 +525,34 @@ class Observer:
             self._day_clean[key] = True
         self._day_of[key] = day
         pending.append(candle)
+        self._write_live_chart_frame(candle.symbol, day, pending)
+
+    def _write_live_chart_frame(
+        self, symbol: str, market_date: str, candles: list[Candle]
+    ) -> None:
+        """Publish the in-progress M5 frame for Discord charts.
+
+        Finished-day readers still require complete=True. This incomplete frame exists only
+        so another local process can render the current session; without it Discord asks
+        get_frame for today and receives zero bars until day rollover.
+        """
+        if not candles or self.market_days is None:
+            return
+        from aureon.services.market_day_builder import build_frame
+
+        try:
+            self.market_days.write_frame(  # type: ignore[union-attr]
+                build_frame(
+                    symbol,
+                    market_date,
+                    Timeframe.M5,
+                    candles,
+                    market_tz=self.config.market_tz,
+                    complete=False,
+                )
+            )
+        except Exception:  # noqa: BLE001 - chart cache failure must not stop observation
+            log.exception("could not publish live chart frame for %s %s", symbol, market_date)
 
     def _write_market_day(
         self,
