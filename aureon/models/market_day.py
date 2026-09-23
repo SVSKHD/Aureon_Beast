@@ -73,6 +73,8 @@ class FrameBar(AureonModel):
     ema_fast: float | None = None
     ema_slow: float | None = None
     rsi: float | None = None
+    swing_high: bool = False
+    swing_low: bool = False
 
 
 class MarketDayFrame(AureonDocument):
