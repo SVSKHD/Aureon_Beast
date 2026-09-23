@@ -83,7 +83,6 @@ from aureon.services.ops_events import OpsRegister
 from aureon.services.shutdown import flushed, install_handlers
 from aureon.services.sleep_cycle import SleepCycle, SleepGate
 from aureon.storage import paths
-from aureon.storage.market_day_repository import MarketDayRepository
 
 log = logging.getLogger("aureon.observer")
 
