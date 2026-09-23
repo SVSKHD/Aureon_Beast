@@ -163,7 +163,13 @@ class SymbolState(AureonModel):
 
     # ── Session context (§18) ─────────────────────────────────────────────────
     session: SessionName | None = None
+    # session_trend is the most recently COMPLETED session summary, kept for historical
+    # compatibility. session_live_trend is the observer's in-progress read for the session
+    # that owns the latest closed candle.
     session_trend: str | None = None
+    session_live_trend: str | None = None
+    session_open: float | None = None
+    session_close: float | None = None
     session_high: float | None = None
     session_low: float | None = None
 
