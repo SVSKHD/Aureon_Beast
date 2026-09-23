@@ -567,6 +567,52 @@ def test_enriched_chart_draws_stored_rsi_and_swing_trendlines() -> None:
     assert "swing-low trendline" in annotations
 
 
+def test_enriched_chart_labels_ema_wick_and_rsi_events() -> None:
+    made = bars("XAUUSD", 60)
+    at = made[-5].at
+    overlay = cr.Overlays(
+        analysis_lines=("PRESENT  BEARISH",),
+        detections=(
+            cr.ChartMark(
+                at=at,
+                price=made[-5].close,
+                label="BEAR CROSS · london",
+                direction_context="bearish",
+                kind="ema_cross",
+            ),
+            cr.ChartMark(
+                at=made[-4].at,
+                price=made[-4].close,
+                label="WICK upper rejection",
+                kind="wick",
+            ),
+        ),
+        rsi_events=(
+            cr.RsiMark(at=at, value=29.5, label="oversold entry"),
+        ),
+    )
+    enriched = tuple(
+        cr.ChartBar(
+            at=bar.at,
+            open=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+            tick_volume=bar.tick_volume,
+            ema_fast=bar.close - 0.2,
+            ema_slow=bar.close + 0.3,
+            rsi=35.0,
+        )
+        for bar in made
+    )
+    figure = cr.build("XAUUSD", "M5", enriched, spec_for("XAUUSD"), overlay)
+    texts = [text.get_text() for axis in figure.axes for text in axis.texts]
+    assert "BEAR CROSS · london" in texts
+    assert "WICK upper rejection" in texts
+    assert "oversold entry" in texts
+    assert any(axis.get_title() == "RSI(14) · 70 / 50 / 30" for axis in figure.axes)
+
+
 @pytest.mark.parametrize("symbol", ["XAUUSD", "XAGUSD"])
 def test_the_picture_has_not_changed_without_somebody_noticing(symbol: str) -> None:
     """One golden hash per symbol, with a tolerance in bits.
