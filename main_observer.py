@@ -461,7 +461,7 @@ class Observer:
             rsi=read.rsi,
             previous_rsi=read.previous_rsi,
             trend=(
-                getattr(current_trend, "bias", None)
+                getattr(current_trend, "bias", None) or TrendBias.SIDEWAYS
                 if current_trend is not None
                 else TrendBias.SIDEWAYS
             ),
