@@ -2071,6 +2071,42 @@ def build_setup_trend_context(
         as_of=as_of,
     )
 
+def _setup_risk_fields(setup: Any, trend_context: SetupTrendContext | None) -> list[tuple[str, str]]:
+    """Make lifecycle and counter-trend risk impossible to miss on a phone.
+
+    This is state reporting, not a forecast: it says what has or has not been confirmed by the
+    setup engine and whether the present TrendRead points with or against the setup context.
+    """
+    state = setup.state
+    direction = setup.direction_context.value
+    present = trend_context.present if trend_context is not None else UNKNOWN
+
+    if state in {SetupState.OBSERVING, SetupState.WATCH, SetupState.DEVELOPING}:
+        clearance = f"NOT CLEARED — setup is {state.value}; confirmation has not occurred"
+    elif state is SetupState.FAKEOUT_RISK:
+        clearance = "BLOCKED — FAKEOUT_RISK is active"
+    elif state is SetupState.INVALIDATED:
+        clearance = "BLOCKED — setup invalidated"
+    elif state is SetupState.CONFIRMED:
+        clearance = "CONFIRMED — human review still required"
+    elif state is SetupState.PULLBACK:
+        clearance = "PULLBACK — confirmation is being retested"
+    elif state is SetupState.CONTINUATION:
+        clearance = "CONTINUATION — move already extended"
+    else:
+        clearance = state.value.upper()
+
+    counter = UNKNOWN
+    if present in {"BULLISH", "BEARISH"} and direction in {"bullish", "bearish"}:
+        aligned = present.lower() == direction
+        counter = "ALIGNED with present trend" if aligned else "COUNTER-TREND against present trend"
+
+    return [
+        ("Setup clearance", clearance),
+        ("Trend relationship", counter),
+    ]
+
+
 def build_setup_card(
     setup: Any,
     *,
@@ -2126,6 +2162,7 @@ def build_setup_card(
     all_events = list(events)
     recent = all_events[-CARD_EVENTS:]
     screen.description = _setup_event_lines(recent) if recent else "no events recorded yet"
+    screen.fields.extend(_setup_risk_fields(setup, trend_context))
     if trend_context is not None:
         screen.fields.extend(
             [
