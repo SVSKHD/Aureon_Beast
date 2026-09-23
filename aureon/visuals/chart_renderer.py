@@ -150,6 +150,16 @@ class ChartMark:
     #: ``bullish`` / ``bearish`` / ``None``. Never BUY or SELL: a mark on a chart of observations
     #: is not a side to take.
     direction_context: str | None = None
+    kind: str = "event"
+
+
+@dataclass(frozen=True)
+class RsiMark:
+    """One stored RSI-zone transition drawn on the RSI panel."""
+
+    at: datetime
+    value: float
+    label: str = ""
 
 
 @dataclass(frozen=True)
@@ -178,6 +188,7 @@ class Overlays:
     invalidation_price: float | None = None
     detections: tuple[ChartMark, ...] = ()
     events: tuple[ChartMark, ...] = ()
+    rsi_events: tuple[RsiMark, ...] = ()
     notes: tuple[str, ...] = field(default_factory=tuple)
     #: Human-readable market context rendered in a dedicated right-side panel. Values are
     #: supplied by the observer/Discord service; the renderer does not derive them.
@@ -604,14 +615,40 @@ def build(
         index = _nearest(times, mark.at)
         if index is None:
             continue
+        colour = (
+            UP_COLOUR
+            if mark.direction_context == "bullish"
+            else DOWN_COLOUR
+            if mark.direction_context == "bearish"
+            else ANCHOR_COLOUR
+        )
+        marker = {
+            "ema_cross": "^" if mark.direction_context == "bullish" else "v",
+            "wick": "D",
+            "liquidity": "s",
+            "breakout": "P",
+        }.get(mark.kind, "o")
         price.scatter(
             [index],
             [mark.price],
-            marker="^" if mark.direction_context == "bullish" else "v",
-            s=42,
-            color=ANCHOR_COLOUR,
+            marker=marker,
+            s=48 if mark.kind in {"ema_cross", "wick"} else 30,
+            color=colour,
             zorder=6,
         )
+        if mark.label:
+            y_offset = 12 if mark.direction_context != "bearish" else -18
+            price.annotate(
+                mark.label,
+                xy=(index, mark.price),
+                xytext=(4, y_offset),
+                textcoords="offset points",
+                fontsize=6.8,
+                fontweight="bold" if mark.kind == "ema_cross" else "normal",
+                color=colour,
+                zorder=7,
+                bbox=dict(boxstyle="round,pad=0.15", fc="white", ec=colour, alpha=0.82),
+            )
     for mark in overlays.events:
         index = _nearest(times, mark.at)
         if index is None:
@@ -661,9 +698,23 @@ def build(
                 linewidth=1.2,
             )
             rsi_axes.axhline(70.0, linestyle="--", linewidth=0.8, color="#888888")
+            rsi_axes.axhline(50.0, linestyle=":", linewidth=0.8, color="#aaaaaa")
             rsi_axes.axhline(30.0, linestyle="--", linewidth=0.8, color="#888888")
+            for mark in overlays.rsi_events:
+                index = _nearest(times, mark.at)
+                if index is None:
+                    continue
+                rsi_axes.scatter([index], [mark.value], marker="o", s=20, zorder=5)
+                rsi_axes.annotate(
+                    mark.label,
+                    xy=(index, mark.value),
+                    xytext=(3, 7),
+                    textcoords="offset points",
+                    fontsize=6,
+                    rotation=20,
+                )
             rsi_axes.set_ylim(0, 100)
-            rsi_axes.set_title("RSI(14)", fontsize=9, loc="left")
+            rsi_axes.set_title("RSI(14) · 70 / 50 / 30", fontsize=9, loc="left")
             rsi_axes.tick_params(axis="both", labelsize=6)
             rsi_axes.grid(color=GRID_COLOUR, linewidth=0.4)
 
