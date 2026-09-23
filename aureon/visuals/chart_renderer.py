@@ -74,8 +74,10 @@ MAX_WINDOW = 400
 MIN_BARS = 10
 
 #: 960x540 at 100 DPI: the size Discord renders inline without asking the reader to click.
-WIDTH_INCHES = 12.8
-HEIGHT_INCHES = 7.2
+WIDTH_INCHES = 9.6
+HEIGHT_INCHES = 5.4
+WIDE_WIDTH_INCHES = 12.8
+WIDE_HEIGHT_INCHES = 7.2
 DPI = 100
 
 #: How much of the figure the volume panel takes.
@@ -332,12 +334,13 @@ def _timeframe_label(timeframe: Any) -> str:
 # ── the drawing ───────────────────────────────────────────────────────────────
 
 
-def _figure():
+def _figure(*, wide: bool = False):
     """A figure and its canvas, through the object API. Never ``pyplot`` -- see the docstring."""
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
 
-    figure = Figure(figsize=(WIDTH_INCHES, HEIGHT_INCHES), dpi=DPI)
+    size = (WIDE_WIDTH_INCHES, WIDE_HEIGHT_INCHES) if wide else (WIDTH_INCHES, HEIGHT_INCHES)
+    figure = Figure(figsize=size, dpi=DPI)
     FigureCanvasAgg(figure)
     return figure
 
@@ -604,7 +607,7 @@ def build(
         price.scatter(
             [index], [mark.price], marker="o", s=18, color=FAST_COLOUR, zorder=6
         )
-        if mark.label:
+        if mark.label and overlays.analysis_lines:
             price.annotate(
                 mark.label.replace("_", " "),
                 xy=(index, mark.price),
@@ -667,7 +670,13 @@ def build(
     volume.set_xlim(-1, len(bars))
 
     footer = " · ".join((*overlays.notes, FOOTER_NOTE))
-    figure.text(0.06, 0.015, footer, fontsize=7, color="#888888")
+    figure.text(
+        0.06 if overlays.analysis_lines else 0.07,
+        0.015,
+        footer,
+        fontsize=7,
+        color="#888888",
+    )
     return figure
 
 
