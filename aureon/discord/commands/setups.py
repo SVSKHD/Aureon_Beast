@@ -21,7 +21,7 @@ from discord import app_commands
 from aureon.discord.context import BotContext
 from aureon.discord.embeds import notice_embed, setup_embed
 from aureon.discord.notifier import side_for
-from aureon.discord.service import build_setup_card
+from aureon.discord.service import build_setup_card, build_setup_trend_context, symbol_state_of
 from aureon.discord.views.setup_view import SetupView
 
 log = logging.getLogger(__name__)
@@ -101,7 +101,21 @@ async def setup_reply(context: Any, *, setup_id: str) -> tuple[Any, Any]:
         )
 
     events = await context.run(context.setups.events, setup.setup_id)
-    screen = build_setup_card(setup, events=events)
+    trend_context = None
+    if getattr(context, "system_state", None) is not None:
+        state_doc = await context.run(
+            context.system_state.read_symbol, setup.symbol, setup.timeframe
+        )
+        state = symbol_state_of(state_doc, setup.symbol)
+        sessions = []
+        if getattr(context, "sessions", None) is not None:
+            sessions = await context.run(
+                context.sessions.for_market_date,
+                setup.market_date,
+                symbol=setup.symbol,
+            )
+        trend_context = build_setup_trend_context(state, sessions)
+    screen = build_setup_card(setup, events=events, trend_context=trend_context)
     view = SetupView(
         context,
         symbol=setup.symbol,

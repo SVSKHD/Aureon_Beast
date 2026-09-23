@@ -206,16 +206,17 @@ def setup_embed(screen: Any) -> Any:
     """
     description = [screen.description] if screen.description else []
     embed = _embed(screen.title, colour=COLOUR_INFO, description="\n".join(description) or None)
+    full_width = {"Trend evidence"}
     for name, value in screen.fields:
-        embed.add_field(name=name, value=value or "—", inline=True)
+        embed.add_field(name=name, value=value or "—", inline=name not in full_width)
     if screen.reference:
         embed.add_field(
             name="Historical reference",
             value="\n".join(screen.reference),
             inline=False,
         )
-    if screen.chart_filename:
-        embed.set_image(url=f"attachment://{screen.chart_filename}")
+    # Keep the PNG as a normal message attachment rather than squeezing it inside the
+    # embed's fixed-width image slot. Discord then gives the chart its own preview area.
     embed.set_footer(text=screen.footer)
     return embed
 

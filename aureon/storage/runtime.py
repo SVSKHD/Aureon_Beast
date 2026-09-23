@@ -68,6 +68,16 @@ class SetupReadAdapter:
         return [row for row in rows if row.symbol == symbol]
 
 
+class SessionReadAdapter:
+    """Read-only session shape exposed to Discord."""
+
+    def __init__(self, repository: SessionRepository) -> None:
+        self._repo = repository
+
+    def for_market_date(self, market_date: str, *, symbol: str | None = None) -> list[Any]:
+        return self._repo.for_market_date(market_date, symbol=symbol)
+
+
 class PeriodReadAdapter:
     """Read-only aggregate source for the review service."""
 
@@ -129,6 +139,10 @@ class StorageRuntime:
         return SetupReadAdapter(self.setups)
 
     @property
+    def session_reader(self) -> SessionReadAdapter:
+        return SessionReadAdapter(self.sessions)
+
+    @property
     def period_reader(self) -> PeriodReadAdapter:
         return PeriodReadAdapter(self)
 
@@ -173,6 +187,7 @@ def build_storage(
 
 __all__ = [
     "PeriodReadAdapter",
+    "SessionReadAdapter",
     "SetupReadAdapter",
     "StorageRuntime",
     "build_storage",

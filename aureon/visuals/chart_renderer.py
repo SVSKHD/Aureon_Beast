@@ -76,6 +76,8 @@ MIN_BARS = 10
 #: 960x540 at 100 DPI: the size Discord renders inline without asking the reader to click.
 WIDTH_INCHES = 9.6
 HEIGHT_INCHES = 5.4
+WIDE_WIDTH_INCHES = 12.8
+WIDE_HEIGHT_INCHES = 7.2
 DPI = 100
 
 #: How much of the figure the volume panel takes.
@@ -172,6 +174,9 @@ class Overlays:
     detections: tuple[ChartMark, ...] = ()
     events: tuple[ChartMark, ...] = ()
     notes: tuple[str, ...] = field(default_factory=tuple)
+    #: Human-readable market context rendered in a dedicated right-side panel. Values are
+    #: supplied by the observer/Discord service; the renderer does not derive them.
+    analysis_lines: tuple[str, ...] = field(default_factory=tuple)
 
 
 def from_candles(candles: Sequence[Any]) -> tuple[ChartBar, ...]:
@@ -329,12 +334,13 @@ def _timeframe_label(timeframe: Any) -> str:
 # ── the drawing ───────────────────────────────────────────────────────────────
 
 
-def _figure():
+def _figure(*, wide: bool = False):
     """A figure and its canvas, through the object API. Never ``pyplot`` -- see the docstring."""
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
 
-    figure = Figure(figsize=(WIDTH_INCHES, HEIGHT_INCHES), dpi=DPI)
+    size = (WIDE_WIDTH_INCHES, WIDE_HEIGHT_INCHES) if wide else (WIDTH_INCHES, HEIGHT_INCHES)
+    figure = Figure(figsize=size, dpi=DPI)
     FigureCanvasAgg(figure)
     return figure
 
@@ -457,8 +463,15 @@ def build(
 
     decimals = _decimals(spec, bars)
     figure = _figure()
+    right_edge = 0.70 if overlays.analysis_lines else 0.88
     grid = figure.add_gridspec(
-        PRICE_HEIGHT_RATIO + 1, 1, hspace=0.06, left=0.07, right=0.88, top=0.90, bottom=0.10
+        PRICE_HEIGHT_RATIO + 1,
+        1,
+        hspace=0.06,
+        left=0.06,
+        right=right_edge,
+        top=0.90,
+        bottom=0.10,
     )
     price = figure.add_subplot(grid[:PRICE_HEIGHT_RATIO, 0])
     volume = figure.add_subplot(grid[PRICE_HEIGHT_RATIO, 0], sharex=price)
@@ -592,7 +605,40 @@ def build(
         if index is None:
             continue
         price.scatter(
-            [index], [mark.price], marker="o", s=14, color=FAST_COLOUR, zorder=6
+            [index], [mark.price], marker="o", s=18, color=FAST_COLOUR, zorder=6
+        )
+        if mark.label and overlays.analysis_lines:
+            price.annotate(
+                mark.label.replace("_", " "),
+                xy=(index, mark.price),
+                xytext=(4, 8),
+                textcoords="offset points",
+                fontsize=6.5,
+                color=ANCHOR_COLOUR,
+                rotation=18,
+                zorder=7,
+            )
+
+    # ── the right-side analysis panel ──────────────────────────────────────────
+    if overlays.analysis_lines:
+        figure.text(
+            0.735,
+            0.885,
+            "MARKET CONTEXT",
+            fontsize=11,
+            fontweight="bold",
+            color="#222222",
+            va="top",
+        )
+        figure.text(
+            0.735,
+            0.845,
+            "\n".join(overlays.analysis_lines),
+            fontsize=9,
+            color="#333333",
+            va="top",
+            linespacing=1.55,
+            family="monospace",
         )
 
     # ── the tick-volume panel, named honestly ─────────────────────────────────
@@ -624,7 +670,13 @@ def build(
     volume.set_xlim(-1, len(bars))
 
     footer = " · ".join((*overlays.notes, FOOTER_NOTE))
-    figure.text(0.07, 0.015, footer, fontsize=7, color="#888888")
+    figure.text(
+        0.06 if overlays.analysis_lines else 0.07,
+        0.015,
+        footer,
+        fontsize=7,
+        color="#888888",
+    )
     return figure
 
 

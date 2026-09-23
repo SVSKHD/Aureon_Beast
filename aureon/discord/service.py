@@ -47,6 +47,7 @@ from aureon.models.enums import (
     PriceAlertStatus,
     SleepPhase,
     TradeRequestStatus,
+    SessionName,
 )
 from aureon.models.identity import new_alert_id
 from aureon.models.market import QuoteSnapshot, SymbolInfo
@@ -2002,11 +2003,80 @@ CARD_DETECTIONS = 4
 SETUP_FOOTER_NOTE = "a setup is an observation · no order is implied · CONFIRM is still required"
 
 
+@dataclass(frozen=True)
+class SetupTrendContext:
+    """Three independent trend lenses shown on every setup card."""
+
+    present: str = UNKNOWN
+    asia: str = UNKNOWN
+    london: str = UNKNOWN
+    evidence: tuple[str, ...] = ()
+    as_of: datetime | None = None
+
+
+def _trend_word(value: Any) -> str:
+    raw = getattr(value, "value", value)
+    text = str(raw).lower() if raw is not None else ""
+    return {
+        "bullish": "BULLISH",
+        "bearish": "BEARISH",
+        "sideways": "SIDEWAYS",
+        "up": "UP",
+        "down": "DOWN",
+        "flat": "FLAT",
+    }.get(text, UNKNOWN if not text else text.upper())
+
+
+def _session_line(summary: Any | None, *, live_state: Any | None = None) -> str:
+    if summary is not None:
+        change = getattr(summary, "change_points", None)
+        suffix = f" · {change:+.0f} pts · complete" if change is not None else " · complete"
+        return f"{_trend_word(getattr(summary, 'trend', None))}{suffix}"
+    if live_state is not None:
+        live = getattr(live_state, "session_live_trend", None)
+        if live:
+            opened = getattr(live_state, "session_open", None)
+            closed = getattr(live_state, "session_close", None)
+            move = ""
+            if opened is not None and closed is not None:
+                move = f" · {_fmt(opened)} → {_fmt(closed)}"
+            return f"{_trend_word(live)} · live{move}"
+    return UNKNOWN
+
+
+def build_setup_trend_context(
+    state: Any | None,
+    sessions: Sequence[Any] = (),
+) -> SetupTrendContext:
+    """Build present / Asia / London readouts from observer-written state."""
+    if state is not None and hasattr(state, "symbols") and not hasattr(state, "trend_read"):
+        entries = list(getattr(state, "symbols", ()) or ())
+        state = entries[0] if len(entries) == 1 else None
+
+    trend = getattr(state, "trend_read", None) if state is not None else None
+    present = _trend_word(getattr(trend, "bias", None))
+    evidence = tuple(getattr(trend, "evidence", ()) or ())
+    as_of = getattr(trend, "as_of", None)
+
+    by_session = {getattr(one, "session", None): one for one in sessions}
+    active = getattr(state, "session", None) if state is not None else None
+    asia_live = state if active is SessionName.ASIA else None
+    london_live = state if active is SessionName.LONDON else None
+
+    return SetupTrendContext(
+        present=present,
+        asia=_session_line(by_session.get(SessionName.ASIA), live_state=asia_live),
+        london=_session_line(by_session.get(SessionName.LONDON), live_state=london_live),
+        evidence=evidence,
+        as_of=as_of,
+    )
+
 def build_setup_card(
     setup: Any,
     *,
     events: Sequence[Any] = (),
     chart_filename: str | None = None,
+    trend_context: SetupTrendContext | None = None,
 ) -> SetupScreen:
     """A setup's card, built entirely from the stored setup and its stored events (T-11).
 
@@ -2056,6 +2126,18 @@ def build_setup_card(
     all_events = list(events)
     recent = all_events[-CARD_EVENTS:]
     screen.description = _setup_event_lines(recent) if recent else "no events recorded yet"
+    if trend_context is not None:
+        screen.fields.extend(
+            [
+                ("Present trend", trend_context.present),
+                ("Asia trend", trend_context.asia),
+                ("London trend", trend_context.london),
+                (
+                    "Trend evidence",
+                    "\n".join(f"• {line}" for line in trend_context.evidence) or UNKNOWN,
+                ),
+            ]
+        )
     screen.fields.extend(_setup_indicator_fields(all_events))
     screen.fields.append(("Linked detections", _linked_line(setup.linked_detection_ids)))
     screen.reference = render_reference(setup.reference)
@@ -2186,7 +2268,7 @@ def _setup_indicator_fields(events: Sequence[Any]) -> list[tuple[str, str]]:
             ("EMA cross status", UNKNOWN),
             ("Early EMA status", "no early-cross event recorded"),
             ("RSI status", UNKNOWN),
-            ("Trend", UNKNOWN),
+            ("Setup trend @ event", UNKNOWN),
         ]
 
     fast = _event_snapshot_float(latest, "ema_fast")
@@ -2202,7 +2284,7 @@ def _setup_indicator_fields(events: Sequence[Any]) -> list[tuple[str, str]]:
         ("EMA cross status", _ema_relation(fast, slow)),
         ("Early EMA status", _early_ema_status(events, latest)),
         ("RSI status", _rsi_status(events, latest)),
-        ("Trend", snapshot.get("trend") or UNKNOWN),
+        ("Setup trend @ event", _trend_word(snapshot.get("trend"))),
     ]
 
 

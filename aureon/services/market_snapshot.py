@@ -63,6 +63,10 @@ class MarketSnapshot:
 
     session: SessionName | None = None
     session_trend: str | None = None
+    # Live-session price endpoints. The observer uses these to publish a current-session
+    # direction without making Discord derive a trend from candles.
+    session_open: float | None = None
+    session_close: float | None = None
     session_high: float | None = None
     session_low: float | None = None
 
@@ -161,17 +165,32 @@ class MarketSnapshot:
             _, _, trend = detection.event_key.partition("|")
             self.session_trend = trend
 
-    def observe_candle(self, *, high: float, low: float, session: SessionName) -> None:
+    def observe_candle(
+        self,
+        *,
+        high: float,
+        low: float,
+        session: SessionName,
+        open: float | None = None,
+        close: float | None = None,
+    ) -> None:
         """Track the session's running high and low.
 
         From candles rather than from detections, because a session can have a high
         without anything detecting anything -- and a session_high that only moved when an
         agent fired would be wrong most of the time.
         """
-        if session is not self.session and self.session is not None:
+        changed = session is not self.session and self.session is not None
+        if changed:
             self.session_high = None
             self.session_low = None
+            self.session_open = None
+            self.session_close = None
         self.session = session
+        if self.session_open is None and open is not None:
+            self.session_open = open
+        if close is not None:
+            self.session_close = close
         self.session_high = high if self.session_high is None else max(self.session_high, high)
         self.session_low = low if self.session_low is None else min(self.session_low, low)
 
@@ -185,6 +204,8 @@ class MarketSnapshot:
         self.market_date = market_date
         self.detections_today = 0
         self._seen.clear()
+        self.session_open = None
+        self.session_close = None
         self.session_high = None
         self.session_low = None
         self.session_trend = None
@@ -201,6 +222,8 @@ class MarketSnapshot:
             "rsi_zone": self.rsi_zone,
             "session": self.session,
             "session_trend": self.session_trend,
+            "session_open": self.session_open,
+            "session_close": self.session_close,
             "session_high": self.session_high,
             "session_low": self.session_low,
             "last_cross": self.last_cross,
