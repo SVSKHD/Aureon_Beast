@@ -48,6 +48,7 @@ from aureon.models.enums import (
     SleepPhase,
     TradeRequestStatus,
     SessionName,
+    SetupState,
 )
 from aureon.models.identity import new_alert_id
 from aureon.models.market import QuoteSnapshot, SymbolInfo
