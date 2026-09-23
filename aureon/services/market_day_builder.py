@@ -130,6 +130,21 @@ def build_live_analysis_frame(
             return None
         return None if math.isnan(number) else number
 
+    swing_strength = 2
+    swing_highs: set[int] = set()
+    swing_lows: set[int] = set()
+    for index in range(swing_strength, len(ordered) - swing_strength):
+        window = ordered[index - swing_strength : index + swing_strength + 1]
+        here = ordered[index]
+        if all(here.high >= other.high for other in window) and any(
+            here.high > other.high for other in window
+        ):
+            swing_highs.add(index)
+        if all(here.low <= other.low for other in window) and any(
+            here.low < other.low for other in window
+        ):
+            swing_lows.add(index)
+
     bars = tuple(
         FrameBar(
             at=candle.open_time.utc,
@@ -141,6 +156,8 @@ def build_live_analysis_frame(
             ema_fast=clean(fast.iloc[index]),
             ema_slow=clean(slow.iloc[index]),
             rsi=clean(strength.iloc[index]),
+            swing_high=index in swing_highs,
+            swing_low=index in swing_lows,
         )
         for index, candle in enumerate(ordered)
     )
