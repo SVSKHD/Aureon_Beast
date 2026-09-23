@@ -689,8 +689,15 @@ def _render_chart(
         )
 
     overlays = chart_renderer.Overlays(
-        title=f"{setup.symbol} {setup.timeframe.value} · {setup.family.value.replace('_', ' ')}",
-        subtitle=setup.state.value,
+        title=(
+            f"{setup.symbol} {setup.timeframe.value} · "
+            f"{setup.family.value.replace('_', ' ')} · "
+            f"{setup.direction_context.value.upper()}"
+        ),
+        subtitle=(
+            f"{setup.state.value} · "
+            + (confirmation.clearance if confirmation is not None else "confirmation unknown")
+        ),
         levels=tuple(levels),
         anchor_price=setup.anchor.price,
         invalidation_price=setup.invalidation_price,
