@@ -247,7 +247,15 @@ class Observer:
         )
 
     def _on_detections(self, detections: list[Detection]) -> None:
-        """Queue detections durably. Local write first, delivery later (§83)."""
+        """Queue detections durably, then establish SQL parent rows before evaluations.
+
+        The local outbox is still written first. With SQLite, however,
+        ``detection_evaluations.detection_id`` is a real foreign key to ``detections``.
+        The background outbox thread used to race the observer: an evaluation could be
+        inserted milliseconds before its parent detection arrived and SQLite correctly
+        rejected it. ``ensure_delivered`` uses the same idempotent sink path synchronously
+        for just this batch, while failed deliveries remain queued for retry.
+        """
         inserted = self.outbox.enqueue_many(detections)
         log.info(
             "queued %d detection(s) (%d new): %s",
@@ -255,12 +263,24 @@ class Observer:
             inserted,
             ", ".join(f"{d.agent_name}/{d.event_key}" for d in detections),
         )
+        ready = self.worker.ensure_delivered([d.detection_id for d in detections])
+        if len(ready) != len(detections):
+            log.warning(
+                "deferred initial evaluation persistence for %d detection(s) whose "
+                "parent row is not stored yet",
+                len(detections) - len(ready),
+            )
         for detection in detections:
             self._snapshot(detection.symbol, detection.timeframe).observe(detection)
         self._write_session_summaries(detections)
-        self._track_outcomes(detections)
+        self._track_outcomes(detections, persisted_detection_ids=ready)
 
-    def _track_outcomes(self, detections: list[Detection]) -> None:
+    def _track_outcomes(
+        self,
+        detections: list[Detection],
+        *,
+        persisted_detection_ids: set[str] | None = None,
+    ) -> None:
         """Begin evaluating new detections, and close any horizons they end (§22).
 
         Routed by the detection's own symbol: each symbol's tracker holds that symbol's
@@ -276,7 +296,10 @@ class Observer:
                 # opposite_cross horizon of earlier ones, and cannot close its own.
                 self._persist_evaluations(tracker.on_detection(detection))
                 started = tracker.track(detection)
-                if started is not None:
+                if started is not None and (
+                    persisted_detection_ids is None
+                    or detection.detection_id in persisted_detection_ids
+                ):
                     self._persist_evaluations([started])
         except Exception:  # noqa: BLE001 - evaluation must never stop observation
             log.exception("outcome tracking failed for a detection batch")
