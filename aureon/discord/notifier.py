@@ -564,10 +564,18 @@ def _render_chart(
     from aureon.visuals import chart_renderer
 
     event_list = list(events)
+    ordered_bars = sorted(bars, key=lambda one: one.at)
+    visible_bars = ordered_bars[-120:]
+    visible_start = visible_bars[0].at if visible_bars else None
+    visible_end = visible_bars[-1].at if visible_bars else None
     detection_list = [
         one
         for one in detections
         if getattr(one, "timeframe", None) == setup.timeframe
+        and (
+            visible_start is None
+            or visible_start <= one.candle_open_time.utc <= visible_end
+        )
     ]
     latest = _latest_snapshot_event(event_list)
     fast = _event_snapshot_float(latest, "ema_fast") if latest is not None else None
