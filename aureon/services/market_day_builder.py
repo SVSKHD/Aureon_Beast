@@ -19,7 +19,11 @@ an EMA out of it.
 from __future__ import annotations
 
 from collections.abc import Sequence
+import math
 
+import pandas as pd
+
+from aureon.engine.indicators import ema, rsi
 from aureon.engine.mtf import aggregate
 from aureon.models.enums import Timeframe
 from aureon.models.market import Candle
@@ -86,6 +90,70 @@ def build_frame(
         truncated=truncated,
         complete=complete,
     )
+
+
+
+def build_live_analysis_frame(
+    symbol: str,
+    market_date: str,
+    candles: Sequence[Candle],
+    *,
+    market_tz: str,
+    ema_fast_period: int,
+    ema_slow_period: int,
+    rsi_period: int = 14,
+) -> MarketDayFrame:
+    """Current-day M5 chart frame with observer-computed EMA/RSI series.
+
+    The values are computed here in the observer process and stored with the bars. Discord and
+    the chart renderer only display them; neither has to re-run strategy indicators.
+    """
+    ordered = sorted(candles, key=lambda one: one.open_time.utc)
+    if not ordered:
+        return MarketDayFrame(
+            symbol=symbol.upper(),
+            market_date=market_date,
+            timeframe=Timeframe.M5,
+            market_tz=market_tz,
+            complete=False,
+        )
+
+    closes = pd.Series([one.close for one in ordered], dtype="float64")
+    fast = ema(closes, ema_fast_period)
+    slow = ema(closes, ema_slow_period)
+    strength = rsi(closes, rsi_period)
+
+    def clean(value: object) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return None if math.isnan(number) else number
+
+    bars = tuple(
+        FrameBar(
+            at=candle.open_time.utc,
+            open=candle.open,
+            high=candle.high,
+            low=candle.low,
+            close=candle.close,
+            tick_volume=candle.tick_volume,
+            ema_fast=clean(fast.iloc[index]),
+            ema_slow=clean(slow.iloc[index]),
+            rsi=clean(strength.iloc[index]),
+        )
+        for index, candle in enumerate(ordered)
+    )
+    return MarketDayFrame(
+        symbol=symbol.upper(),
+        market_date=market_date,
+        timeframe=Timeframe.M5,
+        market_tz=market_tz,
+        bars=bars,
+        truncated=False,
+        complete=False,
+    )
+
 
 
 def build_day(
