@@ -44,3 +44,25 @@ def test_live_chart_frame_is_published_incomplete() -> None:
     assert frame.timeframe is Timeframe.M5
     assert frame.complete is False
     assert len(frame.bars) == 2
+
+
+def test_startup_hydrates_current_day_chart_before_live_candles_arrive() -> None:
+    observer = Observer.__new__(Observer)
+    observer.market_days = Frames()
+    observer.config = type("Config", (), {"market_tz": "Europe/Athens"})()
+    observer._day_bars = {}
+    observer._day_of = {}
+    observer._day_clean = {}
+
+    previous = datetime(2026, 9, 22, 18, 0, tzinfo=UTC)
+    current = datetime(2026, 9, 23, 6, 0, tzinfo=UTC)
+    bars = [candle(previous + timedelta(minutes=5 * i), 4300.0 + i) for i in range(4)]
+    bars += [candle(current + timedelta(minutes=5 * i), 4310.0 + i) for i in range(24)]
+
+    observer._hydrate_live_chart_day("XAUUSD", Timeframe.M5, bars)
+
+    frame = observer.market_days.written[-1]
+    assert frame.complete is False
+    assert frame.market_date == bars[-1].open_time.market_date
+    assert len(frame.bars) == 24
+    assert len(observer._day_bars[("XAUUSD", Timeframe.M5)]) == 24
