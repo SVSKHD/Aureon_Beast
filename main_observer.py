@@ -545,17 +545,18 @@ class Observer:
         """
         if not candles or self.market_days is None:
             return
-        from aureon.services.market_day_builder import build_frame
+        from aureon.services.market_day_builder import build_live_analysis_frame
 
         try:
             self.market_days.write_frame(  # type: ignore[union-attr]
-                build_frame(
+                build_live_analysis_frame(
                     symbol,
                     market_date,
-                    Timeframe.M5,
                     candles,
                     market_tz=self.config.market_tz,
-                    complete=False,
+                    ema_fast_period=self.config.ema_fast,
+                    ema_slow_period=self.config.ema_slow,
+                    rsi_period=14,
                 )
             )
         except Exception:  # noqa: BLE001 - chart cache failure must not stop observation
