@@ -536,7 +536,12 @@ class Preflight:
                 remedy="Fix the local_storage check first.",
             )
         try:
-            settings = self._client.settings.read()
+            if hasattr(self._client, "settings"):
+                settings = self._client.settings.read()
+            else:
+                # Compatibility for the in-memory repository double used by legacy unit tests.
+                from aureon.storage.settings_repository import ExecutionSettingsRepository
+                settings = ExecutionSettingsRepository(self._client).read()
         except Exception as exc:
             return CheckResult(
                 "trading_enabled", Status.FAIL, f"{type(exc).__name__}: {exc}"
@@ -761,7 +766,12 @@ class Preflight:
             )
         try:
             info = self._provider.symbol_info(self.symbol)
-            repository = self._client.symbols
+            if hasattr(self._client, "symbols"):
+                repository = self._client.symbols
+            else:
+                # Compatibility for the in-memory repository double used by unit tests.
+                from aureon.storage.symbol_repository import SymbolRepository
+                repository = SymbolRepository(self._client)
             path = repository.publish(info, now=self.now())
             stored = repository.get(self.symbol)
         except Exception as exc:
