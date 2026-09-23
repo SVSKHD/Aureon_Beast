@@ -107,6 +107,9 @@ class Notifier:
         #: 12 T-10/T-11. False renders no chart at all -- for a deployment without the ``charts``
         #: extra, and for the tests, which assert the card's words rather than its picture.
         self.charts = charts
+        # Refresh pre-existing open setup cards once after a bot restart/deploy. Without this,
+        # cards created by an older renderer stay stale until the setup changes again.
+        self._refresh_open_setups = True
         self._stop = asyncio.Event()
 
     # ── One sweep ─────────────────────────────────────────────────────────────
@@ -239,17 +242,35 @@ class Notifier:
         since = now - timedelta(seconds=self.window_seconds)
 
         announced: list[str] = []
+        refresh_open = self._refresh_open_setups
         for symbol in context.config.symbols:
             changed = await context.run(
                 context.setups.changed_since, symbol=symbol, since=since
             )
+            candidates = {setup.setup_id: setup for setup in changed}
+            if refresh_open:
+                # A deploy may change the setup card/chart renderer while the setup itself has
+                # not changed. Refresh open cards once so an old "0 bars" attachment does not
+                # remain in Discord indefinitely.
+                for setup in await context.run(context.setups.open_setups, symbol):
+                    candidates.setdefault(setup.setup_id, setup)
+
             # Oldest first, so a burst reads in the order it happened.
-            for setup in sorted(changed, key=lambda one: (one.updated_at or one.opened_at)):
+            for setup in sorted(
+                candidates.values(), key=lambda one: (one.updated_at or one.opened_at)
+            ):
                 trigger = await self._setup_trigger(setup)
-                if not settings.announces_setup(trigger):
+                # Existing cards are refreshed even if this state's announcement setting is now
+                # off; the message already exists and needs current presentation. New cards still
+                # obey notification settings.
+                existing = await context.run(
+                    context.notifications.get, NotificationKind.SETUP, setup.setup_id
+                )
+                if existing is None and not settings.announces_setup(trigger):
                     continue
                 if await self._post_setup(setup, now=now):
                     announced.append(setup.setup_id)
+        self._refresh_open_setups = False
         return announced
 
     async def _setup_trigger(self, setup: Any) -> str:
