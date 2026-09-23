@@ -178,6 +178,15 @@ def test_the_card_separates_present_asia_and_london_trends() -> None:
     assert fields["London trend"].startswith("DOWN")
     assert "lower highs" in fields["Trend evidence"]
 
+def test_developing_countertrend_setup_is_not_presented_as_cleared() -> None:
+    setup = a_setup(state=SetupState.DEVELOPING, confirmed_at=None)
+    trend = SetupTrendContext(present="BEARISH")
+    fields = dict(build_setup_card(setup, trend_context=trend).fields)
+    assert "NOT CLEARED" in fields["Setup clearance"]
+    assert "confirmation has not occurred" in fields["Setup clearance"]
+    assert fields["Trend relationship"] == "COUNTER-TREND against present trend"
+
+
 def test_the_card_shows_only_the_last_few_events() -> None:
     from aureon.discord.service import CARD_EVENTS
 
