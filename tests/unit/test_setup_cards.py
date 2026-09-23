@@ -21,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from aureon.discord.service import build_setup_card
+from aureon.discord.service import SetupTrendContext, build_setup_card
 from aureon.models.base import MarketTime
 from aureon.models.enums import (
     DirectionContext,
@@ -159,8 +159,24 @@ def test_the_card_shows_frozen_ema_cross_and_rsi_status() -> None:
     assert fields["Early EMA status"] == "cross observed"
     assert "58.0" in fields["RSI status"]
     assert "rising" in fields["RSI status"]
-    assert fields["Trend"] == "bullish"
+    assert fields["Setup trend @ event"] == "BULLISH"
 
+
+def test_the_card_separates_present_asia_and_london_trends() -> None:
+    trend = SetupTrendContext(
+        present="BEARISH",
+        asia="UP · +125 pts · complete",
+        london="DOWN · live · 4322.00 → 4312.00",
+        evidence=(
+            "ema fast 4311.36 below slow 4316.93",
+            "swings: 0 higher highs, 0 higher lows, 3 lower highs, 4 lower lows",
+        ),
+    )
+    fields = dict(build_setup_card(a_setup(), trend_context=trend).fields)
+    assert fields["Present trend"] == "BEARISH"
+    assert fields["Asia trend"].startswith("UP")
+    assert fields["London trend"].startswith("DOWN")
+    assert "lower highs" in fields["Trend evidence"]
 
 def test_the_card_shows_only_the_last_few_events() -> None:
     from aureon.discord.service import CARD_EVENTS
