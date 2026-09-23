@@ -554,6 +554,37 @@ class Observer:
         except Exception:  # noqa: BLE001 - chart cache failure must not stop observation
             log.exception("could not publish live chart frame for %s %s", symbol, market_date)
 
+    def _hydrate_live_chart_day(
+        self, symbol: str, timeframe: Timeframe, candles: list[Candle]
+    ) -> None:
+        """Seed today's chart cache from startup/backfill candles.
+
+        Backfill intentionally bypasses ``_on_candle_close`` for warm-up bars, so without this
+        the Discord process sees zero current-day bars after every restart until new live M5
+        candles accumulate. Keep the whole current broker-day slice and continue appending to it
+        in ``_cache_market_day``.
+        """
+        if timeframe is not Timeframe.M5 or not candles:
+            return
+        latest_day = candles[-1].open_time.market_date
+        today = [
+            candle
+            for candle in candles
+            if candle.timeframe is Timeframe.M5
+            and candle.symbol == symbol
+            and candle.open_time.market_date == latest_day
+        ]
+        if not today:
+            return
+        key = (symbol, Timeframe.M5)
+        # De-duplicate in case the provider returned overlapping reach-back windows.
+        by_open = {candle.open_time.utc: candle for candle in today}
+        ordered = [by_open[at] for at in sorted(by_open)]
+        self._day_bars[key] = ordered
+        self._day_of[key] = latest_day
+        self._day_clean[key] = False
+        self._write_live_chart_frame(symbol, latest_day, ordered)
+
     def _write_market_day(
         self,
         symbol: str,
@@ -1260,6 +1291,11 @@ class Observer:
             if cursor is not None:
                 self.market_engine.seed_cursor(symbol, timeframe, cursor)
             return 0
+
+        # Publish the current broker-day M5 history BEFORE processing new detections. This makes
+        # a setup card rendered during startup immediately receive real candles rather than a
+        # 0-bar placeholder.
+        self._hydrate_live_chart_day(symbol, timeframe, candles)
 
         produced = 0
         warmed = 0
