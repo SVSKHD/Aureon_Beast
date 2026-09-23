@@ -49,6 +49,7 @@ class SetupView(discord.ui.View):
         symbol: str,
         setup_id: str,
         side: str | None = None,
+        state: object | None = None,
         timeout: float | None = None,
     ) -> None:
         # No timeout: the card is edited in place for as long as the setup lives, and a button
@@ -58,7 +59,11 @@ class SetupView(discord.ui.View):
         self.symbol = symbol
         self.setup_id = setup_id
         self.side = side
-        if side is None:
+        self.state = getattr(state, "value", state)
+        # The setup card must not nudge execution before the setup engine itself confirms it.
+        if self.state != "confirmed":
+            self.remove_item(self.execute)
+        elif side is None:
             # A NEUTRAL direction context has no side to prefill, and inventing one is exactly
             # the guess this whole design refuses to make.
             self.remove_item(self.execute)
