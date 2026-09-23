@@ -42,6 +42,7 @@ from aureon.discord.service import (
     build_notification,
     build_reminder,
     build_setup_card,
+    build_setup_confirmation,
     build_setup_trend_context,
     should_notify,
     symbol_state_of,
@@ -109,9 +110,10 @@ class Notifier:
         #: 12 T-10/T-11. False renders no chart at all -- for a deployment without the ``charts``
         #: extra, and for the tests, which assert the card's words rather than its picture.
         self.charts = charts
-        # Refresh pre-existing open setup cards once after a bot restart/deploy. Without this,
-        # cards created by an older renderer stay stale until the setup changes again.
-        self._refresh_open_setups = True
+        # Do not bulk-refresh every open card on startup. A restart used to PATCH every
+        # historical open setup in one burst and hit Discord rate limits. Cards now update
+        # only when the setup itself changes.
+        self._refresh_open_setups = False
         self._stop = asyncio.Event()
 
     # ── One sweep ─────────────────────────────────────────────────────────────
@@ -244,18 +246,11 @@ class Notifier:
         since = now - timedelta(seconds=self.window_seconds)
 
         announced: list[str] = []
-        refresh_open = self._refresh_open_setups
         for symbol in context.config.symbols:
             changed = await context.run(
                 context.setups.changed_since, symbol=symbol, since=since
             )
             candidates = {setup.setup_id: setup for setup in changed}
-            if refresh_open:
-                # A deploy may change the setup card/chart renderer while the setup itself has
-                # not changed. Refresh open cards once so an old "0 bars" attachment does not
-                # remain in Discord indefinitely.
-                for setup in await context.run(context.setups.open_setups, symbol):
-                    candidates.setdefault(setup.setup_id, setup)
 
             # Oldest first, so a burst reads in the order it happened.
             for setup in sorted(
@@ -272,7 +267,6 @@ class Notifier:
                     continue
                 if await self._post_setup(setup, now=now):
                     announced.append(setup.setup_id)
-        self._refresh_open_setups = False
         return announced
 
     async def _setup_trigger(self, setup: Any) -> str:
@@ -318,11 +312,18 @@ class Notifier:
         )
         trend_context = build_setup_trend_context(symbol_state, sessions)
         chart, filename = await self._setup_chart(setup, events, trend_context)
+        confirmation = build_setup_confirmation(
+            setup,
+            events=events,
+            symbol_state=symbol_state,
+            trend_context=trend_context,
+        )
         screen = build_setup_card(
             setup,
             events=events,
             chart_filename=filename,
             trend_context=trend_context,
+            symbol_state=symbol_state,
         )
         embed = setup_embed(screen)
         view = SetupView(
@@ -330,6 +331,7 @@ class Notifier:
             symbol=setup.symbol,
             setup_id=setup.setup_id,
             side=side_for(setup),
+            cleared=confirmation.cleared,
         )
 
         if existing is None:
