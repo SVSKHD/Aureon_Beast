@@ -67,7 +67,14 @@ def a_setup(**overrides) -> Setup:
     return Setup(**base)
 
 
-def an_event(event_type: SetupEventType, state: SetupState, *, minutes: int = 0) -> SetupEvent:
+def an_event(
+    event_type: SetupEventType,
+    state: SetupState,
+    *,
+    minutes: int = 0,
+    context_snapshot: dict[str, str] | None = None,
+    reason: str | None = None,
+) -> SetupEvent:
     at = NOW + timedelta(minutes=minutes)
     return SetupEvent(
         event_id=f"{event_type.value}-{minutes}",
@@ -76,6 +83,8 @@ def an_event(event_type: SetupEventType, state: SetupState, *, minutes: int = 0)
         from_state=state,
         to_state=state,
         market_time=MarketTime.from_utc(at, TZ),
+        context_snapshot=context_snapshot or {},
+        reason=reason,
     )
 
 
@@ -111,6 +120,46 @@ def test_the_events_read_oldest_first_as_the_story_they_are() -> None:
     lines = build_setup_card(a_setup(), events=events).description.splitlines()
     assert "watch started" in lines[0]
     assert "confirmed" in lines[-1]
+
+
+def test_the_card_shows_frozen_ema_cross_and_rsi_status() -> None:
+    events = [
+        an_event(
+            SetupEventType.EMA_GAP_NARROWING,
+            SetupState.WATCH,
+            minutes=0,
+            context_snapshot={
+                "close": "4317.00000",
+                "ema_fast": "4315.00000",
+                "ema_slow": "4316.00000",
+                "rsi": "47.00000",
+                "trend": "sideways",
+                "mtf_alignment": "mixed",
+            },
+        ),
+        an_event(
+            SetupEventType.CONFIRMED,
+            SetupState.CONFIRMED,
+            minutes=5,
+            context_snapshot={
+                "close": "4320.00000",
+                "ema_fast": "4318.50000",
+                "ema_slow": "4317.50000",
+                "rsi": "58.00000",
+                "trend": "bullish",
+                "mtf_alignment": "bullish",
+            },
+            reason="an EMA cross in the reversal's direction",
+        ),
+    ]
+    fields = dict(build_setup_card(a_setup(), events=events).fields)
+    assert "4318.5" in fields["EMA20 / EMA50"]
+    assert "4317.5" in fields["EMA20 / EMA50"]
+    assert fields["EMA cross status"] == "EMA20 above EMA50"
+    assert fields["Early EMA status"] == "cross observed"
+    assert "58.0" in fields["RSI status"]
+    assert "rising" in fields["RSI status"]
+    assert fields["Trend"] == "bullish"
 
 
 def test_the_card_shows_only_the_last_few_events() -> None:
