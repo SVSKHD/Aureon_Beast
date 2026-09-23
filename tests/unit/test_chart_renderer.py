@@ -258,6 +258,48 @@ def test_confirmed_structure_labels_are_drawn_on_the_price_chart() -> None:
     assert "swing lows" in drawn
 
 
+def test_busy_detection_chart_labels_only_crosses_and_recent_events() -> None:
+    made = bars("XAUUSD", 40)
+    detections = tuple(
+        cr.ChartMark(
+            at=made[i].at,
+            price=made[i].close,
+            label=f"WICK · rejection {i}",
+            direction_context="bearish",
+        )
+        for i in range(5, 15)
+    ) + (
+        cr.ChartMark(
+            at=made[20].at,
+            price=made[20].close,
+            label="BEAR CROSS · london",
+            direction_context="bearish",
+        ),
+    )
+    events = tuple(
+        cr.ChartMark(at=made[i].at, price=made[i].close, label=f"event {i}")
+        for i in range(21, 29)
+    )
+    figure = cr.build(
+        "XAUUSD",
+        "M5",
+        made,
+        spec_for("XAUUSD"),
+        cr.Overlays(
+            detections=detections,
+            events=events,
+            analysis_lines=tuple(f"line {i}" for i in range(30)),
+        ),
+    )
+    drawn = texts(figure)
+    assert "BEAR CROSS · london" in drawn
+    assert "WICK · rejection 14" in drawn
+    assert "WICK · rejection 5" not in drawn
+    assert "event 28" in drawn
+    assert "event 21" not in drawn
+    assert "… more context on Discord card" in drawn
+
+
 def test_the_invalidation_line_is_never_offered_as_a_stop() -> None:
     """A red dashed line at a round number under a candle chart is read as a stop by everyone who
     has ever traded. This one is where the structure stops being true, and nothing places an
