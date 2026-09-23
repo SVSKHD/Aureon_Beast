@@ -513,7 +513,6 @@ def distance(left: str, right: str) -> int:
     return bin(int(left, 16) ^ int(right, 16)).count("1")
 
 
-@pytest.mark.parametrize("symbol", ["XAUUSD", "XAGUSD"])
 def test_enriched_setup_chart_has_a_market_context_panel() -> None:
     made = bars("XAUUSD", 60)
     overlay = cr.Overlays(
@@ -532,6 +531,43 @@ def test_enriched_setup_chart_has_a_market_context_panel() -> None:
     assert "PRESENT  BEARISH" in text
     assert "LONDON   DOWN · live" in text
 
+def test_enriched_chart_draws_stored_rsi_and_swing_trendlines() -> None:
+    plain = bars("XAUUSD", 60)
+    enriched = tuple(
+        cr.ChartBar(
+            at=bar.at,
+            open=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+            tick_volume=bar.tick_volume,
+            ema_fast=bar.close + 0.3,
+            ema_slow=bar.close + 0.7,
+            rsi=35.0 + (index % 20),
+            swing_high=index in {20, 40},
+            swing_low=index in {25, 45},
+        )
+        for index, bar in enumerate(plain)
+    )
+    figure = cr.build(
+        "XAUUSD",
+        "M5",
+        enriched,
+        spec_for("XAUUSD"),
+        cr.Overlays(analysis_lines=("PRESENT  BEARISH",)),
+    )
+    axes_titles = [axis.get_title() for axis in figure.axes]
+    assert "RSI(14)" in axes_titles
+    annotations = [
+        text.get_text()
+        for axis in figure.axes
+        for text in axis.texts
+    ]
+    assert "swing-high trendline" in annotations
+    assert "swing-low trendline" in annotations
+
+
+@pytest.mark.parametrize("symbol", ["XAUUSD", "XAGUSD"])
 def test_the_picture_has_not_changed_without_somebody_noticing(symbol: str) -> None:
     """One golden hash per symbol, with a tolerance in bits.
 
