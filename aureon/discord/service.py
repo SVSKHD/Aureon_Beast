@@ -2053,8 +2053,10 @@ def build_setup_card(
         ("Events", f"{setup.event_count}"),
     ]
 
-    recent = list(events)[-CARD_EVENTS:]
+    all_events = list(events)
+    recent = all_events[-CARD_EVENTS:]
     screen.description = _setup_event_lines(recent) if recent else "no events recorded yet"
+    screen.fields.extend(_setup_indicator_fields(all_events))
     screen.fields.append(("Linked detections", _linked_line(setup.linked_detection_ids)))
     screen.reference = render_reference(setup.reference)
     return screen
@@ -2074,6 +2076,134 @@ def _setup_context_line(setup: Any) -> str:
         f"mtf {context.mtf_alignment.value}",
     ]
     return " · ".join(part for part in parts if part) or UNKNOWN
+
+
+def _event_snapshot_float(event: Any, key: str) -> float | None:
+    """One numeric value from a frozen setup-event snapshot."""
+    raw = (getattr(event, "context_snapshot", None) or {}).get(key)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _latest_snapshot_event(events: Sequence[Any]) -> Any | None:
+    return next(
+        (event for event in reversed(events) if getattr(event, "context_snapshot", None)),
+        None,
+    )
+
+
+def _previous_snapshot_event(events: Sequence[Any], latest: Any | None) -> Any | None:
+    if latest is None:
+        return None
+    seen_latest = False
+    for event in reversed(events):
+        if event is latest:
+            seen_latest = True
+            continue
+        if seen_latest and getattr(event, "context_snapshot", None):
+            return event
+    return None
+
+
+def _ema_relation(fast: float | None, slow: float | None) -> str:
+    if fast is None or slow is None:
+        return UNKNOWN
+    if fast > slow:
+        return "EMA20 above EMA50"
+    if fast < slow:
+        return "EMA20 below EMA50"
+    return "EMA20 = EMA50"
+
+
+def _early_ema_status(events: Sequence[Any], latest: Any | None) -> str:
+    """Describe only what the stored setup history supports; do not invent a cross threshold."""
+    from aureon.models.enums import SetupEventType
+
+    for event in reversed(events):
+        kind = getattr(event, "event_type", None)
+        reason = (getattr(event, "reason", None) or "").lower()
+        if kind is SetupEventType.CONFIRMED and "ema cross" in reason:
+            return "cross observed"
+        if kind is SetupEventType.EMA_GAP_NARROWING:
+            return "gap narrowing"
+        if kind is SetupEventType.EMA_FAST_SLOPE_CHANGE:
+            return "fast EMA slope changing"
+
+    previous = _previous_snapshot_event(events, latest)
+    if latest is None or previous is None:
+        return "no early-cross event recorded"
+    lf = _event_snapshot_float(latest, "ema_fast")
+    ls = _event_snapshot_float(latest, "ema_slow")
+    pf = _event_snapshot_float(previous, "ema_fast")
+    ps = _event_snapshot_float(previous, "ema_slow")
+    if None in (lf, ls, pf, ps):
+        return "no early-cross event recorded"
+    current_gap = abs(lf - ls)
+    previous_gap = abs(pf - ps)
+    if current_gap < previous_gap:
+        return "gap narrowing"
+    if current_gap > previous_gap:
+        return "gap widening"
+    return "gap unchanged"
+
+
+def _rsi_status(events: Sequence[Any], latest: Any | None) -> str:
+    from aureon.models.enums import SetupEventType
+
+    value = _event_snapshot_float(latest, "rsi") if latest is not None else None
+    if value is None:
+        return UNKNOWN
+
+    previous = _previous_snapshot_event(events, latest)
+    previous_value = _event_snapshot_float(previous, "rsi") if previous is not None else None
+    if previous_value is None:
+        movement = "unchanged"
+    elif value > previous_value:
+        movement = "rising"
+    elif value < previous_value:
+        movement = "falling"
+    else:
+        movement = "flat"
+
+    turn = any(
+        getattr(event, "event_type", None) is SetupEventType.RSI_MOMENTUM_TURN
+        for event in reversed(events[-CARD_EVENTS:])
+    )
+    suffix = " · momentum turn observed" if turn else ""
+    return f"{_fmt(value, digits=1)} {_rsi_zone(value)} · {movement}{suffix}"
+
+
+def _setup_indicator_fields(events: Sequence[Any]) -> list[tuple[str, str]]:
+    """EMA/RSI/trend status from the same frozen snapshots that advanced the setup."""
+    latest = _latest_snapshot_event(events)
+    if latest is None:
+        return [
+            ("EMA20 / EMA50", UNKNOWN),
+            ("EMA cross status", UNKNOWN),
+            ("Early EMA status", "no early-cross event recorded"),
+            ("RSI status", UNKNOWN),
+            ("Trend", UNKNOWN),
+        ]
+
+    fast = _event_snapshot_float(latest, "ema_fast")
+    slow = _event_snapshot_float(latest, "ema_slow")
+    snapshot = getattr(latest, "context_snapshot", None) or {}
+    ema_values = (
+        f"{_fmt(fast)} / {_fmt(slow)}"
+        if fast is not None or slow is not None
+        else UNKNOWN
+    )
+    return [
+        ("EMA20 / EMA50", ema_values),
+        ("EMA cross status", _ema_relation(fast, slow)),
+        ("Early EMA status", _early_ema_status(events, latest)),
+        ("RSI status", _rsi_status(events, latest)),
+        ("Trend", snapshot.get("trend") or UNKNOWN),
+    ]
 
 
 def _setup_event_lines(events: Sequence[Any]) -> str:
