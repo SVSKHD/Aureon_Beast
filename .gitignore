@@ -10,8 +10,6 @@ dist/
 .env
 .env.*
 !.env.example
-*service-account*.json
-*firebase-adminsdk*.json
 
 # Local runtime state (never Firestore-backed, never shared)
 observer_state.json
@@ -19,6 +17,7 @@ observer_state.json
 *.sqlite-wal
 *.sqlite-shm
 outbox.db*
+data/*.db*
 
 # Live candle archives (§82). Written by the observer, read by
 # scripts/compare_live_vs_replay.py. A broker day of M5 parquet is small, which is
