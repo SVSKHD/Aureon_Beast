@@ -762,7 +762,7 @@ class Preflight:
                 "symbol_specs_published",
                 Status.SKIP,
                 "not run: local storage unavailable",
-                remedy="Fix the firestore check first.",
+                remedy="Fix the local_storage check first.",
             )
         try:
             info = self._provider.symbol_info(self.symbol)
