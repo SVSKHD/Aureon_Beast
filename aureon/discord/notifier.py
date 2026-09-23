@@ -687,7 +687,7 @@ def _render_chart(
         if trend_context.evidence:
             analysis_lines.append("EVIDENCE")
             analysis_lines.extend(
-                f"• {line[:52]}" for line in trend_context.evidence[:4]
+                f"• {line[:52]}" for line in trend_context.evidence[:2]
             )
     if confirmation is not None:
         analysis_lines.append(f"CLEAR    {confirmation.clearance}")
@@ -695,7 +695,7 @@ def _render_chart(
         analysis_lines.extend(f"  {line}" for line in confirmation.mtf[:5])
         if confirmation.blockers:
             analysis_lines.append("BLOCK")
-            analysis_lines.extend(f"• {line[:48]}" for line in confirmation.blockers[:3])
+            analysis_lines.extend(f"• {line[:48]}" for line in confirmation.blockers[:2])
     if latest is not None:
         analysis_lines.extend(
             [
