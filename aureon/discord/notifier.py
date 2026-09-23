@@ -583,6 +583,11 @@ def _render_chart(
                 f"LONDON   {trend_context.london}",
             ]
         )
+        if trend_context.evidence:
+            analysis_lines.append("EVIDENCE")
+            analysis_lines.extend(
+                f"• {line[:52]}" for line in trend_context.evidence[:4]
+            )
     if latest is not None:
         analysis_lines.extend(
             [
