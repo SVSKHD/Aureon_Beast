@@ -2014,6 +2014,208 @@ class SetupTrendContext:
     as_of: datetime | None = None
 
 
+@dataclass(frozen=True)
+class SetupConfirmationRead:
+    """A descriptive confirmation surface assembled from observer-written facts.
+
+    This does not predict and does not place an order. It answers a narrower question:
+    which confirmations agree with the setup direction *right now*, and which conflict.
+    """
+
+    clearance: str
+    cleared: bool
+    badges: tuple[str, ...]
+    mtf: tuple[str, ...]
+    ema: str
+    early_ema: str
+    rsi: str
+    trend: str
+    blockers: tuple[str, ...]
+
+
+def build_setup_confirmation(
+    setup: Any,
+    *,
+    events: Sequence[Any] = (),
+    symbol_state: Any | None = None,
+    trend_context: SetupTrendContext | None = None,
+) -> SetupConfirmationRead:
+    """Summarise the setup's confirmation evidence without inventing missing structure.
+
+    The initial policy is deliberately strict for manual review:
+    - a setup must be in CONFIRMED to be cleared;
+    - present trend must not oppose the setup direction;
+    - EMA20/50 must agree with the setup direction;
+    - RSI must not oppose the direction at the 50 midline;
+    - directional MTF reads must not fight one another, and when available must agree.
+
+    These are explicit research gates, not a probability or profitability claim.
+    """
+
+    from aureon.models.enums import DirectionContext, SetupState, TrendBias
+
+    desired = getattr(setup, "direction_context", DirectionContext.NEUTRAL)
+    state = getattr(setup, "state", None)
+    latest = _latest_snapshot_event(events)
+    previous = _previous_snapshot_event(events, latest)
+
+    fast = _event_snapshot_float(latest, "ema_fast") if latest is not None else None
+    slow = _event_snapshot_float(latest, "ema_slow") if latest is not None else None
+    rsi = _event_snapshot_float(latest, "rsi") if latest is not None else None
+    prev_fast = _event_snapshot_float(previous, "ema_fast") if previous is not None else None
+    prev_slow = _event_snapshot_float(previous, "ema_slow") if previous is not None else None
+
+    blockers: list[str] = []
+    badges: list[str] = []
+
+    # Lifecycle is the first gate.
+    if state is SetupState.CONFIRMED:
+        badges.append("✅ CONFIRMED")
+    elif state is SetupState.FAKEOUT_RISK:
+        badges.append("⚠ FAKEOUT RISK")
+        blockers.append("setup lifecycle is FAKEOUT_RISK")
+    elif state is SetupState.INVALIDATED:
+        badges.append("✗ INVALIDATED")
+        blockers.append("setup is invalidated")
+    else:
+        badges.append(f"◨ {getattr(state, 'value', str(state)).upper()}")
+        blockers.append("setup lifecycle has not reached CONFIRMED")
+
+    # EMA relation and early approach.
+    ema = _ema_relation(fast, slow)
+    early = _directional_early_ema(prev_fast, prev_slow, fast, slow)
+    ema_ok = False
+    if desired is DirectionContext.BULLISH and fast is not None and slow is not None:
+        ema_ok = fast > slow
+    elif desired is DirectionContext.BEARISH and fast is not None and slow is not None:
+        ema_ok = fast < slow
+    if desired is DirectionContext.NEUTRAL:
+        blockers.append("setup direction is still neutral")
+    elif ema_ok:
+        badges.append("✅ EMA ALIGNED")
+    else:
+        badges.append("⚠ EMA NOT ALIGNED")
+        blockers.append("EMA20/EMA50 do not confirm the setup direction")
+
+    # RSI uses the same 50 midline the observer's momentum event already records.
+    if rsi is None:
+        rsi_text = UNKNOWN
+        badges.append("◻ RSI UNKNOWN")
+        blockers.append("RSI confirmation is unavailable")
+    else:
+        rsi_text = f"{rsi:.1f}"
+        rsi_ok = (
+            (desired is DirectionContext.BULLISH and rsi >= 50.0)
+            or (desired is DirectionContext.BEARISH and rsi <= 50.0)
+        )
+        if rsi_ok:
+            badges.append("✅ RSI ALIGNED")
+        else:
+            badges.append("⚠ RSI AGAINST")
+            blockers.append("RSI is on the opposite side of 50")
+
+    # Present trend.
+    present = trend_context.present if trend_context is not None else UNKNOWN
+    desired_word = (
+        "BULLISH" if desired is DirectionContext.BULLISH
+        else "BEARISH" if desired is DirectionContext.BEARISH
+        else "NEUTRAL"
+    )
+    trend_ok = present in {desired_word, "SIDEWAYS", UNKNOWN}
+    if present == desired_word:
+        badges.append("✅ TREND ALIGNED")
+    elif present in {"BULLISH", "BEARISH"}:
+        badges.append("⚠ COUNTER-TREND")
+        blockers.append(f"present trend is {present.lower()}")
+    else:
+        badges.append("◻ TREND UNRESOLVED")
+
+    # Multi-timeframe agreement. Any disagreement among directional reads blocks clearance.
+    mtf_lines: list[str] = []
+    directional: list[str] = []
+    mtf = getattr(symbol_state, "mtf", None) if symbol_state is not None else None
+    if mtf is not None:
+        for read in getattr(mtf, "reads", ()) or ():
+            bias = getattr(read, "bias", None)
+            word = _trend_word(bias)
+            mtf_lines.append(f"{read.timeframe.value}: {word}")
+            if bias in {TrendBias.BULLISH, TrendBias.BEARISH}:
+                directional.append(word)
+
+    mtf_conflict = len(set(directional)) > 1
+    mtf_ok = False
+    if mtf_conflict:
+        badges.append("⚠ MTF CONFLICT")
+        blockers.append("directional timeframes disagree")
+    elif directional:
+        sole = directional[0]
+        mtf_ok = sole == desired_word
+        if mtf_ok:
+            badges.append("✅ MTF ALIGNED")
+        else:
+            badges.append("⚠ MTF AGAINST")
+            blockers.append(f"higher-timeframe direction is {sole.lower()}")
+    else:
+        badges.append("◻ MTF UNRESOLVED")
+        blockers.append("multi-timeframe confirmation is unavailable")
+
+    cleared = (
+        state is SetupState.CONFIRMED
+        and desired is not DirectionContext.NEUTRAL
+        and ema_ok
+        and rsi is not None
+        and (
+            (desired is DirectionContext.BULLISH and rsi >= 50.0)
+            or (desired is DirectionContext.BEARISH and rsi <= 50.0)
+        )
+        and trend_ok
+        and mtf_ok
+        and not mtf_conflict
+    )
+    clearance = "✅ CLEARED FOR REVIEW" if cleared else "⛔ NOT CLEARED"
+
+    return SetupConfirmationRead(
+        clearance=clearance,
+        cleared=cleared,
+        badges=tuple(badges),
+        mtf=tuple(mtf_lines) or (UNKNOWN,),
+        ema=ema,
+        early_ema=early,
+        rsi=rsi_text,
+        trend=present,
+        blockers=tuple(blockers),
+    )
+
+
+def _directional_early_ema(
+    previous_fast: float | None,
+    previous_slow: float | None,
+    fast: float | None,
+    slow: float | None,
+) -> str:
+    """Name an early approach or an actual cross from two frozen EMA snapshots."""
+
+    if None in (previous_fast, previous_slow, fast, slow):
+        return "no directional early-EMA read"
+
+    previous_gap = previous_fast - previous_slow
+    current_gap = fast - slow
+
+    if previous_gap <= 0 < current_gap:
+        return "▲ BULLISH EMA CROSS"
+    if previous_gap >= 0 > current_gap:
+        return "▼ BEARISH EMA CROSS"
+
+    narrowing = abs(current_gap) < abs(previous_gap)
+    if not narrowing:
+        return "EMA gap not narrowing"
+    if current_gap < 0:
+        return "◐ EARLY BULLISH — EMA20 approaching EMA50 from below"
+    if current_gap > 0:
+        return "◐ EARLY BEARISH — EMA20 approaching EMA50 from above"
+    return "EMA20/EMA50 touching"
+
+
 def _trend_word(value: Any) -> str:
     raw = getattr(value, "value", value)
     text = str(raw).lower() if raw is not None else ""
@@ -2077,6 +2279,7 @@ def build_setup_card(
     events: Sequence[Any] = (),
     chart_filename: str | None = None,
     trend_context: SetupTrendContext | None = None,
+    symbol_state: Any | None = None,
 ) -> SetupScreen:
     """A setup's card, built entirely from the stored setup and its stored events (T-11).
 
@@ -2139,6 +2342,24 @@ def build_setup_card(
             ]
         )
     screen.fields.extend(_setup_indicator_fields(all_events))
+    confirmation = build_setup_confirmation(
+        setup,
+        events=all_events,
+        symbol_state=symbol_state,
+        trend_context=trend_context,
+    )
+    screen.fields.extend(
+        [
+            ("Confirmation", confirmation.clearance),
+            ("Badges", "\n".join(confirmation.badges)),
+            ("Early EMA", confirmation.early_ema),
+            ("MTF confirmation", "\n".join(confirmation.mtf)),
+            (
+                "Blockers",
+                "\n".join(f"• {one}" for one in confirmation.blockers) or "none observed",
+            ),
+        ]
+    )
     screen.fields.append(("Linked detections", _linked_line(setup.linked_detection_ids)))
     screen.reference = render_reference(setup.reference)
     return screen
