@@ -524,6 +524,43 @@ def build(
             )
         )
 
+    # ── confirmed market-structure path ───────────────────────────────────────
+    # Connect confirmed swing highs to highs and lows to lows. Keeping the two paths separate
+    # avoids drawing a fake zig-zag through alternating pivots that would imply an order of
+    # structure the detector never claimed.
+    swing_highs = [
+        (index, bar.high)
+        for index, bar in enumerate(bars)
+        if any(label in {"SH", "HH", "LH", "EH"} for label in bar.structure_labels)
+    ]
+    swing_lows = [
+        (index, bar.low)
+        for index, bar in enumerate(bars)
+        if any(label in {"SL", "HL", "LL", "EL"} for label in bar.structure_labels)
+    ]
+    if len(swing_highs) >= 2:
+        price.plot(
+            [one[0] for one in swing_highs],
+            [one[1] for one in swing_highs],
+            linestyle="--",
+            linewidth=0.9,
+            color=LEVEL_COLOUR,
+            alpha=0.65,
+            zorder=3,
+            label="swing highs",
+        )
+    if len(swing_lows) >= 2:
+        price.plot(
+            [one[0] for one in swing_lows],
+            [one[1] for one in swing_lows],
+            linestyle="--",
+            linewidth=0.9,
+            color=ANCHOR_COLOUR,
+            alpha=0.55,
+            zorder=3,
+            label="swing lows",
+        )
+
     # ── confirmed market-structure labels ─────────────────────────────────────
     for index, bar in enumerate(bars):
         if not bar.structure_labels:
