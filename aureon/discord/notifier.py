@@ -317,7 +317,21 @@ class Notifier:
             else []
         )
         trend_context = build_setup_trend_context(symbol_state, sessions)
-        chart, filename = await self._setup_chart(setup, events, trend_context)
+        detections = (
+            await context.run(
+                context.detections.for_market_date,
+                setup.symbol,
+                setup.market_date,
+            )
+            if context.detections is not None
+            else []
+        )
+        chart, filename = await self._setup_chart(
+            setup,
+            events,
+            trend_context,
+            detections,
+        )
         screen = build_setup_card(
             setup,
             events=events,
@@ -403,7 +417,11 @@ class Notifier:
         return True
 
     async def _setup_chart(
-        self, setup: Any, events: Any = (), trend_context: Any = None
+        self,
+        setup: Any,
+        events: Any = (),
+        trend_context: Any = None,
+        detections: Any = (),
     ) -> tuple[bytes | None, str | None]:
         """The chart to attach, or ``(None, None)``.
 
@@ -428,7 +446,7 @@ class Notifier:
             )
             spec = await context.run(context.symbols.get, setup.symbol)
             png = await context.run(
-                _render_chart, setup, bars, spec, events, trend_context
+                _render_chart, setup, bars, spec, events, trend_context, detections
             )
         except Exception:  # noqa: BLE001 - a missing picture must not cost the card
             log.exception("could not draw the chart for setup %s", setup.setup_id)
@@ -522,7 +540,12 @@ def side_for(setup: Any) -> str | None:
 
 
 def _render_chart(
-    setup: Any, bars: Any, spec: Any, events: Any = (), trend_context: Any = None
+    setup: Any,
+    bars: Any,
+    spec: Any,
+    events: Any = (),
+    trend_context: Any = None,
+    detections: Any = (),
 ) -> bytes:
     """Draw a setup chart from stored candles and frozen setup-event context.
 
@@ -541,6 +564,11 @@ def _render_chart(
     from aureon.visuals import chart_renderer
 
     event_list = list(events)
+    detection_list = [
+        one
+        for one in detections
+        if getattr(one, "timeframe", None) == setup.timeframe
+    ]
     latest = _latest_snapshot_event(event_list)
     fast = _event_snapshot_float(latest, "ema_fast") if latest is not None else None
     slow = _event_snapshot_float(latest, "ema_slow") if latest is not None else None
@@ -553,6 +581,68 @@ def _render_chart(
         levels.append(chart_renderer.ChartLevel(price=slow, label="EMA50 now"))
 
     marks = []
+    detection_marks = []
+    rsi_marks = []
+    for detection in detection_list:
+        agent = getattr(detection, "agent_name", "")
+        direction = getattr(getattr(detection, "direction", None), "value", None)
+        session = getattr(
+            getattr(getattr(detection, "session", None), "session", None),
+            "value",
+            "",
+        )
+        event_key = getattr(detection, "event_key", "")
+        if agent == "ema_cross":
+            word = "BULL CROSS" if direction == "buy" else "BEAR CROSS" if direction == "sell" else "EMA CROSS"
+            detection_marks.append(
+                chart_renderer.ChartMark(
+                    at=detection.candle_open_time.utc,
+                    price=detection.price,
+                    label=f"{word} · {session}",
+                    direction_context="bullish" if direction == "buy" else "bearish" if direction == "sell" else None,
+                    kind="ema_cross",
+                )
+            )
+        elif agent == "wick":
+            detection_marks.append(
+                chart_renderer.ChartMark(
+                    at=detection.candle_open_time.utc,
+                    price=detection.price,
+                    label=f"WICK {event_key.replace('_', ' ')}",
+                    kind="wick",
+                )
+            )
+        elif agent == "liquidity":
+            detection_marks.append(
+                chart_renderer.ChartMark(
+                    at=detection.candle_open_time.utc,
+                    price=detection.price,
+                    label=f"LIQ {event_key.replace('_', ' ')}",
+                    direction_context="bullish" if direction == "buy" else "bearish" if direction == "sell" else None,
+                    kind="liquidity",
+                )
+            )
+        elif agent == "breakout":
+            detection_marks.append(
+                chart_renderer.ChartMark(
+                    at=detection.candle_open_time.utc,
+                    price=detection.price,
+                    label=f"BREAK {event_key.replace('_', ' ')}",
+                    direction_context="bullish" if direction == "buy" else "bearish" if direction == "sell" else None,
+                    kind="breakout",
+                )
+            )
+        elif agent == "rsi":
+            value = getattr(getattr(detection, "indicators", None), "rsi", None)
+            if value is not None:
+                rsi_marks.append(
+                    chart_renderer.RsiMark(
+                        at=detection.candle_open_time.utc,
+                        value=float(value),
+                        label=event_key.replace("_", " "),
+                    )
+                )
+
     for event in event_list[-8:]:
         close = _event_snapshot_float(event, "close")
         if close is None:
@@ -579,6 +669,25 @@ def _render_chart(
     analysis_lines = [
         f"SETUP    {setup.state.value.upper()} · {setup.direction_context.value.upper()}"
     ]
+    by_session: dict[str, list[str]] = {}
+    for detection in detection_list:
+        if getattr(detection, "agent_name", "") != "ema_cross":
+            continue
+        session = getattr(
+            getattr(getattr(detection, "session", None), "session", None),
+            "value",
+            "unknown",
+        )
+        direction = getattr(getattr(detection, "direction", None), "value", None)
+        word = "BULL" if direction == "buy" else "BEAR" if direction == "sell" else "?"
+        stamp = detection.detected_at.market.strftime("%H:%M")
+        by_session.setdefault(session, []).append(f"{word}@{stamp}")
+    if by_session:
+        analysis_lines.append("SESSION EMA CROSSES")
+        for name in ("asia", "london", "new_york"):
+            found = by_session.get(name)
+            if found:
+                analysis_lines.append(f"{name.upper():<8} {', '.join(found[-4:])}")
     for name, value in _setup_risk_fields(setup, trend_context):
         label = "CLEAR" if name == "Setup clearance" else "RELATION"
         analysis_lines.append(f"{label:<8} {value}")
@@ -614,7 +723,9 @@ def _render_chart(
         levels=tuple(levels),
         anchor_price=setup.anchor.price,
         invalidation_price=setup.invalidation_price,
+        detections=tuple(detection_marks),
         events=tuple(marks),
+        rsi_events=tuple(rsi_marks),
         notes=tuple(notes),
         analysis_lines=tuple(analysis_lines),
     )
