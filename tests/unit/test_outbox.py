@@ -32,8 +32,8 @@ def outbox(tmp_path: Path) -> LocalOutbox:
     return LocalOutbox(tmp_path / "outbox.db")
 
 
-@pytest.fixture
-def detections(candles: list[Candle]) -> list[Detection]:
+@pytest.fixture(scope="session")
+def detections() -> list[Detection]:
     """Fifty real detections, from the roster the observer actually runs.
 
     The whole roster rather than ``ema_cross`` alone: the outbox queues whatever the
@@ -41,7 +41,23 @@ def detections(candles: list[Candle]) -> list[Detection]:
     cross agent alone and happened to get seventy at 9/21 -- at 20/50 the same fixture
     yields twenty-nine, so the count was resting on a tuning parameter that has nothing
     to do with the outbox.
+
+    SESSION-scoped, and the invariant that makes that safe is asserted by
+    ``test_the_detections_fixture_may_be_shared``: ``Detection`` is a FROZEN pydantic model
+    and this list is only ever read. Five agents over a week of candles costs about fifteen
+    seconds, and it was being paid once per test -- three and a half minutes in this file
+    alone. That matters beyond convenience: this project's discipline is plant-and-revert,
+    and every plant pays the suite's runtime.
+
+    It builds its own provider rather than taking the ``candles`` fixture, because
+    ``Candle`` is NOT frozen and widening that too would share a mutable object across the
+    whole suite to save time in one file.
     """
+    from aureon.data.historical_provider import HistoricalDataProvider
+    from tests.conftest import FIXTURE_CSV
+
+    candles = HistoricalDataProvider(FIXTURE_CSV, market_tz=MARKET_TZ).candles
+
     from aureon.agents.breakout_agent import BreakoutAgent
     from aureon.agents.liquidity_agent import LiquidityAgent
     from aureon.agents.rsi_agent import RsiAgent
@@ -63,6 +79,16 @@ def detections(candles: list[Candle]) -> list[Detection]:
     produced = engine.feed(candles)
     assert len(produced) >= 50, f"fixture produced only {len(produced)} detections"
     return produced[:50]
+
+
+def test_the_detections_fixture_may_be_shared(detections: list[Detection]) -> None:
+    """The invariant the session scope rests on, asserted rather than assumed.
+
+    If ``Detection`` ever stops being frozen, the failure lands HERE -- as one named test --
+    rather than as one test quietly seeing another's edit.
+    """
+    assert Detection.model_config["frozen"] is True
+    assert len(detections) == 50
 
 
 def test_fifty_enqueues_survive_an_outage_and_deliver_exactly_once(

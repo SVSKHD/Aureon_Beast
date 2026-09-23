@@ -189,7 +189,10 @@ def build_ops_register(service: str = "supervisor") -> Any | None:
         )
         return OpsRegister(storage.ops, service=service)
     except Exception:  # noqa: BLE001 - see the docstring
-        log.warning("could not open the local ops register; failures will only be logged", exc_info=True)
+        log.warning(
+            "could not open the local ops register; failures will only be logged",
+            exc_info=True,
+        )
         return None
 
 

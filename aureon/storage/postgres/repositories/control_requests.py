@@ -70,7 +70,9 @@ class ControlRequestRepository(PostgresRepository):
             self._audit(
                 connection,
                 actor=request.requested_by,
-                action="control_request.create",
+                # The KIND, not the verb: ``control_request.close`` says what was asked
+                # for, which is what the §60 trail is read for (decision 376).
+                action=f"control_request.{request.kind.value}",
                 control_id=request.control_id,
                 from_status=None,
                 to_status=ControlRequestStatus.REQUESTED,

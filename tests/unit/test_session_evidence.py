@@ -47,7 +47,7 @@ from aureon.services.session_verifier import (
     SessionVerifier,
 )
 from aureon.storage import paths
-from tests.conftest import MARKET_TZ, InMemoryFirestore
+from tests.conftest import MARKET_TZ
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MARKET_DATE = "2026-09-16"
@@ -244,7 +244,7 @@ def verifier(
         timeframe=Timeframe.M5,
         archive_dir=kwargs.pop("archive_dir", tmp_path / "archive"),
         outbox_path=kwargs.pop("outbox_path", tmp_path / "outbox.db"),
-        client_factory=(lambda: client if client is not None else InMemoryFirestore()),
+        client_factory=(lambda: client),
         comparison_runner=(
             None if comparison is None else (lambda: comparison)
         ),
@@ -334,12 +334,17 @@ def test_nothing_is_compared_without_an_archive(tmp_path) -> None:
 
 
 @pytest.fixture
-def stored(day_candles):
-    """An in-memory Firestore holding one broker day's detections and evaluations."""
+def stored(day_candles, storage):
+    """A REAL store holding one broker day's detections and evaluations.
+
+    Written through the same repositories the observer writes through, into the same
+    ``StorageRuntime`` the verifier reads through -- so what this asserts is the round trip
+    production performs. The in-memory Firestore double that used to stand here satisfied
+    the repositories' constructor and nothing else, which is how these nine tests came to
+    fail on a runtime that had moved past them (decision 384).
+    """
     from aureon.evaluation.backfill import run_backfill
     from aureon.evaluation.rules import XAU_OUTCOME_V2
-    from aureon.storage.detection_repository import DetectionRepository
-    from aureon.storage.evaluation_repository import EvaluationRepository
     from tests.conftest import cross_agent
 
     result = run_backfill(
@@ -351,11 +356,10 @@ def stored(day_candles):
         point=0.01,
     )
     assert result.detections, "the day must produce detections to store"
-    client = InMemoryFirestore()
     for detection in result.detections:
-        DetectionRepository(client).upsert(detection)
-    EvaluationRepository(client).upsert_many(result.evaluations)
-    return client, result
+        storage.detections.upsert(detection)
+    storage.evaluations.upsert_many(result.evaluations)
+    return storage, result
 
 
 def test_stored_detections_are_counted_per_agent(tmp_path, stored) -> None:
@@ -367,28 +371,28 @@ def test_stored_detections_are_counted_per_agent(tmp_path, stored) -> None:
     assert "ema_cross=" in outcome.detail
 
 
-def test_a_session_that_stored_nothing_fails(tmp_path) -> None:
+def test_a_session_that_stored_nothing_fails(tmp_path, storage) -> None:
     """Even with every other check green: there is nothing to have been right about."""
-    result = verifier(tmp_path, client=InMemoryFirestore()).check_detections_stored()
+    result = verifier(tmp_path, client=storage).check_detections_stored()
     assert result.status is Status.FAIL
     assert "0 detections" in result.detail
 
 
-def test_detections_without_evaluations_warn_rather_than_fail(tmp_path, day_candles) -> None:
+def test_detections_without_evaluations_warn_rather_than_fail(
+    tmp_path, day_candles, storage
+) -> None:
     """Horizons resolve after the close, so a same-day verification legitimately has few."""
     from aureon.engine.analysis_engine import AnalysisEngine
-    from aureon.storage.detection_repository import DetectionRepository
     from tests.conftest import cross_agent
 
-    client = InMemoryFirestore()
     detections = AnalysisEngine(
         [cross_agent()], account_scope="primary", market_tz=MARKET_TZ
     ).feed(day_candles)
     assert detections
     for detection in detections:
-        DetectionRepository(client).upsert(detection)
+        storage.detections.upsert(detection)
 
-    result = verifier(tmp_path, client=client).check_detections_stored()
+    result = verifier(tmp_path, client=storage).check_detections_stored()
     assert result.status is Status.WARN
     assert "carry no evaluation" in result.detail
 
@@ -429,44 +433,39 @@ def test_pending_rows_make_every_count_a_lower_bound(tmp_path, day_candles) -> N
     assert "lower bound" in (result.remedy or "")
 
 
-def _with_heartbeat(tmp_path, day_candles, beat_at: datetime | None):
-    from aureon.storage.system_state_repository import HeartbeatRepository
-
+def _with_heartbeat(tmp_path, day_candles, beat_at: datetime | None, storage):
     write_archive(tmp_path / "archive", day_candles)
-    client = InMemoryFirestore()
     if beat_at is not None:
-        HeartbeatRepository(client, min_interval_seconds=0.0).beat(
-            paths.SERVICE_OBSERVER, force=True, now=beat_at
-        )
-    check = verifier(tmp_path, client=client)
+        storage.heartbeats.beat(paths.SERVICE_OBSERVER, force=True, now=beat_at)
+    check = verifier(tmp_path, client=storage)
     check.check_archive()
     return check.check_observer_ran_to_the_close()
 
 
-def test_a_heartbeat_at_the_close_passes(tmp_path, day_candles) -> None:
+def test_a_heartbeat_at_the_close_passes(tmp_path, day_candles, storage) -> None:
     last = day_candles[-1].close_time
-    assert _with_heartbeat(tmp_path, day_candles, last).status is Status.PASS
+    assert _with_heartbeat(tmp_path, day_candles, last, storage).status is Status.PASS
 
 
-def test_an_observer_that_died_at_lunchtime_fails(tmp_path, day_candles) -> None:
+def test_an_observer_that_died_at_lunchtime_fails(tmp_path, day_candles, storage) -> None:
     """The failure with no other trace: the archive simply stops and looks normal."""
     early = day_candles[-1].close_time - timedelta(hours=3)
-    result = _with_heartbeat(tmp_path, day_candles, early)
+    result = _with_heartbeat(tmp_path, day_candles, early, storage)
     assert result.status is Status.FAIL
     assert "stopped beating before its last candle" in result.detail
 
 
-def test_a_heartbeat_within_tolerance_still_passes(tmp_path, day_candles) -> None:
+def test_a_heartbeat_within_tolerance_still_passes(tmp_path, day_candles, storage) -> None:
     slack = day_candles[-1].close_time - timedelta(
         minutes=5 * HEARTBEAT_TOLERANCE_CANDLES
     )
-    assert _with_heartbeat(tmp_path, day_candles, slack).status is Status.PASS
+    assert _with_heartbeat(tmp_path, day_candles, slack, storage).status is Status.PASS
 
 
 def test_a_missing_heartbeat_cannot_rule_an_early_death_in_or_out(
     tmp_path, day_candles
-) -> None:
-    result = _with_heartbeat(tmp_path, day_candles, None)
+, storage) -> None:
+    result = _with_heartbeat(tmp_path, day_candles, None, storage)
     assert result.status is Status.WARN
     assert "cannot be ruled out" in (result.remedy or "")
 
@@ -474,12 +473,10 @@ def test_a_missing_heartbeat_cannot_rule_an_early_death_in_or_out(
 # ── The whole run ────────────────────────────────────────────────────────────
 
 
-def test_a_clean_session_verifies(tmp_path, day_candles, stored) -> None:
+def test_a_clean_session_verifies(tmp_path, day_candles, stored, storage) -> None:
     client, _result = stored
     write_archive(tmp_path / "archive", day_candles)
-    from aureon.storage.system_state_repository import HeartbeatRepository
-
-    HeartbeatRepository(client, min_interval_seconds=0.0).beat(
+    client.heartbeats.beat(
         paths.SERVICE_OBSERVER, force=True, now=day_candles[-1].close_time
     )
     check = verifier(tmp_path, client=client, comparison=Comparison(0, "IDENTICAL"))
@@ -521,7 +518,7 @@ def two_symbol_config() -> AureonConfig:
     )
 
 
-def test_the_verifier_evaluates_against_the_symbols_own_rule(tmp_path) -> None:
+def test_the_verifier_evaluates_against_the_symbols_own_rule(tmp_path, storage) -> None:
     """9A. Looking up gold's rule for a silver session finds nothing at all.
 
     The verdict would then read "0 evaluated under XAU_OUTCOME_V2" — which looks like a
@@ -534,7 +531,7 @@ def test_the_verifier_evaluates_against_the_symbols_own_rule(tmp_path) -> None:
         timeframe=Timeframe.M5,
         archive_dir=tmp_path / "archive",
         outbox_path=tmp_path / "outbox.db",
-        client_factory=InMemoryFirestore,
+        client_factory=lambda: storage,
         now=lambda: NOW,
     )
     gold = SessionVerifier(
@@ -544,14 +541,14 @@ def test_the_verifier_evaluates_against_the_symbols_own_rule(tmp_path) -> None:
         timeframe=Timeframe.M5,
         archive_dir=tmp_path / "archive",
         outbox_path=tmp_path / "outbox.db",
-        client_factory=InMemoryFirestore,
+        client_factory=lambda: storage,
         now=lambda: NOW,
     )
     assert silver._rule_id() == "XAG_OUTCOME_V1"  # noqa: SLF001
     assert gold._rule_id() == "XAU_OUTCOME_V2"  # noqa: SLF001
 
 
-def test_the_verifier_measures_in_the_symbols_own_tick(tmp_path) -> None:
+def test_the_verifier_measures_in_the_symbols_own_tick(tmp_path, storage) -> None:
     """The same $-distance is a different number of points on each instrument."""
     silver = SessionVerifier(
         two_symbol_config(),
@@ -560,7 +557,7 @@ def test_the_verifier_measures_in_the_symbols_own_tick(tmp_path) -> None:
         timeframe=Timeframe.M5,
         archive_dir=tmp_path / "archive",
         outbox_path=tmp_path / "outbox.db",
-        client_factory=InMemoryFirestore,
+        client_factory=lambda: storage,
         now=lambda: NOW,
     )
     assert silver._point() == 0.001  # noqa: SLF001

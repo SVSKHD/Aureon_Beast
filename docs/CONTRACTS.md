@@ -1507,7 +1507,7 @@ Indexes: `ix_control_requests_claim`, `ix_control_requests_lease`
 | `schema_version` | `INTEGER` | no |
 | `market_date` | `VARCHAR` | no |
 | `symbol` | `VARCHAR` | yes |
-| `generated_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `generated_at` | `TIMESTAMP WITH TIME ZONE` | yes |
 | `evaluation_rule_id` | `VARCHAR` | yes |
 | `review` | `JSONB` | no |
 
@@ -1897,7 +1897,7 @@ Indexes: `ix_trades_open_time`, `ix_trades_position` (unique), `ix_trades_reques
 | `iso_year` | `INTEGER` | no |
 | `iso_week` | `INTEGER` | no |
 | `symbol` | `VARCHAR` | yes |
-| `generated_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `generated_at` | `TIMESTAMP WITH TIME ZONE` | yes |
 | `evaluation_rule_id` | `VARCHAR` | yes |
 | `review` | `JSONB` | no |
 
