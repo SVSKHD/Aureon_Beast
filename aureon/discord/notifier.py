@@ -657,7 +657,25 @@ def _render_chart(
             ]
         )
 
+    structure_sequence = [
+        label
+        for bar in bars
+        for label in getattr(bar, "structure_labels", ())
+        if label in {"HH", "HL", "LH", "LL"}
+    ]
+    recent_structure = structure_sequence[-8:]
+
     analysis_lines = []
+    if recent_structure:
+        analysis_lines.append("STRUCTURE " + " → ".join(recent_structure))
+        bearish = sum(label in {"LH", "LL"} for label in recent_structure[-4:])
+        bullish = sum(label in {"HH", "HL"} for label in recent_structure[-4:])
+        if bearish > bullish:
+            analysis_lines.append("STRUCT BIAS bearish")
+        elif bullish > bearish:
+            analysis_lines.append("STRUCT BIAS bullish")
+        else:
+            analysis_lines.append("STRUCT BIAS mixed")
     if trend_context is not None:
         analysis_lines.extend(
             [
