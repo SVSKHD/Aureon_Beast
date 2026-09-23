@@ -57,3 +57,27 @@ def test_transaction_rolls_back_on_error(tmp_path) -> None:
     with database.connect() as connection:
         assert connection.execute(text("SELECT count(*) FROM probe")).scalar_one() == 0
     database.dispose()
+
+
+def test_local_trade_requests_keep_the_service_read_contract(tmp_path) -> None:
+    from aureon.models.enums import TradeRequestStatus
+    from aureon.storage.postgres.repositories.trade_requests import TradeRequestRepository
+    from tests.postgres.factories import a_trade_request
+
+    database = LocalDatabase(tmp_path / "aureon.db")
+    database.ensure_schema()
+    repository = TradeRequestRepository(database)
+
+    repository.create(a_trade_request("requested-1"))
+    repository.create(a_trade_request("requested-2"))
+
+    rows = repository.list_by_status(TradeRequestStatus.REQUESTED, limit=1)
+    assert len(rows) == 1
+    assert rows[0].status is TradeRequestStatus.REQUESTED
+
+    rows = repository.list_by_status(
+        [TradeRequestStatus.REQUESTED, TradeRequestStatus.PENDING],
+        limit=10,
+    )
+    assert [row.request_id for row in rows] == ["requested-1", "requested-2"]
+    database.dispose()
