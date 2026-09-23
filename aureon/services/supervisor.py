@@ -176,27 +176,20 @@ class Exited:
 
 
 def build_ops_register(service: str = "supervisor") -> Any | None:
-    """An ``OpsRegister`` writing to Firestore, or ``None`` if one cannot be built.
-
-    ``None`` rather than raising: the supervisor's job is to start the stack, and a launcher that
-    refused to run because it could not reach Firestore would turn a reporting outage into a
-    trading outage. The preflight is the thing that refuses. Every call site here logs as well as
-    records, so a missing register loses the durable copy and nothing else.
-    """
+    """An ``OpsRegister`` backed by the local application database."""
     try:
         from aureon.config import AureonConfig
         from aureon.services.ops_events import OpsRegister
-        from aureon.storage.firebase_service import get_client
-        from aureon.storage.ops_repository import OpsEventRepository
+        from aureon.storage.runtime import build_storage
 
         config = AureonConfig.from_env()
-        client = get_client(
-            project_id=config.firebase_project_id,
-            emulator_host=config.firestore_emulator_host,
+        storage = build_storage(
+            account_scope=config.account_scope,
+            state_heartbeat_seconds=config.state_heartbeat_seconds,
         )
-        return OpsRegister(OpsEventRepository(client), service=service)
+        return OpsRegister(storage.ops, service=service)
     except Exception:  # noqa: BLE001 - see the docstring
-        log.warning("could not reach the ops register; failures will only be logged", exc_info=True)
+        log.warning("could not open the local ops register; failures will only be logged", exc_info=True)
         return None
 
 
