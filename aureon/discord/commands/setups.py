@@ -121,6 +121,7 @@ async def setup_reply(context: Any, *, setup_id: str) -> tuple[Any, Any]:
         symbol=setup.symbol,
         setup_id=setup.setup_id,
         side=side_for(setup),
+        state=setup.state,
     )
     return setup_embed(screen), view
 
