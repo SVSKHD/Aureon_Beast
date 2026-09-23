@@ -40,10 +40,10 @@ def check_configuration(config: AureonConfig) -> None:
             "so the bot would answer no one while appearing healthy"
         )
     if not config.discord_guild_id:
-        # A warning, not a refusal: the bot works, but its commands are not synced, and a
-        # global trading command would appear in every server the app joins.
-        log.warning(
-            "AUREON_DISCORD_GUILD_ID is not set; commands will not be synced to a guild"
+        problems.append(
+            "AUREON_DISCORD_GUILD_ID is not set — Aureon will not start with unsynced "
+            "slash commands because Discord can keep showing stale commands that then "
+            "end in 'Application did not respond'"
         )
     if problems:
         raise MissingConfiguration("; ".join(problems))

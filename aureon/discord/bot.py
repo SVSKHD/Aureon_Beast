@@ -59,6 +59,39 @@ FOLLOW_SECONDS = 60.0
 T = TypeVar("T")
 
 
+class AureonCommandTree(app_commands.CommandTree):
+    """Command tree that always acknowledges failed interactions.
+
+    Discord shows "Application did not respond" when an exception escapes before a command
+    acknowledges the interaction. Keep that transport failure separate from the underlying
+    command error: log the real exception, then send a small ephemeral failure message whenever
+    Discord still accepts a response.
+    """
+
+    async def on_error(
+        self, interaction: discord.Interaction, error: app_commands.AppCommandError
+    ) -> None:
+        command_name = getattr(getattr(interaction, "command", None), "qualified_name", "unknown")
+        log.error(
+            "Discord command /%s failed",
+            command_name,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        embed = notice_embed(
+            "Command failed",
+            "Aureon received the command but could not complete it. Check the local Aureon log "
+            "for the underlying error.",
+            bad=True,
+        )
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            else:
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+        except discord.HTTPException:
+            log.exception("could not send Discord error response for /%s", command_name)
+
+
 def requires_authorization(
     handler: Callable[..., Awaitable[None]],
 ) -> Callable[..., Awaitable[None]]:
@@ -91,7 +124,7 @@ class AureonBot(discord.Client):
         intents = kwargs.pop("intents", None) or discord.Intents.default()
         super().__init__(intents=intents, **kwargs)
         self.context = context
-        self.tree = app_commands.CommandTree(self)
+        self.tree = AureonCommandTree(self)
         self._guild = (
             discord.Object(id=context.config.discord_guild_id)
             if context.config.discord_guild_id

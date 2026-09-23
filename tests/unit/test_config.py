@@ -230,3 +230,26 @@ def test_a_malformed_rules_entry_raises_rather_than_being_skipped() -> None:
                 "AUREON_COLLECTION_PREFIX": "aureon_test",
             }
         )
+
+
+def test_discord_process_requires_a_guild_id_for_synced_commands() -> None:
+    from main_discord import MissingConfiguration, check_configuration
+
+    config = AureonConfig(
+        discord_token="token",
+        authorized_user_ids=("123",),
+        discord_guild_id=None,
+    )
+    with pytest.raises(MissingConfiguration, match="AUREON_DISCORD_GUILD_ID"):
+        check_configuration(config)
+
+
+def test_discord_configuration_accepts_an_explicit_guild() -> None:
+    from main_discord import check_configuration
+
+    config = AureonConfig(
+        discord_token="token",
+        authorized_user_ids=("123",),
+        discord_guild_id=987654321,
+    )
+    check_configuration(config)

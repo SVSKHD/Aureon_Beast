@@ -81,3 +81,24 @@ def test_local_trade_requests_keep_the_service_read_contract(tmp_path) -> None:
     )
     assert [row.request_id for row in rows] == ["requested-1", "requested-2"]
     database.dispose()
+
+
+def test_local_control_requests_keep_the_service_read_contract(tmp_path) -> None:
+    from aureon.models.enums import ControlRequestStatus
+    from aureon.storage.postgres.repositories.control_requests import ControlRequestRepository
+    from tests.postgres.factories import a_control_request
+
+    database = LocalDatabase(tmp_path / "aureon.db")
+    database.ensure_schema()
+    repository = ControlRequestRepository(database)
+
+    repository.create(a_control_request("control-1"))
+    repository.create(a_control_request("control-2"))
+
+    rows = repository.list_by_status(ControlRequestStatus.REQUESTED, limit=1)
+    assert len(rows) == 1
+    assert rows[0].status is ControlRequestStatus.REQUESTED
+
+    rows = repository.list_by_status([ControlRequestStatus.REQUESTED], limit=10)
+    assert [row.control_id for row in rows] == ["control-1", "control-2"]
+    database.dispose()

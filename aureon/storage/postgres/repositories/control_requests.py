@@ -232,13 +232,26 @@ class ControlRequestRepository(PostgresRepository):
         row = self._row(control_id)
         return None if row is None else ControlRequest.model_validate(self._to_model_dict(row))
 
-    def with_status(self, status: ControlRequestStatus) -> list[ControlRequest]:
+    def list_by_status(
+        self,
+        status: ControlRequestStatus | list[ControlRequestStatus],
+        *,
+        limit: int = 100,
+    ) -> list[ControlRequest]:
+        """Compatibility read used by the control worker and Discord-era service code."""
+        statuses = [status] if isinstance(status, ControlRequestStatus) else list(status)
+        if not statuses:
+            return []
         statement = (
             select(self.table)
-            .where(self.table.c.status == status.value)
+            .where(self.table.c.status.in_([one.value for one in statuses]))
             .order_by(self.table.c.requested_at)
+            .limit(limit)
         )
         return self._parse_all(self._rows(statement), ControlRequest, what="control_request")
+
+    def with_status(self, status: ControlRequestStatus) -> list[ControlRequest]:
+        return self.list_by_status(status)
 
     def expired_leases(self, *, now: datetime | None = None) -> list[ControlRequest]:
         moment = to_utc(now or utc_now())
