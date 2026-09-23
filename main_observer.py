@@ -352,6 +352,8 @@ class Observer:
         self._snapshot(candle.symbol, candle.timeframe).observe_candle(
             high=candle.high,
             low=candle.low,
+            open=candle.open,
+            close=candle.close,
             session=session_for(candle.open_time.market),
         )
         if self.candle_archive is not None:
@@ -444,6 +446,7 @@ class Observer:
         alignment = MtfAlignment.MIXED
         profile = getattr(snapshot, "volume_profile", None)
         volatility = getattr(snapshot, "volatility", None)
+        current_trend = self._trend_read(candle.symbol, candle.timeframe)
         return SetupInputs(
             candle=candle,
             market_date=candle.open_time.market_date,
@@ -457,7 +460,11 @@ class Observer:
             previous_ema_slow=read.previous_ema_slow,
             rsi=read.rsi,
             previous_rsi=read.previous_rsi,
-            trend=getattr(snapshot, "session_trend", None) or TrendBias.SIDEWAYS,
+            trend=(
+                getattr(current_trend, "bias", None)
+                if current_trend is not None
+                else TrendBias.SIDEWAYS
+            ),
             mtf_alignment=alignment if mtf is None else alignment,
             volatility_regime=getattr(volatility, "regime", None),
             price_vs_va=getattr(profile, "price_vs_va", None),
@@ -954,6 +961,9 @@ class Observer:
         for symbol in self.config.symbols:
             for timeframe in self.config.timeframes:
                 candle = self._last_candles.get((symbol, timeframe))
+                snapshot = self._snapshot(symbol, timeframe)
+                snapshot_fields = snapshot.as_state()
+                snapshot_fields["session_live_trend"] = self._live_session_trend(symbol, snapshot)
                 symbols.append(
                     SymbolState(
                         symbol=symbol,
@@ -970,7 +980,7 @@ class Observer:
                         **self.engines.for_symbol(symbol)
                         .cross_counts(symbol, timeframe)
                         .as_state(),
-                        **self._snapshot(symbol, timeframe).as_state(),
+                        **snapshot_fields,
                         **self._market_context(symbol, timeframe),
                         trend_read=self._trend_read(symbol, timeframe),
                         mtf=self._mtf_read(symbol, timeframe),
@@ -994,6 +1004,21 @@ class Observer:
             )
         except Exception:  # noqa: BLE001 - state reporting must not stop observation
             log.exception("system_state write failed")
+
+    def _live_session_trend(self, symbol: str, snapshot: MarketSnapshot) -> str | None:
+        """Direction of the current in-progress session, computed by the observer.
+
+        This deliberately uses the same per-symbol flat threshold as the completed
+        SessionTrendAgent. Discord only renders the stored result; it does not derive a
+        direction from prices on its own.
+        """
+        if snapshot.session_open is None or snapshot.session_close is None:
+            return None
+        tuning = tuning_for(symbol)
+        change_points = (snapshot.session_close - snapshot.session_open) / tuning.point
+        if abs(change_points) < tuning.flat_points:
+            return "flat"
+        return "up" if change_points > 0 else "down"
 
     def _account_mode(self) -> object:
         """Which account this terminal is logged into (11A, F-3).
