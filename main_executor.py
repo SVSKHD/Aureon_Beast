@@ -216,10 +216,7 @@ def build_executor(config: AureonConfig) -> Executor:
     from aureon.data.mt5_provider import MT5DataProvider
     from aureon.execution.mt5_broker import MT5Broker
     from aureon.services.market_state_service import MarketStateService
-    from aureon.storage.control_request_repository import ControlRequestRepository
-    from aureon.storage.firebase_service import get_client
-    from aureon.storage.settings_repository import ExecutionSettingsRepository
-    from aureon.storage.system_state_repository import HeartbeatRepository
+    from aureon.storage.runtime import build_storage
 
     broker = MT5Broker(
         market_tz=config.market_tz,
@@ -228,11 +225,11 @@ def build_executor(config: AureonConfig) -> Executor:
         server=config.mt5_server,
         terminal_path=config.mt5_terminal_path,
     )
-    client = get_client(
-        project_id=config.firebase_project_id,
-        emulator_host=config.firestore_emulator_host,
+    storage = build_storage(
+        account_scope=config.account_scope,
+        state_heartbeat_seconds=config.state_heartbeat_seconds,
     )
-    settings_repository = ExecutionSettingsRepository(client)
+    settings_repository = storage.settings
 
     # Market state comes from a data provider, not the broker: the observer's notion of
     # OPEN/STALE is the one the rest of the system reports, so the executor must agree
@@ -243,17 +240,15 @@ def build_executor(config: AureonConfig) -> Executor:
     return Executor(
         config,
         broker,
-        TradeRequestRepository(client),
-        controls=ControlRequestRepository(client),
+        storage.trade_requests,
+        controls=storage.controls,
         settings_provider=settings_repository.read_or_default,
         market_state_provider=lambda symbol: market_state.state_for(symbol).state,
         # The same schedule object AND the same clock the state service uses, so the two
         # cannot disagree about when the market opens (11B).
         schedule=market_state.schedule,
         now=provider.now_utc,
-        heartbeat=HeartbeatService(
-            HeartbeatRepository(client), paths.SERVICE_EXECUTOR
-        ),
+        heartbeat=HeartbeatService(storage.heartbeats, paths.SERVICE_EXECUTOR),
     )
 
 
