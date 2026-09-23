@@ -514,6 +514,24 @@ def distance(left: str, right: str) -> int:
 
 
 @pytest.mark.parametrize("symbol", ["XAUUSD", "XAGUSD"])
+def test_enriched_setup_chart_has_a_market_context_panel() -> None:
+    made = bars("XAUUSD", 60)
+    overlay = cr.Overlays(
+        title="XAUUSD M5 · breakout acceptance",
+        analysis_lines=(
+            "PRESENT  BEARISH",
+            "ASIA     UP · complete",
+            "LONDON   DOWN · live",
+            "EMA      EMA20 below EMA50",
+            "RSI      24.5 oversold · flat",
+        ),
+    )
+    figure = cr.build("XAUUSD", "M5", made, spec_for("XAUUSD"), overlay)
+    text = "\n".join(one.get_text() for one in figure.texts)
+    assert "MARKET CONTEXT" in text
+    assert "PRESENT  BEARISH" in text
+    assert "LONDON   DOWN · live" in text
+
 def test_the_picture_has_not_changed_without_somebody_noticing(symbol: str) -> None:
     """One golden hash per symbol, with a tolerance in bits.
 
