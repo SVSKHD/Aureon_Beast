@@ -234,24 +234,16 @@ def test_the_unavailable_image_says_which_absence_it_is() -> None:
 
 def test_confirmed_structure_labels_are_drawn_on_the_price_chart() -> None:
     made = list(bars("XAUUSD", 30))
-    made[8] = cr.ChartBar(
-        at=made[8].at,
-        open=made[8].open,
-        high=made[8].high,
-        low=made[8].low,
-        close=made[8].close,
-        tick_volume=made[8].tick_volume,
-        structure_labels=("LH",),
-    )
-    made[16] = cr.ChartBar(
-        at=made[16].at,
-        open=made[16].open,
-        high=made[16].high,
-        low=made[16].low,
-        close=made[16].close,
-        tick_volume=made[16].tick_volume,
-        structure_labels=("LL",),
-    )
+    for index, label in ((5, "HH"), (8, "LH"), (12, "HL"), (16, "LL")):
+        made[index] = cr.ChartBar(
+            at=made[index].at,
+            open=made[index].open,
+            high=made[index].high,
+            low=made[index].low,
+            close=made[index].close,
+            tick_volume=made[index].tick_volume,
+            structure_labels=(label,),
+        )
     figure = cr.build(
         "XAUUSD",
         "M5",
@@ -260,8 +252,10 @@ def test_confirmed_structure_labels_are_drawn_on_the_price_chart() -> None:
         cr.Overlays(),
     )
     drawn = texts(figure)
-    assert "LH" in drawn
-    assert "LL" in drawn
+    for label in ("HH", "LH", "HL", "LL"):
+        assert label in drawn
+    assert "swing highs" in drawn
+    assert "swing lows" in drawn
 
 
 def test_the_invalidation_line_is_never_offered_as_a_stop() -> None:
