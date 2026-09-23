@@ -68,6 +68,11 @@ class FrameBar(AureonModel):
     low: float
     close: float
     tick_volume: int = Field(default=0, ge=0)
+    # Optional observer-computed presentation context for the LIVE M5 chart. Completed
+    # historical frames may legitimately omit these values.
+    ema_fast: float | None = None
+    ema_slow: float | None = None
+    rsi: float | None = None
 
 
 class MarketDayFrame(AureonDocument):
