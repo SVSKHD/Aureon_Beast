@@ -42,7 +42,9 @@ from aureon.discord.service import (
     build_notification,
     build_reminder,
     build_setup_card,
+    build_setup_trend_context,
     should_notify,
+    symbol_state_of,
 )
 from aureon.discord.views.notification_view import NotificationView
 from aureon.discord.views.setup_view import SetupView
@@ -298,8 +300,30 @@ class Notifier:
             context.notifications.get, NotificationKind.SETUP, setup.setup_id
         )
         events = await context.run(context.setups.events, setup.setup_id)
-        chart, filename = await self._setup_chart(setup, events)
-        screen = build_setup_card(setup, events=events, chart_filename=filename)
+
+        state_doc = await context.run(
+            context.system_state.read_symbol,
+            setup.symbol,
+            setup.timeframe,
+        )
+        symbol_state = symbol_state_of(state_doc, setup.symbol)
+        sessions = (
+            await context.run(
+                context.sessions.for_market_date,
+                setup.market_date,
+                symbol=setup.symbol,
+            )
+            if context.sessions is not None
+            else []
+        )
+        trend_context = build_setup_trend_context(symbol_state, sessions)
+        chart, filename = await self._setup_chart(setup, events, trend_context)
+        screen = build_setup_card(
+            setup,
+            events=events,
+            chart_filename=filename,
+            trend_context=trend_context,
+        )
         embed = setup_embed(screen)
         view = SetupView(
             context,
@@ -377,7 +401,9 @@ class Notifier:
             return False
         return True
 
-    async def _setup_chart(self, setup: Any, events: Any = ()) -> tuple[bytes | None, str | None]:
+    async def _setup_chart(
+        self, setup: Any, events: Any = (), trend_context: Any = None
+    ) -> tuple[bytes | None, str | None]:
         """The chart to attach, or ``(None, None)``.
 
         Never raises and never blocks past the renderer's own budget: a card with its words and
@@ -400,7 +426,9 @@ class Notifier:
                 include_today=setup.market_date,
             )
             spec = await context.run(context.symbols.get, setup.symbol)
-            png = await context.run(_render_chart, setup, bars, spec, events)
+            png = await context.run(
+                _render_chart, setup, bars, spec, events, trend_context
+            )
         except Exception:  # noqa: BLE001 - a missing picture must not cost the card
             log.exception("could not draw the chart for setup %s", setup.setup_id)
             return None, None
@@ -492,7 +520,9 @@ def side_for(setup: Any) -> str | None:
     return SIDE_FOR_CONTEXT.get(setup.direction_context.value)
 
 
-def _render_chart(setup: Any, bars: Any, spec: Any, events: Any = ()) -> bytes:
+def _render_chart(
+    setup: Any, bars: Any, spec: Any, events: Any = (), trend_context: Any = None
+) -> bytes:
     """Draw a setup chart from stored candles and frozen setup-event context.
 
     Discord still computes no indicators. EMA/RSI values and event labels come from the
@@ -540,7 +570,26 @@ def _render_chart(setup: Any, bars: Any, spec: Any, events: Any = ()) -> bytes:
             [
                 f"EMA: {_ema_relation(fast, slow)} · {_early_ema_status(event_list, latest)}",
                 f"RSI: {_rsi_status(event_list, latest)}",
-                f"trend: {snapshot.get('trend', 'unknown')} · mtf {snapshot.get('mtf_alignment', 'unknown')}",
+                f"setup snapshot trend: {snapshot.get('trend', 'unknown')} · mtf {snapshot.get('mtf_alignment', 'unknown')}",
+            ]
+        )
+
+    analysis_lines = []
+    if trend_context is not None:
+        analysis_lines.extend(
+            [
+                f"PRESENT  {trend_context.present}",
+                f"ASIA     {trend_context.asia}",
+                f"LONDON   {trend_context.london}",
+            ]
+        )
+    if latest is not None:
+        analysis_lines.extend(
+            [
+                f"EMA      {_ema_relation(fast, slow)}",
+                f"EARLY    {_early_ema_status(event_list, latest)}",
+                f"RSI      {_rsi_status(event_list, latest)}",
+                f"SNAPSHOT {snapshot.get('trend', 'unknown')}",
             ]
         )
 
@@ -552,6 +601,7 @@ def _render_chart(setup: Any, bars: Any, spec: Any, events: Any = ()) -> bytes:
         invalidation_price=setup.invalidation_price,
         events=tuple(marks),
         notes=tuple(notes),
+        analysis_lines=tuple(analysis_lines),
     )
     return chart_renderer.render(
         symbol=setup.symbol,
