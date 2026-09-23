@@ -672,12 +672,18 @@ def build(
     swing_lows = [(i, bar.low) for i, bar in enumerate(bars) if bar.swing_low]
     if len(swing_highs) >= 2:
         (x1, y1), (x2, y2) = swing_highs[-2:]
-        price.plot([x1, x2], [y1, y2], linestyle="--", linewidth=1.4, color=DOWN_COLOUR)
-        price.annotate("swing-high trendline", xy=(x2, y2), fontsize=6.5, color=DOWN_COLOUR)
+        end_x = len(bars) - 1
+        slope = (y2 - y1) / max(1, x2 - x1)
+        end_y = y2 + slope * (end_x - x2)
+        price.plot([x1, end_x], [y1, end_y], linestyle="--", linewidth=1.4, color=DOWN_COLOUR)
+        price.annotate("swing-high trendline", xy=(end_x, end_y), fontsize=6.5, color=DOWN_COLOUR)
     if len(swing_lows) >= 2:
         (x1, y1), (x2, y2) = swing_lows[-2:]
-        price.plot([x1, x2], [y1, y2], linestyle="--", linewidth=1.4, color=UP_COLOUR)
-        price.annotate("swing-low trendline", xy=(x2, y2), fontsize=6.5, color=UP_COLOUR)
+        end_x = len(bars) - 1
+        slope = (y2 - y1) / max(1, x2 - x1)
+        end_y = y2 + slope * (end_x - x2)
+        price.plot([x1, end_x], [y1, end_y], linestyle="--", linewidth=1.4, color=UP_COLOUR)
+        price.annotate("swing-low trendline", xy=(end_x, end_y), fontsize=6.5, color=UP_COLOUR)
 
     # ── the tick-volume panel, named honestly ─────────────────────────────────
     volume.bar(
