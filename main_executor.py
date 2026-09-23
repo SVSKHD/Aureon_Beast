@@ -195,7 +195,6 @@ class Executor:
         self.startup()
         log.info("executor serving")
         try:
-            self.worker.start_listener()
             self.worker.run()
         finally:
             self.shutdown()
