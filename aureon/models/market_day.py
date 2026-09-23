@@ -68,6 +68,10 @@ class FrameBar(AureonModel):
     low: float
     close: float
     tick_volume: int = Field(default=0, ge=0)
+    structure_labels: tuple[str, ...] = Field(
+        default_factory=tuple,
+        description="Confirmed swing labels at this bar: SH/HH/LH and SL/HL/LL.",
+    )
 
 
 class MarketDayFrame(AureonDocument):
