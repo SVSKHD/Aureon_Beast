@@ -2121,14 +2121,15 @@ def build_setup_confirmation(
         else "BEARISH" if desired is DirectionContext.BEARISH
         else "NEUTRAL"
     )
-    trend_ok = present in {desired_word, "SIDEWAYS", UNKNOWN}
-    if present == desired_word:
+    trend_ok = present == desired_word
+    if trend_ok:
         badges.append("✅ TREND ALIGNED")
     elif present in {"BULLISH", "BEARISH"}:
         badges.append("⚠ COUNTER-TREND")
         blockers.append(f"present trend is {present.lower()}")
     else:
         badges.append("◻ TREND UNRESOLVED")
+        blockers.append("present trend does not confirm the setup direction")
 
     # Multi-timeframe agreement. Any disagreement among directional reads blocks clearance.
     mtf_lines: list[str] = []
