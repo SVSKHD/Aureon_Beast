@@ -216,6 +216,23 @@ def test_session_extremes_come_from_candles_not_detections() -> None:
     assert snapshot.session_low == 2395.0
 
 
+def test_live_session_open_and_close_follow_the_current_session() -> None:
+    snapshot = MarketSnapshot(symbol="XAUUSD")
+    snapshot.observe_candle(
+        open=4320.0, close=4318.0, high=4322.0, low=4317.0, session=SessionName.LONDON
+    )
+    snapshot.observe_candle(
+        open=4318.0, close=4312.0, high=4319.0, low=4310.0, session=SessionName.LONDON
+    )
+    assert snapshot.session_open == 4320.0
+    assert snapshot.session_close == 4312.0
+
+    snapshot.observe_candle(
+        open=4312.0, close=4314.0, high=4315.0, low=4311.0, session=SessionName.NEW_YORK
+    )
+    assert snapshot.session_open == 4312.0
+    assert snapshot.session_close == 4314.0
+
 def test_a_session_change_resets_the_extremes() -> None:
     snapshot = MarketSnapshot(symbol="XAUUSD")
     snapshot.observe_candle(high=2405.0, low=2395.0, session=SessionName.LONDON)
