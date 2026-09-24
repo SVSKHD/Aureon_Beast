@@ -16,6 +16,7 @@ counts, and the numbers are wrong.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -31,6 +32,7 @@ from aureon.models.enums import (
     SetupState,
     Timeframe,
     TransitionError,
+    TrendBias,
     assert_setup_transition,
 )
 from aureon.models.identity import (
@@ -50,6 +52,7 @@ from aureon.models.setup import (
     SetupEvent,
     SetupReference,
 )
+from aureon.services.agent_confluence import build_agent_confluence
 from aureon.storage import paths
 from aureon.storage.setup_repository import MissingSetup, SetupRepository, latest_state
 
@@ -409,6 +412,39 @@ def test_the_lifecycle_events_are_not_watch_events() -> None:
 @pytest.fixture
 def repository(firestore) -> SetupRepository:
     return SetupRepository(firestore)
+
+
+def test_live_context_refresh_updates_confidence_without_inventing_an_event(repository) -> None:
+    """A quiet OBSERVING candle may refresh the card without becoming setup history."""
+    opened = repository.open(a_setup())
+    confluence = build_agent_confluence(
+        SimpleNamespace(
+            ema_fast=101.0,
+            ema_slow=100.0,
+            rsi=58.0,
+            trend=TrendBias.BULLISH,
+            detections=(),
+        ),
+        DirectionContext.BULLISH,
+    )
+    context = SetupContextSummary(
+        session=SessionName.LONDON,
+        mtf_alignment=MtfAlignment.BULLISH,
+        volatility_regime="normal",
+    )
+
+    refreshed = repository.refresh_live_context(
+        opened.setup_id,
+        context_summary=context,
+        agent_confluence=confluence,
+        now=NOW + timedelta(minutes=5),
+    )
+
+    assert refreshed.agent_confluence.confidence_pct == 50
+    assert refreshed.agent_confluence.aligned_count == 3
+    assert refreshed.event_count == 0
+    assert refreshed.last_event_id is None
+    assert repository.events(opened.setup_id) == []
 
 
 def test_opening_a_setup_twice_does_not_overwrite_the_first(repository) -> None:
