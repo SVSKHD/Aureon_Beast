@@ -25,6 +25,7 @@ from aureon.services.supervisor import (
     ENV_FILE_VAR,
     AureonSupervisor,
     EnvFileError,
+    PLANNED_RESTART_EXIT_CODE,
     ServiceSpec,
     StartupFailed,
     _grace_from_env,
@@ -259,6 +260,30 @@ def test_a_child_that_dies_while_running_stops_the_rest_and_exits_non_zero(
     assert len(down) == 1
     assert "monitor exited with code 3" in down[0][2]
     assert "during running" in down[0][2]
+
+
+def test_guardian_request_stops_the_whole_stack_and_returns_restart_code(tmp_path: Path) -> None:
+    class Guardian:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def poll(self):
+            self.calls += 1
+            if self.calls < 2:
+                return None
+            return type(
+                "Restart",
+                (),
+                {"reason": "main branch updated", "detail": "abc -> def"},
+            )()
+
+    sup = supervisor(
+        stub("observer"),
+        stub("monitor"),
+        guardian=Guardian(),
+    )
+    assert sup.run(preflight=False) == PLANNED_RESTART_EXIT_CODE
+    assert all(process.poll() is not None for process in sup.processes.values())
 
 
 def test_a_child_exiting_zero_is_still_a_non_zero_launcher(tmp_path: Path) -> None:
