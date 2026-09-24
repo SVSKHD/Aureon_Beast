@@ -446,12 +446,14 @@ def test_setup_embed_groups_information_and_keeps_final_check_last() -> None:
     embed = setup_embed(screen)
     names = [field.name for field in embed.fields]
 
-    assert names[:4] == [
+    assert names[:5] == [
         "1 · SETUP",
         "2 · TREND",
         "3 · MOMENTUM",
-        "4 · CONFIRMATION EVIDENCE",
+        "4 · AGENT CONFIDENCE",
+        "5 · CONFIRMATION EVIDENCE",
     ]
+    assert "MORE CONTEXT" not in names
     assert names[-1] == "FINAL CHECK"
     assert len(names) <= 25
     assert "CLEARED FOR REVIEW" in embed.fields[-1].value
