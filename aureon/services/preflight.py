@@ -236,8 +236,9 @@ class Preflight:
                 Status.FAIL,
                 "incompatible runtime SetupRepository API: " + ", ".join(missing),
                 remedy=(
-                    "The runtime SQL setup repository does not match the setup engine. Stop Aureon, "
-                    "sync the complete branch, and let startup upgrade the local SQLite schema."
+                    "The runtime SQL setup repository does not match the setup engine. "
+                    "Stop Aureon, sync the complete branch, and let startup upgrade the "
+                    "local SQLite schema."
                 ),
             )
         return CheckResult(
