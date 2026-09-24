@@ -30,4 +30,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Additive-only migration. Existing setup evidence must never be discarded.
-    raise RuntimeError("0002 is intentionally irreversible")
+    raise RuntimeError("no downgrade: 0002 is intentionally irreversible")
