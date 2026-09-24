@@ -192,34 +192,91 @@ def reminder_embed(screen: Any) -> Any:
 
 
 def setup_embed(screen: Any) -> Any:
-    """A setup card (12, T-11).
+    """Render a dense setup as a small number of clearly separated scan blocks.
 
-    The neutral INFO colour whatever the state, like every other embed here and for the same
-    reason: a green card for CONFIRMED and a red one for INVALIDATED is approval and disapproval
-    drawn in colour, and a reader reaches the colour long before they reach the footer that says
-    the opposite. The state is a text badge instead.
-
-    The events go in the DESCRIPTION rather than a field, because they are the part that reads as
-    a story and Discord renders a description at full width. The reference block goes in its own
-    field, with its caption first, so the numbers can never appear without the words that say what
-    they are.
+    Discord embeds allow at most 25 fields. Grouping related facts into full-width blocks
+    both keeps us well below that limit and gives the eye real whitespace between sections.
+    The final clearance is always the last field.
     """
     description = [screen.description] if screen.description else []
     embed = _embed(screen.title, colour=COLOUR_INFO, description="\n".join(description) or None)
-    full_width = {"Trend evidence"}
-    for name, value in screen.fields:
-        embed.add_field(name=name, value=value or "—", inline=name not in full_width)
+
+    by_name = {name: value or "—" for name, value in screen.fields}
+    confirmation = by_name.pop("Confirmation", "—")
+
+    def section(title: str, names: tuple[str, ...]) -> None:
+        lines: list[str] = []
+        for name in names:
+            if name not in by_name:
+                continue
+            value = str(by_name[name])
+            if "\n" in value:
+                lines.append(f"**{name}**\n{value}")
+            else:
+                lines.append(f"**{name}:** {value}")
+        if lines:
+            embed.add_field(name=title, value="\n".join(lines), inline=False)
+
+    section(
+        "1 · SETUP",
+        ("State", "Timeframe", "Anchor", "Invalidation", "Context", "Events"),
+    )
+    section(
+        "2 · TREND",
+        ("Present trend", "Asia trend", "London trend", "Trend evidence"),
+    )
+    section(
+        "3 · MOMENTUM",
+        (
+            "EMA20 / EMA50",
+            "EMA cross status",
+            "Early EMA status",
+            "RSI status",
+            "Setup trend @ event",
+        ),
+    )
+    section(
+        "4 · CONFIRMATION EVIDENCE",
+        ("Badges", "Early EMA", "MTF confirmation", "Blockers"),
+    )
+    section("5 · TRACE", ("Linked detections",))
+
+    known = {
+        "State", "Timeframe", "Anchor", "Invalidation", "Context", "Events",
+        "Present trend", "Asia trend", "London trend", "Trend evidence",
+        "EMA20 / EMA50", "EMA cross status", "Early EMA status", "RSI status",
+        "Setup trend @ event", "Badges", "Early EMA", "MTF confirmation",
+        "Blockers", "Linked detections",
+    }
+    leftovers = [(name, value) for name, value in by_name.items() if name not in known]
+    if leftovers:
+        embed.add_field(
+            name="MORE CONTEXT",
+            value="\n".join(f"**{name}:** {value}" for name, value in leftovers),
+            inline=False,
+        )
+
     if screen.reference:
         embed.add_field(
-            name="Historical reference",
+            name="6 · HISTORICAL REFERENCE",
             value="\n".join(screen.reference),
             inline=False,
         )
+
+    # One-glance decision surface: last, full-width, and visually isolated from all evidence.
+    embed.add_field(
+        name="FINAL CHECK",
+        value=(
+            f"**{confirmation}**\n"
+            "Manual review required. Execution remains hidden unless the current setup is cleared."
+        ),
+        inline=False,
+    )
+
     # Keep the PNG as a normal message attachment rather than squeezing it inside the
     # embed's fixed-width image slot. Discord then gives the chart its own preview area.
     embed.set_footer(text=screen.footer)
     return embed
-
 
 def monitor_embed(screen: Any) -> Any:
     """A `/monitor` readout (9D).

@@ -369,6 +369,32 @@ def test_every_state_has_a_badge_and_no_badge_is_a_colour() -> None:
         assert screen.badge == STATE_BADGES[state.value]
 
 
+def test_setup_embed_groups_information_and_keeps_final_check_last() -> None:
+    from aureon.discord.embeds import setup_embed
+
+    screen = build_setup_card(
+        a_setup(),
+        events=_confirmation_events(bullish=True),
+        symbol_state=_state_with_mtf(
+            (Timeframe.M15, TrendBias.BULLISH),
+            (Timeframe.H1, TrendBias.BULLISH),
+        ),
+        trend_context=SetupTrendContext(present="BULLISH"),
+    )
+    embed = setup_embed(screen)
+    names = [field.name for field in embed.fields]
+
+    assert names[:4] == [
+        "1 · SETUP",
+        "2 · TREND",
+        "3 · MOMENTUM",
+        "4 · CONFIRMATION EVIDENCE",
+    ]
+    assert names[-1] == "FINAL CHECK"
+    assert len(names) <= 25
+    assert "CLEARED FOR REVIEW" in embed.fields[-1].value
+
+
 def test_the_footer_says_a_setup_is_not_an_order() -> None:
     screen = build_setup_card(a_setup())
     assert "no order is implied" in screen.footer

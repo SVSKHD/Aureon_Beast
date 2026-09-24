@@ -524,6 +524,43 @@ def build(
             )
         )
 
+    # ── confirmed market-structure path ───────────────────────────────────────
+    # Connect confirmed swing highs to highs and lows to lows. Keeping the two paths separate
+    # avoids drawing a fake zig-zag through alternating pivots that would imply an order of
+    # structure the detector never claimed.
+    swing_highs = [
+        (index, bar.high)
+        for index, bar in enumerate(bars)
+        if any(label in {"SH", "HH", "LH", "EH"} for label in bar.structure_labels)
+    ]
+    swing_lows = [
+        (index, bar.low)
+        for index, bar in enumerate(bars)
+        if any(label in {"SL", "HL", "LL", "EL"} for label in bar.structure_labels)
+    ]
+    if len(swing_highs) >= 2:
+        price.plot(
+            [one[0] for one in swing_highs],
+            [one[1] for one in swing_highs],
+            linestyle="--",
+            linewidth=0.9,
+            color=LEVEL_COLOUR,
+            alpha=0.65,
+            zorder=3,
+            label="swing highs",
+        )
+    if len(swing_lows) >= 2:
+        price.plot(
+            [one[0] for one in swing_lows],
+            [one[1] for one in swing_lows],
+            linestyle="--",
+            linewidth=0.9,
+            color=ANCHOR_COLOUR,
+            alpha=0.55,
+            zorder=3,
+            label="swing lows",
+        )
+
     # ── confirmed market-structure labels ─────────────────────────────────────
     for index, bar in enumerate(bars):
         if not bar.structure_labels:
@@ -615,8 +652,25 @@ def build(
         )
 
     # ── what happened, and when ───────────────────────────────────────────────
+    # All stored detections remain visible as small markers, but only the highest-value
+    # annotations get text. Labelling every wick/liquidity/breakout event made active-session
+    # charts unreadable and hid the candles the marks were meant to explain.
     times = [bar.at for bar in bars]
-    for mark in overlays.detections:
+    visible_detections = [
+        mark for mark in overlays.detections if _nearest(times, mark.at) is not None
+    ]
+    priority = [
+        mark
+        for mark in visible_detections
+        if mark.label.upper().startswith(("BULL CROSS", "BEAR CROSS", "EMA CROSS"))
+    ]
+    recent_other = [
+        mark for mark in visible_detections
+        if mark not in priority
+    ][-4:]
+    labelled_detection_ids = {id(mark) for mark in (*priority, *recent_other)}
+
+    for mark in visible_detections:
         index = _nearest(times, mark.at)
         if index is None:
             continue
@@ -631,43 +685,48 @@ def build(
             [index],
             [mark.price],
             marker=marker,
-            s=46,
+            s=30 if id(mark) not in labelled_detection_ids else 42,
             color=ANCHOR_COLOUR,
+            alpha=0.75,
             zorder=6,
         )
-        if mark.label:
-            y_offset = 12 if mark.direction_context != "bearish" else -18
+        if mark.label and id(mark) in labelled_detection_ids:
+            y_offset = 11 if mark.direction_context != "bearish" else -16
             price.annotate(
                 mark.label,
                 xy=(index, mark.price),
-                xytext=(4, y_offset),
+                xytext=(3, y_offset),
                 textcoords="offset points",
-                fontsize=6.5,
+                fontsize=6.2,
                 color=ANCHOR_COLOUR,
                 zorder=7,
                 bbox=dict(
-                    boxstyle="round,pad=0.14",
+                    boxstyle="round,pad=0.10",
                     fc="white",
                     ec=ANCHOR_COLOUR,
-                    alpha=0.82,
+                    alpha=0.78,
                 ),
             )
-    for mark in overlays.events:
+
+    visible_events = [
+        mark for mark in overlays.events if _nearest(times, mark.at) is not None
+    ]
+    labelled_event_ids = {id(mark) for mark in visible_events[-3:]}
+    for mark in visible_events:
         index = _nearest(times, mark.at)
         if index is None:
             continue
         price.scatter(
-            [index], [mark.price], marker="o", s=18, color=FAST_COLOUR, zorder=6
+            [index], [mark.price], marker="o", s=14, color=FAST_COLOUR, alpha=0.7, zorder=6
         )
-        if mark.label and overlays.analysis_lines:
+        if mark.label and id(mark) in labelled_event_ids and overlays.analysis_lines:
             price.annotate(
                 mark.label.replace("_", " "),
                 xy=(index, mark.price),
-                xytext=(4, 8),
+                xytext=(3, 7),
                 textcoords="offset points",
-                fontsize=6.5,
+                fontsize=6,
                 color=ANCHOR_COLOUR,
-                rotation=18,
                 zorder=7,
             )
 
@@ -682,14 +741,17 @@ def build(
             color="#222222",
             va="top",
         )
+        panel_lines = overlays.analysis_lines[:18]
+        if len(overlays.analysis_lines) > len(panel_lines):
+            panel_lines = (*panel_lines[:-1], "… more context on Discord card")
         figure.text(
             0.735,
             0.845,
-            "\n".join(overlays.analysis_lines),
-            fontsize=9,
+            "\n".join(panel_lines),
+            fontsize=7.8,
             color="#333333",
             va="top",
-            linespacing=1.55,
+            linespacing=1.30,
             family="monospace",
         )
 

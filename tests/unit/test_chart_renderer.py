@@ -234,24 +234,16 @@ def test_the_unavailable_image_says_which_absence_it_is() -> None:
 
 def test_confirmed_structure_labels_are_drawn_on_the_price_chart() -> None:
     made = list(bars("XAUUSD", 30))
-    made[8] = cr.ChartBar(
-        at=made[8].at,
-        open=made[8].open,
-        high=made[8].high,
-        low=made[8].low,
-        close=made[8].close,
-        tick_volume=made[8].tick_volume,
-        structure_labels=("LH",),
-    )
-    made[16] = cr.ChartBar(
-        at=made[16].at,
-        open=made[16].open,
-        high=made[16].high,
-        low=made[16].low,
-        close=made[16].close,
-        tick_volume=made[16].tick_volume,
-        structure_labels=("LL",),
-    )
+    for index, label in ((5, "HH"), (8, "LH"), (12, "HL"), (16, "LL")):
+        made[index] = cr.ChartBar(
+            at=made[index].at,
+            open=made[index].open,
+            high=made[index].high,
+            low=made[index].low,
+            close=made[index].close,
+            tick_volume=made[index].tick_volume,
+            structure_labels=(label,),
+        )
     figure = cr.build(
         "XAUUSD",
         "M5",
@@ -260,8 +252,52 @@ def test_confirmed_structure_labels_are_drawn_on_the_price_chart() -> None:
         cr.Overlays(),
     )
     drawn = texts(figure)
-    assert "LH" in drawn
-    assert "LL" in drawn
+    for label in ("HH", "LH", "HL", "LL"):
+        assert label in drawn
+    assert "swing highs" in drawn
+    assert "swing lows" in drawn
+
+
+def test_busy_detection_chart_labels_only_crosses_and_recent_events() -> None:
+    made = bars("XAUUSD", 40)
+    detections = tuple(
+        cr.ChartMark(
+            at=made[i].at,
+            price=made[i].close,
+            label=f"WICK · rejection {i}",
+            direction_context="bearish",
+        )
+        for i in range(5, 15)
+    ) + (
+        cr.ChartMark(
+            at=made[20].at,
+            price=made[20].close,
+            label="BEAR CROSS · london",
+            direction_context="bearish",
+        ),
+    )
+    events = tuple(
+        cr.ChartMark(at=made[i].at, price=made[i].close, label=f"event {i}")
+        for i in range(21, 29)
+    )
+    figure = cr.build(
+        "XAUUSD",
+        "M5",
+        made,
+        spec_for("XAUUSD"),
+        cr.Overlays(
+            detections=detections,
+            events=events,
+            analysis_lines=tuple(f"line {i}" for i in range(30)),
+        ),
+    )
+    drawn = texts(figure)
+    assert "BEAR CROSS · london" in drawn
+    assert "WICK · rejection 14" in drawn
+    assert "WICK · rejection 5" not in drawn
+    assert "event 28" in drawn
+    assert "event 21" not in drawn
+    assert "… more context on Discord card" in drawn
 
 
 def test_the_invalidation_line_is_never_offered_as_a_stop() -> None:
