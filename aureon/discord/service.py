@@ -2349,9 +2349,11 @@ def build_setup_card(
         symbol_state=symbol_state,
         trend_context=trend_context,
     )
+    # Keep evidence first and the final clearance last. The Discord renderer adds visual
+    # section gaps around these stable field names, so a reader can scan top-to-bottom:
+    # setup → trend → indicators → MTF/risk → provenance → FINAL CHECK.
     screen.fields.extend(
         [
-            ("Confirmation", confirmation.clearance),
             ("Badges", "\n".join(confirmation.badges)),
             ("Early EMA", confirmation.early_ema),
             ("MTF confirmation", "\n".join(confirmation.mtf)),
@@ -2359,9 +2361,10 @@ def build_setup_card(
                 "Blockers",
                 "\n".join(f"• {one}" for one in confirmation.blockers) or "none observed",
             ),
+            ("Linked detections", _linked_line(setup.linked_detection_ids)),
+            ("Confirmation", confirmation.clearance),
         ]
     )
-    screen.fields.append(("Linked detections", _linked_line(setup.linked_detection_ids)))
     screen.reference = render_reference(setup.reference)
     return screen
 
