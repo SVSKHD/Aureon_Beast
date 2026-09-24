@@ -236,17 +236,21 @@ def setup_embed(screen: Any) -> Any:
         ),
     )
     section(
-        "4 · CONFIRMATION EVIDENCE",
+        "4 · AGENT CONFIDENCE",
+        ("Agent confidence", "6-agent read"),
+    )
+    section(
+        "5 · CONFIRMATION EVIDENCE",
         ("Badges", "Early EMA", "MTF confirmation", "Blockers"),
     )
-    section("5 · TRACE", ("Linked detections",))
+    section("6 · TRACE", ("Linked detections",))
 
     known = {
         "State", "Timeframe", "Anchor", "Invalidation", "Context", "Events",
         "Present trend", "Asia trend", "London trend", "Trend evidence",
         "EMA20 / EMA50", "EMA cross status", "Early EMA status", "RSI status",
-        "Setup trend @ event", "Badges", "Early EMA", "MTF confirmation",
-        "Blockers", "Linked detections",
+        "Setup trend @ event", "Agent confidence", "6-agent read",
+        "Badges", "Early EMA", "MTF confirmation", "Blockers", "Linked detections",
     }
     leftovers = [(name, value) for name, value in by_name.items() if name not in known]
     if leftovers:
@@ -258,7 +262,7 @@ def setup_embed(screen: Any) -> Any:
 
     if screen.reference:
         embed.add_field(
-            name="6 · HISTORICAL REFERENCE",
+            name="7 · HISTORICAL REFERENCE",
             value="\n".join(screen.reference),
             inline=False,
         )

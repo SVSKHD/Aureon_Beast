@@ -864,11 +864,38 @@ class SetupEngine:
             log.exception("setup family %s raised on %s", setup.family.value, setup.setup_id)
 
         if advance is None:
-            return self._maybe_expire(setup, inputs, tuning)
+            written = self._maybe_expire(setup, inputs, tuning)
+            if not written and setup.setup_id in self._tracked:
+                self._refresh_live_context(setup, inputs)
+            return written
 
         self._idle[setup.setup_id] = 0
         event = self._write(setup, inputs, advance)
         return [event] if event is not None else []
+
+    def _refresh_live_context(self, setup: Setup, inputs: SetupInputs) -> None:
+        """Keep an open setup's six-agent meter current even when no event fires.
+
+        Confidence is a live read of observer-owned facts, not a lifecycle transition. Creating a
+        fake event just to refresh the card would corrupt event_count and the setup history, so
+        the repository has a summary-only refresh path for this purpose.
+        """
+        confluence = build_agent_confluence(
+            inputs,
+            setup.direction_context,
+            previous=setup.agent_confluence,
+        )
+        try:
+            refreshed = self.repository.refresh_live_context(
+                setup.setup_id,
+                context_summary=inputs.context,
+                agent_confluence=confluence,
+                now=to_utc(self._now()),
+            )
+        except Exception:  # noqa: BLE001 - a card refresh must not stop observation
+            log.exception("could not refresh live context for setup %s", setup.setup_id)
+            return
+        self._tracked[refreshed.setup_id] = refreshed
 
     def _maybe_expire(
         self, setup: Setup, inputs: SetupInputs, tuning: SetupTuning

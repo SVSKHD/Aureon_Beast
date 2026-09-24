@@ -204,6 +204,52 @@ class SetupRepository:
             return self.get(setup.setup_id) or stamped
         return stamped
 
+    def refresh_live_context(
+        self,
+        setup_id: str,
+        *,
+        context_summary: Any,
+        agent_confluence: Any,
+        now: datetime | None = None,
+    ) -> Setup:
+        """Refresh current observer context without inventing a setup event.
+
+        A setup can remain OBSERVING for many candles without a lifecycle transition. Live
+        confluence still changes on those candles as EMA/RSI/trend and specialist detections
+        change. This updates only the setup summary, leaving event_count, last_event_id and the
+        event history untouched.
+
+        The write is skipped when the stored context and confluence are unchanged, which avoids
+        waking the Discord notifier for an identical card.
+        """
+        moment = to_utc(now or utc_now())
+        reference = self._client.document(paths.setup_path(setup_id))
+
+        def apply(transaction: Any) -> Setup:
+            snapshot = reference.get(transaction=transaction)
+            if not getattr(snapshot, "exists", False):
+                raise MissingSetup(f"{setup_id}: no such setup; open it first")
+            current = Setup.model_validate(snapshot.to_dict())
+            if current.state in TERMINAL_SETUP_STATES:
+                return current
+            if (
+                current.context_summary == context_summary
+                and current.agent_confluence == agent_confluence
+            ):
+                return current
+
+            refreshed = current.model_copy(
+                update={
+                    "context_summary": context_summary,
+                    "agent_confluence": agent_confluence,
+                    "updated_at": moment,
+                }
+            )
+            transaction.set(reference, refreshed.model_dump(mode="json"))
+            return refreshed
+
+        return self._run(self._transaction(), apply)
+
     def record(
         self,
         event: SetupEvent,

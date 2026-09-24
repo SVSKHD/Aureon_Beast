@@ -39,6 +39,7 @@ from aureon.models.enums import (
     TrendBias,
 )
 from aureon.models.market import Candle
+from aureon.models.setup import Setup, SetupAnchor
 from aureon.services.setup_engine import (
     FAMILIES,
     SetupEngine,
@@ -159,6 +160,52 @@ def lifecycle(repository: SetupRepository, setup_id: str):
 
 def states_of(repository: SetupRepository, setup_id: str) -> list[SetupState]:
     return [e.to_state for e in lifecycle(repository, setup_id)]
+
+
+def test_a_loaded_legacy_setup_gets_a_live_confidence_snapshot_on_a_quiet_candle(
+    firestore,
+) -> None:
+    """A pre-feature setup must not wait for a lifecycle event before Discord gets a score."""
+    repository = SetupRepository(firestore)
+    repository.open(
+        Setup(
+            setup_id="legacy-confidence",
+            account_scope="primary",
+            symbol=SYMBOL,
+            timeframe=Timeframe.M5,
+            family=SetupFamily.LIQUIDITY_REVERSAL,
+            direction_context=DirectionContext.BEARISH,
+            market_date=MARKET_DATE,
+            anchor=SetupAnchor(
+                kind=SetupAnchorKind.LIQUIDITY_LEVEL,
+                price=LEVEL,
+                level_type=LEVEL_PREVIOUS_DAY_HIGH,
+            ),
+            opened_at=START,
+        ),
+        now=START,
+    )
+
+    from aureon.services.setup_engine import LiquidityReversal
+
+    restarted = engine(firestore, families=one_family(LiquidityReversal))
+    restarted.on_closed_candle(
+        inputs(
+            flat(1, LEVEL - 5.0),
+            ema_fast=99.0,
+            ema_slow=100.0,
+            rsi=42.0,
+            trend=TrendBias.BEARISH,
+        )
+    )
+
+    refreshed = repository.get("legacy-confidence")
+    assert refreshed is not None
+    assert refreshed.agent_confluence.confidence_pct == 50
+    assert refreshed.agent_confluence.aligned_count == 3
+    assert refreshed.agent_confluence.neutral_count == 3
+    assert refreshed.event_count == 0
+    assert repository.events("legacy-confidence") == []
 
 
 # ── LIQUIDITY_REVERSAL ────────────────────────────────────────────────────────

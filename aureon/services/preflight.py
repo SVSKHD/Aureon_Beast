@@ -23,6 +23,7 @@ observer performs seconds later.
 
 from __future__ import annotations
 
+import inspect
 import os
 import shutil
 import tempfile
@@ -140,6 +141,7 @@ class Preflight:
         report = CheckReport()
         for check in (
             self.check_config,
+            self.check_code_contract,
             self.check_outbox,
             self.check_archive_dir,
             self.check_local_storage,
@@ -200,6 +202,50 @@ class Preflight:
                 ),
             )
         return CheckResult("config", Status.PASS, detail)
+
+    def check_code_contract(self) -> CheckResult:
+        """Refuse a mixed checkout whose setup engine and repository APIs disagree.
+
+        A partial merge can leave setup_engine.py calling repository methods that the local
+        setup_repository.py does not provide. Python imports both successfully, so without
+        this check the observer appears healthy until the first live setup candle, then silently
+        stops persisting setup state.
+        """
+        try:
+            from aureon.storage.setup_repository import SetupRepository
+
+            missing = [
+                name
+                for name in ("open_setups", "record", "refresh_live_context")
+                if not callable(getattr(SetupRepository, name, None))
+            ]
+            record_params = inspect.signature(SetupRepository.record).parameters
+            if "agent_confluence" not in record_params:
+                missing.append("record(agent_confluence=...)")
+        except Exception as exc:  # noqa: BLE001 - preflight must report, not crash
+            return CheckResult(
+                "code_contract",
+                Status.FAIL,
+                f"{type(exc).__name__}: {exc}",
+                remedy="Sync a clean current main/feature branch before starting Aureon.",
+            )
+
+        if missing:
+            return CheckResult(
+                "code_contract",
+                Status.FAIL,
+                "incompatible SetupRepository API: " + ", ".join(missing),
+                remedy=(
+                    "The local checkout contains mixed source revisions. Stop Aureon, inspect "
+                    "git status, then sync the complete branch instead of copying individual "
+                    "files."
+                ),
+            )
+        return CheckResult(
+            "code_contract",
+            Status.PASS,
+            "setup engine/repository API compatible",
+        )
 
     def _env_file(self) -> str:
         """Which ``.env`` the launcher loaded, or ``none`` (12, T-3).
