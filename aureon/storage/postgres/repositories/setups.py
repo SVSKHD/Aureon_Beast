@@ -338,13 +338,21 @@ class SetupRepository(PostgresRepository):
 
     def open_for_symbol(self, symbol: str) -> list[Setup]:
         """Setups on this symbol that have not reached a terminal state (§10's index)."""
+        return self.open_setups(symbol=symbol)
+
+    def open_setups(
+        self, *, symbol: str, market_date: str | None = None
+    ) -> list[Setup]:
+        """Open setups for the setup engine, optionally scoped to one broker date."""
         terminal = [state.value for state in TERMINAL_SETUP_STATES]
         statement = (
             select(self.table)
             .where(self.table.c.symbol == symbol)
             .where(self.table.c.state.notin_(terminal))
-            .order_by(self.table.c.updated_at.desc())
         )
+        if market_date is not None:
+            statement = statement.where(self.table.c.market_date == market_date)
+        statement = statement.order_by(self.table.c.updated_at.desc())
         return self._parse_all(self._rows(statement), Setup, what="setup")
 
     def in_period(self, start: datetime, end: datetime) -> list[Setup]:
