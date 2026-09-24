@@ -206,15 +206,86 @@ def setup_embed(screen: Any) -> Any:
     """
     description = [screen.description] if screen.description else []
     embed = _embed(screen.title, colour=COLOUR_INFO, description="\n".join(description) or None)
-    full_width = {"Trend evidence"}
-    for name, value in screen.fields:
-        embed.add_field(name=name, value=value or "—", inline=name not in full_width)
+
+    # A setup card contains a lot of evidence. Render it as scan-friendly sections rather than
+    # one continuous field grid. Discord has no native section component inside an embed, so a
+    # full-width heading plus a zero-width spacer is the most reliable mobile/desktop layout.
+    fields = list(screen.fields)
+    by_name = {name: value for name, value in fields}
+    confirmation = by_name.pop("Confirmation", "—")
+
+    sections = (
+        (
+            "SETUP",
+            ("State", "Timeframe", "Anchor", "Invalidation", "Context", "Events"),
+        ),
+        (
+            "TREND",
+            ("Present trend", "Asia trend", "London trend", "Trend evidence"),
+        ),
+        (
+            "MOMENTUM",
+            (
+                "EMA20 / EMA50",
+                "EMA cross status",
+                "Early EMA status",
+                "RSI status",
+                "Setup trend @ event",
+            ),
+        ),
+        (
+            "CONFIRMATION EVIDENCE",
+            ("Badges", "Early EMA", "MTF confirmation", "Blockers"),
+        ),
+        (
+            "TRACE",
+            ("Linked detections",),
+        ),
+    )
+
+    rendered: set[str] = set()
+    full_width = {
+        "Trend evidence",
+        "Badges",
+        "MTF confirmation",
+        "Blockers",
+        "Linked detections",
+    }
+    for heading, names in sections:
+        present = [(name, by_name[name]) for name in names if name in by_name]
+        if not present:
+            continue
+        embed.add_field(name=f"── {heading} ──", value="\u200b", inline=False)
+        for name, value in present:
+            embed.add_field(name=name, value=value or "—", inline=name not in full_width)
+            rendered.add(name)
+        embed.add_field(name="\u200b", value="\u200b", inline=False)
+
+    # Future fields are still shown rather than silently disappearing just because this renderer
+    # has not yet assigned them a section.
+    leftovers = [(name, value) for name, value in fields if name not in rendered and name != "Confirmation"]
+    if leftovers:
+        embed.add_field(name="── MORE CONTEXT ──", value="\u200b", inline=False)
+        for name, value in leftovers:
+            embed.add_field(name=name, value=value or "—", inline=False)
+        embed.add_field(name="\u200b", value="\u200b", inline=False)
+
     if screen.reference:
         embed.add_field(
-            name="Historical reference",
+            name="── HISTORICAL REFERENCE ──",
             value="\n".join(screen.reference),
             inline=False,
         )
+        embed.add_field(name="\u200b", value="\u200b", inline=False)
+
+    # The final glance always comes LAST. It deliberately repeats no analysis: it only states
+    # whether the evidence above cleared the setup for manual review.
+    final_note = (
+        f"**{confirmation}**\n"
+        "Manual review required. Execution remains hidden unless the current setup is cleared."
+    )
+    embed.add_field(name="FINAL CHECK", value=final_note, inline=False)
+
     # Keep the PNG as a normal message attachment rather than squeezing it inside the
     # embed's fixed-width image slot. Discord then gives the chart its own preview area.
     embed.set_footer(text=screen.footer)
