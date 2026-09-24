@@ -27,6 +27,7 @@ from aureon.discord.service import (
     build_setup_confirmation,
 )
 from aureon.models.base import MarketTime
+from aureon.models.confluence import AgentConfluence, AgentConfluenceVote
 from aureon.models.enums import (
     DirectionContext,
     SetupAnchorKind,
@@ -104,6 +105,67 @@ def test_the_card_names_a_direction_context_and_never_a_side() -> None:
     assert "bullish" in text
     for forbidden in (" buy", " sell", "take profit", "stop loss", "entry"):
         assert forbidden not in text, f"the card said {forbidden!r}"
+
+
+def test_the_card_shows_the_six_agent_confidence_meter_and_votes() -> None:
+    confluence = AgentConfluence(
+        target=DirectionContext.BULLISH,
+        confidence_pct=67,
+        aligned_count=4,
+        opposed_count=1,
+        neutral_count=1,
+        votes=(
+            AgentConfluenceVote(
+                agent_name="ema_cross",
+                stance=DirectionContext.BULLISH,
+                alignment="aligned",
+                observation="fast above slow",
+            ),
+            AgentConfluenceVote(
+                agent_name="rsi",
+                stance=DirectionContext.BULLISH,
+                alignment="aligned",
+                observation="61.0 · above 50 midpoint",
+            ),
+            AgentConfluenceVote(
+                agent_name="session_trend",
+                stance=DirectionContext.BULLISH,
+                alignment="aligned",
+                observation="session trend bullish",
+            ),
+            AgentConfluenceVote(
+                agent_name="wick",
+                stance=DirectionContext.BEARISH,
+                alignment="opposed",
+                observation="upper_rejection",
+            ),
+            AgentConfluenceVote(
+                agent_name="liquidity",
+                stance=DirectionContext.BULLISH,
+                alignment="aligned",
+                observation="down|previous_day_low",
+            ),
+            AgentConfluenceVote(
+                agent_name="breakout",
+                stance=DirectionContext.NEUTRAL,
+                alignment="neutral",
+                observation="no event yet",
+            ),
+        ),
+    )
+    fields = dict(build_setup_card(a_setup(agent_confluence=confluence)).fields)
+
+    assert "**67%**" in fields["Agent confidence"]
+    assert "4 aligned · 1 opposed · 1 neutral" in fields["Agent confidence"]
+    assert "not a win probability" in fields["Agent confidence"]
+    for agent in ("EMA", "RSI", "Trend", "Wick", "Liquidity", "Breakout"):
+        assert f"**{agent}**" in fields["6-agent read"]
+
+
+def test_a_legacy_setup_without_a_snapshot_says_it_is_waiting_for_refresh() -> None:
+    fields = dict(build_setup_card(a_setup()).fields)
+    assert "awaiting observer refresh" in fields["Agent confidence"]
+    assert fields["6-agent read"] == "no six-agent snapshot yet"
 
 
 def test_the_invalidation_price_is_never_offered_as_a_stop() -> None:
