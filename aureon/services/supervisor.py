@@ -73,6 +73,10 @@ DEFAULT_SHUTDOWN_GRACE_SECONDS = 20.0
 #: ``config`` row can name the file rather than guessing at one (T-3). Empty means none.
 ENV_FILE_VAR = "AUREON_ENV_FILE"
 
+#: Internal launcher code meaning "stop cleanly, then exec the updated launcher".
+#: Kept out of ordinary service exit codes so a child cannot accidentally request a restart.
+PLANNED_RESTART_EXIT_CODE = 75
+
 
 @dataclass(frozen=True)
 class ServiceSpec:
@@ -210,6 +214,7 @@ class AureonSupervisor:
         shutdown_grace_seconds: float | None = None,
         terminate_grace_seconds: float = 5.0,
         ops: Any | None = None,
+        guardian: Any | None = None,
     ) -> None:
         self.services = tuple(services)
         self.python = python or sys.executable
@@ -223,6 +228,7 @@ class AureonSupervisor:
         )
         self.terminate_grace_seconds = terminate_grace_seconds
         self.ops = ops
+        self.guardian = guardian
         #: Insertion-ordered, which is start order; ``reversed`` on it is stop order.
         self.processes: dict[str, subprocess.Popen] = {}
 
@@ -256,13 +262,21 @@ class AureonSupervisor:
 
     # ── watching ──────────────────────────────────────────────────────────────
 
-    def wait(self, *, poll_seconds: float = 0.5) -> Exited:
-        """Block until one child exits, and say which. ``KeyboardInterrupt`` propagates."""
+    def wait(self, *, poll_seconds: float = 0.5) -> Exited | Any:
+        """Block until a child exits or the runtime guardian requests a planned restart."""
         while True:
             for name, process in self.processes.items():
                 code = process.poll()
                 if code is not None:
                     return Exited(name, code)
+            if self.guardian is not None:
+                try:
+                    request = self.guardian.poll()
+                except Exception:  # noqa: BLE001 - guardian failure must not kill a healthy stack
+                    log.exception("runtime guardian poll failed")
+                    request = None
+                if request is not None:
+                    return request
             time.sleep(poll_seconds)
 
     # ── stopping ──────────────────────────────────────────────────────────────
@@ -357,6 +371,13 @@ class AureonSupervisor:
             )
             self.stop()
             return 0
+
+        if not isinstance(exited, Exited):
+            reason = getattr(exited, "reason", "runtime guardian request")
+            detail = getattr(exited, "detail", "")
+            log.warning("planned_restart reason=%s detail=%s", reason, detail)
+            self.stop()
+            return PLANNED_RESTART_EXIT_CODE
 
         log.error("child_exited service=%s code=%s during=running", exited.name, exited.code)
         self._record_stack_down(exited.name, exited.code, during="running")
