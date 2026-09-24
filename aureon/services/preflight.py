@@ -216,7 +216,7 @@ class Preflight:
 
             missing = [
                 name
-                for name in ("open_for_symbol", "record", "refresh_live_context")
+                for name in ("open_setups", "record", "refresh_live_context")
                 if not callable(getattr(SetupRepository, name, None))
             ]
             record_params = inspect.signature(SetupRepository.record).parameters
