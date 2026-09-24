@@ -44,6 +44,7 @@ from aureon.models.assessment import (
     PairedOutcome,
 )
 from aureon.models.base import AureonDocument, AureonModel, MarketTime, UtcDatetime
+from aureon.models.confluence import AgentConfluence
 from aureon.models.enums import (
     DirectionContext,
     HistorySource,
@@ -331,6 +332,10 @@ class Setup(AureonDocument):
     #: by convention: "the caller trims it" is how an array grows until a write fails.
     linked_detection_ids: tuple[str, ...] = ()
     context_summary: SetupContextSummary = Field(default_factory=SetupContextSummary)
+    #: Six-agent alignment frozen by the observer. This is confluence, not a win probability or
+    #: an execution trigger; Discord only renders it. Empty is valid for setups stored before the
+    #: feature existed, so old local data remains readable.
+    agent_confluence: AgentConfluence = Field(default_factory=AgentConfluence)
     reference: SetupReference = Field(default_factory=SetupReference)
     #: The family's rule version. A component of the id, for the reason ``agent_version`` is a
     #: component of a detection's: when the rules change the populations must be separable.
