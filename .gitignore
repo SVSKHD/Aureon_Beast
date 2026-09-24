@@ -18,6 +18,8 @@ observer_state.json
 *.sqlite-shm
 outbox.db*
 data/*.db*
+data/runtime_guardian_state.json
+data/runtime_restart_notice.json
 
 # Live candle archives (§82). Written by the observer, read by
 # scripts/compare_live_vs_replay.py. A broker day of M5 parquet is small, which is
