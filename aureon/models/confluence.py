@@ -66,7 +66,9 @@ class AgentConfluence(AureonModel):
     def _counts_match_votes(self) -> "AgentConfluence":
         # Empty is the backwards-compatible value for setups written before this feature.
         if not self.votes:
-            if any((self.confidence_pct, self.aligned_count, self.opposed_count, self.neutral_count)):
+            if any(
+                (self.confidence_pct, self.aligned_count, self.opposed_count, self.neutral_count)
+            ):
                 raise ValueError("an empty confluence snapshot must have zero counts")
             return self
 
