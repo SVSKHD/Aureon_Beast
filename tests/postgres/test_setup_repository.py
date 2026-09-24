@@ -412,6 +412,17 @@ def test_the_event_repository_cannot_write(repo: SetupRepository) -> None:
 # ── Queries ───────────────────────────────────────────────────────────────────
 
 
+def test_open_setups_can_be_scoped_to_the_current_market_date(
+    repo: SetupRepository,
+) -> None:
+    repo.open(a_setup("today"))
+    repo.open(a_setup("yesterday", market_date="2026-09-21"))
+
+    found = repo.open_setups(symbol="XAUUSD", market_date="2026-09-22")
+
+    assert [setup.setup_id for setup in found] == ["today"]
+
+
 def test_open_for_symbol_excludes_terminal_setups(repo: SetupRepository) -> None:
     repo.open(a_setup("live"))
     repo.open(a_setup("done"))
