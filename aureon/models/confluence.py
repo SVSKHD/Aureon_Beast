@@ -38,7 +38,7 @@ class AgentConfluenceVote(AureonModel):
     observation: str = "no current evidence"
 
     @model_validator(mode="after")
-    def _known_alignment(self) -> "AgentConfluenceVote":
+    def _known_alignment(self) -> AgentConfluenceVote:
         if self.alignment not in ALIGNMENTS:
             raise ValueError(f"unknown agent alignment {self.alignment!r}")
         return self
@@ -63,7 +63,7 @@ class AgentConfluence(AureonModel):
     votes: tuple[AgentConfluenceVote, ...] = ()
 
     @model_validator(mode="after")
-    def _counts_match_votes(self) -> "AgentConfluence":
+    def _counts_match_votes(self) -> AgentConfluence:
         # Empty is the backwards-compatible value for setups written before this feature.
         if not self.votes:
             if any(
