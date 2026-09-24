@@ -75,6 +75,7 @@ from aureon.models.enums import (
 from aureon.models.identity import price_bin, setup_event_id, setup_id
 from aureon.models.market import Candle
 from aureon.models.setup import Setup, SetupAnchor, SetupContextSummary, SetupEvent
+from aureon.services.agent_confluence import build_agent_confluence
 
 log = logging.getLogger(__name__)
 
@@ -945,6 +946,7 @@ class SetupEngine:
             invalidation_price=opening.invalidation_price,
             opened_at=moment,
             context_summary=inputs.context,
+            agent_confluence=build_agent_confluence(inputs, opening.direction),
             setup_version=tuning.version,
             params_snapshot=tuning.snapshot(),
         )
@@ -989,12 +991,18 @@ class SetupEngine:
             context_snapshot=snapshot if snapshot is not None else _snapshot(inputs),
             reason=advance.reason,
         )
+        confluence = build_agent_confluence(
+            inputs,
+            setup.direction_context,
+            previous=setup.agent_confluence,
+        )
         try:
             moved, stored, applied = self.repository.record(
                 event,
                 linked_detection_id=advance.linked_detection_id,
                 invalidation_price=advance.invalidation_price,
                 context_summary=inputs.context,
+                agent_confluence=confluence,
                 now=moment,
             )
         except Exception:  # noqa: BLE001
