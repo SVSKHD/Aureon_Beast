@@ -130,14 +130,14 @@ def test_current_setup_repository_contract_passes(tmp_path) -> None:
     assert result.status is Status.PASS
 
 
-def test_a_mixed_checkout_missing_open_for_symbol_fails_preflight(tmp_path, monkeypatch) -> None:
+def test_a_mixed_checkout_missing_open_setups_fails_preflight(tmp_path, monkeypatch) -> None:
     from aureon.storage.postgres.repositories.setups import SetupRepository
 
-    monkeypatch.setattr(SetupRepository, "open_for_symbol", None)
+    monkeypatch.setattr(SetupRepository, "open_setups", None)
     result = build(tmp_path).check_code_contract()
 
     assert result.status is Status.FAIL
-    assert "open_for_symbol" in result.detail
+    assert "open_setups" in result.detail
     assert "runtime SQL setup repository" in (result.remedy or "")
 
 
