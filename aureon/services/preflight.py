@@ -212,11 +212,11 @@ class Preflight:
         stops persisting setup state.
         """
         try:
-            from aureon.storage.setup_repository import SetupRepository
+            from aureon.storage.postgres.repositories.setups import SetupRepository
 
             missing = [
                 name
-                for name in ("open_setups", "record", "refresh_live_context")
+                for name in ("open_for_symbol", "record", "refresh_live_context")
                 if not callable(getattr(SetupRepository, name, None))
             ]
             record_params = inspect.signature(SetupRepository.record).parameters
@@ -234,11 +234,10 @@ class Preflight:
             return CheckResult(
                 "code_contract",
                 Status.FAIL,
-                "incompatible SetupRepository API: " + ", ".join(missing),
+                "incompatible runtime SetupRepository API: " + ", ".join(missing),
                 remedy=(
-                    "The local checkout contains mixed source revisions. Stop Aureon, inspect "
-                    "git status, then sync the complete branch instead of copying individual "
-                    "files."
+                    "The runtime SQL setup repository does not match the setup engine. Stop Aureon, "
+                    "sync the complete branch, and let startup upgrade the local SQLite schema."
                 ),
             )
         return CheckResult(
