@@ -27,10 +27,12 @@ from aureon.services.supervisor import (
     ENV_FILE_VAR,
     AureonSupervisor,
     EnvFileError,
+    PLANNED_RESTART_EXIT_CODE,
     ServiceSpec,
     build_ops_register,
     load_env_file,
 )
+from aureon.services.runtime_guardian import build_runtime_guardian
 
 log = logging.getLogger("aureon.launcher")
 
@@ -89,8 +91,19 @@ def main(argv: list[str] | None = None) -> int:
         os.environ.setdefault(ENV_FILE_VAR, "")
 
     services = _selected(args, parser)
-    supervisor = AureonSupervisor(services=services, ops=build_ops_register())
-    return supervisor.run(preflight=not args.no_preflight)
+    ops = build_ops_register()
+    guardian = build_runtime_guardian(
+        repo_root=Path(__file__).resolve().parent,
+        ops=ops,
+        run_preflight=not args.no_preflight,
+    )
+    supervisor = AureonSupervisor(services=services, ops=ops, guardian=guardian)
+    code = supervisor.run(preflight=not args.no_preflight)
+    if code == PLANNED_RESTART_EXIT_CODE:
+        restart_args = [sys.executable, str(Path(__file__).resolve()), *(argv or sys.argv[1:])]
+        log.warning("re-executing Aureon after planned runtime-guardian restart")
+        os.execv(sys.executable, restart_args)
+    return code
 
 
 def _selected(args: argparse.Namespace, parser: argparse.ArgumentParser) -> tuple[ServiceSpec, ...]:
