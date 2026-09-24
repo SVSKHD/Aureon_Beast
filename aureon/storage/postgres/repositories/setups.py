@@ -177,6 +177,7 @@ class SetupRepository(PostgresRepository):
         linked_detection_id: str | None = None,
         invalidation_price: float | None = None,
         context_summary: Any | None = None,
+        agent_confluence: Any | None = None,
         reference: Any | None = None,
         now: datetime | None = None,
     ) -> tuple[Setup, SetupEvent, bool]:
@@ -236,6 +237,7 @@ class SetupRepository(PostgresRepository):
                     linked_detection_id=linked_detection_id,
                     invalidation_price=invalidation_price,
                     context_summary=context_summary,
+                    agent_confluence=agent_confluence,
                     reference=reference,
                 )
             )
@@ -268,6 +270,7 @@ class SetupRepository(PostgresRepository):
         linked_detection_id: str | None,
         invalidation_price: float | None,
         context_summary: Any | None,
+        agent_confluence: Any | None,
         reference: Any | None,
     ) -> dict[str, Any]:
         updates: dict[str, Any] = {
@@ -282,6 +285,8 @@ class SetupRepository(PostgresRepository):
             updates["invalidation_price"] = invalidation_price
         if context_summary is not None:
             updates["context_summary"] = context_summary
+        if agent_confluence is not None:
+            updates["agent_confluence"] = agent_confluence
         if reference is not None:
             updates["reference"] = reference
         if event.to_state is SetupState.CONFIRMED and current.confirmed_at is None:
@@ -293,6 +298,38 @@ class SetupRepository(PostgresRepository):
             updates["closed_at"] = moment
         return updates
 
+    def refresh_live_context(
+        self,
+        setup_id: str,
+        *,
+        context_summary: Any,
+        agent_confluence: Any,
+        now: datetime | None = None,
+    ) -> Setup:
+        """Refresh live context/confluence without creating a setup event."""
+        moment = to_utc(now or utc_now())
+        with self._db.transaction() as connection:
+            locked = self._locked_setup(setup_id, connection)
+            if locked is None:
+                raise MissingSetup(f"{setup_id}: no such setup")
+            current = Setup.model_validate(self._to_model_dict(locked))
+            if current.state in TERMINAL_SETUP_STATES:
+                return current
+            if (
+                current.context_summary == context_summary
+                and current.agent_confluence == agent_confluence
+            ):
+                return current
+            refreshed = current.model_copy(
+                update={
+                    "context_summary": context_summary,
+                    "agent_confluence": agent_confluence,
+                    "updated_at": moment,
+                }
+            )
+            self._upsert(self._to_row(refreshed), connection=connection)
+            return refreshed
+
     # ── Reading ───────────────────────────────────────────────────────────────
 
     def get(self, setup_id: str) -> Setup | None:
@@ -301,13 +338,21 @@ class SetupRepository(PostgresRepository):
 
     def open_for_symbol(self, symbol: str) -> list[Setup]:
         """Setups on this symbol that have not reached a terminal state (§10's index)."""
+        return self.open_setups(symbol=symbol)
+
+    def open_setups(
+        self, *, symbol: str, market_date: str | None = None
+    ) -> list[Setup]:
+        """Open setups for the setup engine, optionally scoped to one broker date."""
         terminal = [state.value for state in TERMINAL_SETUP_STATES]
         statement = (
             select(self.table)
             .where(self.table.c.symbol == symbol)
             .where(self.table.c.state.notin_(terminal))
-            .order_by(self.table.c.updated_at.desc())
         )
+        if market_date is not None:
+            statement = statement.where(self.table.c.market_date == market_date)
+        statement = statement.order_by(self.table.c.updated_at.desc())
         return self._parse_all(self._rows(statement), Setup, what="setup")
 
     def in_period(self, start: datetime, end: datetime) -> list[Setup]:
@@ -371,6 +416,7 @@ class SetupRepository(PostgresRepository):
             # typed, and a bare array would make the column's shape depend on its content.
             "linked_detection_ids": {"items": list(setup.linked_detection_ids)},
             "context_summary": payload["context_summary"],
+            "agent_confluence": payload["agent_confluence"],
             "reference": payload.get("reference"),
             "params_snapshot": payload["params_snapshot"],
         }
@@ -398,6 +444,7 @@ class SetupRepository(PostgresRepository):
             "event_count": data["event_count"],
             "linked_detection_ids": data["linked_detection_ids"]["items"],
             "context_summary": data["context_summary"],
+            "agent_confluence": data.get("agent_confluence") or {},
             "reference": data["reference"],
             "setup_version": data["setup_version"],
             "params_snapshot": data["params_snapshot"],

@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 
 #: The revision this build of the code was written against. Bumped in the same commit as
 #: the migration that introduces the new head, so a build and its schema move together.
-EXPECTED_REVISION = "0001"
+EXPECTED_REVISION = "0002"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ALEMBIC_INI = REPO_ROOT / "alembic.ini"

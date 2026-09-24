@@ -126,11 +126,31 @@ class LocalDatabase:
             connection.execute(text("SELECT 1"))
 
     def ensure_schema(self) -> None:
-        """Create missing local tables without destructive migrations."""
+        """Create missing local tables and apply small additive SQLite upgrades.
+
+        create_all creates tables but deliberately does not ALTER existing ones. The local
+        database survives code updates, so additive columns must be applied explicitly or an
+        existing database keeps the old shape forever.
+        """
         from aureon.storage.postgres import tables  # noqa: F401
         from aureon.storage.postgres.models import Base
 
         Base.metadata.create_all(self.engine)
+        self._ensure_additive_columns()
+
+    def _ensure_additive_columns(self) -> None:
+        """Apply additive-only local schema upgrades required by the current code."""
+        with self.engine.begin() as connection:
+            columns = {
+                row[1]
+                for row in connection.exec_driver_sql("PRAGMA table_info(setups)").fetchall()
+            }
+            if "agent_confluence" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE setups "
+                    "ADD COLUMN agent_confluence JSON NOT NULL DEFAULT '{}'"
+                )
+                log.info("upgraded local schema: setups.agent_confluence")
 
     def wait_until_ready(self, **_: Any) -> float:
         self.probe()

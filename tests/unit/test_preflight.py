@@ -131,18 +131,18 @@ def test_current_setup_repository_contract_passes(tmp_path) -> None:
 
 
 def test_a_mixed_checkout_missing_open_setups_fails_preflight(tmp_path, monkeypatch) -> None:
-    from aureon.storage.setup_repository import SetupRepository
+    from aureon.storage.postgres.repositories.setups import SetupRepository
 
     monkeypatch.setattr(SetupRepository, "open_setups", None)
     result = build(tmp_path).check_code_contract()
 
     assert result.status is Status.FAIL
     assert "open_setups" in result.detail
-    assert "mixed source revisions" in (result.remedy or "")
+    assert "runtime SQL setup repository" in (result.remedy or "")
 
 
 def test_a_stale_record_signature_fails_preflight(tmp_path, monkeypatch) -> None:
-    from aureon.storage.setup_repository import SetupRepository
+    from aureon.storage.postgres.repositories.setups import SetupRepository
 
     def old_record(self, event, *, now=None):
         return None

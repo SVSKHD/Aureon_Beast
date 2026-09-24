@@ -168,6 +168,7 @@ class Setup(Base):
     anchor: Mapped[dict[str, Any]] = mapped_column(Json)
     linked_detection_ids: Mapped[dict[str, Any]] = mapped_column(Json)
     context_summary: Mapped[dict[str, Any]] = mapped_column(Json)
+    agent_confluence: Mapped[dict[str, Any]] = mapped_column(Json)
     reference: Mapped[dict[str, Any] | None] = mapped_column(Json)
     params_snapshot: Mapped[dict[str, Any]] = mapped_column(Json)
 

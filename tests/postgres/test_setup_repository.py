@@ -13,7 +13,9 @@ from datetime import timedelta
 
 import pytest
 
+from aureon.models.confluence import AgentConfluence, AgentConfluenceVote
 from aureon.models.enums import (
+    DirectionContext,
     SetupEventType,
     SetupState,
     TransitionError,
@@ -42,6 +44,84 @@ def repo(schema: Database) -> SetupRepository:
 def test_a_setup_survives_the_database_unchanged(repo: SetupRepository) -> None:
     written = repo.open(a_setup())
     assert repo.get("s1") == written
+
+
+def _confluence() -> AgentConfluence:
+    votes = (
+        AgentConfluenceVote(
+            agent_name="ema_cross",
+            stance=DirectionContext.BULLISH,
+            alignment="aligned",
+            observation="fast above slow",
+        ),
+        AgentConfluenceVote(
+            agent_name="rsi",
+            stance=DirectionContext.BULLISH,
+            alignment="aligned",
+            observation="61.0",
+        ),
+        AgentConfluenceVote(
+            agent_name="session_trend",
+            stance=DirectionContext.BULLISH,
+            alignment="aligned",
+            observation="bullish",
+        ),
+        AgentConfluenceVote(
+            agent_name="wick",
+            stance=DirectionContext.NEUTRAL,
+            alignment="neutral",
+            observation="no event yet",
+        ),
+        AgentConfluenceVote(
+            agent_name="liquidity",
+            stance=DirectionContext.NEUTRAL,
+            alignment="neutral",
+            observation="no event yet",
+        ),
+        AgentConfluenceVote(
+            agent_name="breakout",
+            stance=DirectionContext.NEUTRAL,
+            alignment="neutral",
+            observation="no event yet",
+        ),
+    )
+    return AgentConfluence(
+        target=DirectionContext.BULLISH,
+        confidence_pct=50,
+        aligned_count=3,
+        opposed_count=0,
+        neutral_count=3,
+        votes=votes,
+    )
+
+
+def test_agent_confluence_round_trips_through_the_runtime_repository(
+    repo: SetupRepository,
+) -> None:
+    stored = repo.open(a_setup(agent_confluence=_confluence()))
+    loaded = repo.get(stored.setup_id)
+    assert loaded is not None
+    assert loaded.agent_confluence == _confluence()
+
+
+def test_live_context_refresh_persists_confluence_without_creating_an_event(
+    repo: SetupRepository,
+) -> None:
+    opened = repo.open(a_setup())
+    refreshed = repo.refresh_live_context(
+        opened.setup_id,
+        context_summary=opened.context_summary,
+        agent_confluence=_confluence(),
+        now=CLOSE + timedelta(minutes=5),
+    )
+
+    assert refreshed.agent_confluence.confidence_pct == 50
+    assert refreshed.event_count == 0
+    assert refreshed.last_event_id is None
+    assert repo.events.for_setup(opened.setup_id) == []
+    loaded = repo.get(opened.setup_id)
+    assert loaded is not None
+    assert loaded.agent_confluence.confidence_pct == 50
 
 
 def test_opening_twice_returns_the_first_rather_than_raising(repo: SetupRepository) -> None:
@@ -330,6 +410,17 @@ def test_the_event_repository_cannot_write(repo: SetupRepository) -> None:
 
 
 # ── Queries ───────────────────────────────────────────────────────────────────
+
+
+def test_open_setups_can_be_scoped_to_the_current_market_date(
+    repo: SetupRepository,
+) -> None:
+    repo.open(a_setup("today"))
+    repo.open(a_setup("yesterday", market_date="2026-09-21"))
+
+    found = repo.open_setups(symbol="XAUUSD", market_date="2026-09-22")
+
+    assert [setup.setup_id for setup in found] == ["today"]
 
 
 def test_open_for_symbol_excludes_terminal_setups(repo: SetupRepository) -> None:
