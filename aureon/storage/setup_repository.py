@@ -211,6 +211,7 @@ class SetupRepository:
         linked_detection_id: str | None = None,
         invalidation_price: float | None = None,
         context_summary: Any | None = None,
+        agent_confluence: Any | None = None,
         reference: Any | None = None,
         now: datetime | None = None,
     ) -> tuple[Setup, SetupEvent, bool]:
@@ -276,6 +277,8 @@ class SetupRepository:
                 updates["invalidation_price"] = invalidation_price
             if context_summary is not None:
                 updates["context_summary"] = context_summary
+            if agent_confluence is not None:
+                updates["agent_confluence"] = agent_confluence
             if reference is not None:
                 updates["reference"] = reference
             if event.to_state is SetupState.CONFIRMED and current.confirmed_at is None:
