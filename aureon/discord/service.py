@@ -2343,6 +2343,12 @@ def build_setup_card(
             ]
         )
     screen.fields.extend(_setup_indicator_fields(all_events))
+    screen.fields.extend(
+        [
+            ("Agent confidence", _agent_confidence_line(setup.agent_confluence)),
+            ("6-agent read", _agent_vote_lines(setup.agent_confluence)),
+        ]
+    )
     confirmation = build_setup_confirmation(
         setup,
         events=all_events,
@@ -2383,6 +2389,57 @@ def _setup_context_line(setup: Any) -> str:
         f"mtf {context.mtf_alignment.value}",
     ]
     return " · ".join(part for part in parts if part) or UNKNOWN
+
+
+AGENT_DISPLAY_NAMES: dict[str, str] = {
+    "ema_cross": "EMA",
+    "rsi": "RSI",
+    "session_trend": "Trend",
+    "wick": "Wick",
+    "liquidity": "Liquidity",
+    "breakout": "Breakout",
+}
+
+ALIGNMENT_MARKS: dict[str, str] = {
+    "aligned": "✓",
+    "opposed": "✗",
+    "neutral": "·",
+}
+
+
+def _agent_confidence_line(confluence: Any) -> str:
+    """Render the observer's frozen alignment score; never turn it into a forecast."""
+    votes = tuple(getattr(confluence, "votes", ()) or ())
+    if not votes:
+        return "— · awaiting observer refresh\nalignment score · not a win probability"
+
+    pct = int(getattr(confluence, "confidence_pct", 0))
+    filled = max(0, min(10, round(pct / 10)))
+    meter = "█" * filled + "░" * (10 - filled)
+    aligned = int(getattr(confluence, "aligned_count", 0))
+    opposed = int(getattr(confluence, "opposed_count", 0))
+    neutral = int(getattr(confluence, "neutral_count", 0))
+    return (
+        f"`{meter}` **{pct}%**\n"
+        f"{aligned} aligned · {opposed} opposed · {neutral} neutral\n"
+        "alignment score · not a win probability"
+    )
+
+
+def _agent_vote_lines(confluence: Any) -> str:
+    """One inspectable line per stored specialist vote."""
+    votes = tuple(getattr(confluence, "votes", ()) or ())
+    if not votes:
+        return "no six-agent snapshot yet"
+
+    lines: list[str] = []
+    for vote in votes:
+        mark = ALIGNMENT_MARKS.get(getattr(vote, "alignment", ""), "·")
+        name = AGENT_DISPLAY_NAMES.get(vote.agent_name, vote.agent_name.replace("_", " ").title())
+        stance = getattr(getattr(vote, "stance", None), "value", "neutral")
+        observation = getattr(vote, "observation", "") or "—"
+        lines.append(f"{mark} **{name}** · {stance} — {observation}")
+    return "\n".join(lines)
 
 
 def _event_snapshot_float(event: Any, key: str) -> float | None:
