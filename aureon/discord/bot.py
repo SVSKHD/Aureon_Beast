@@ -38,6 +38,7 @@ import asyncio
 import functools
 import io
 import logging
+from pathlib import Path
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
@@ -46,6 +47,7 @@ from discord import app_commands
 
 from aureon.discord.context import BotContext
 from aureon.discord.embeds import notice_embed
+from aureon.services.restart_notice import clear_restart_notice, read_restart_notice
 from aureon.discord.notifier import Notifier
 from aureon.discord.service import NotAuthorized, authorize, discord_cadences
 
@@ -138,6 +140,7 @@ class AureonBot(discord.Client):
         self._follow_task: asyncio.Task[None] | None = None
         #: The awake cadences, captured before anything slows them down.
         self._awake_poll = self.notifier.poll_seconds
+        self._restart_notice_sent = False
 
     async def setup_hook(self) -> None:
         """Register commands and sync them where the operator asked.
@@ -286,8 +289,46 @@ class AureonBot(discord.Client):
             self._follow_task.cancel()
         await super().close()
 
+    async def _announce_restart_notice(self) -> None:
+        """Post the durable reason left by the supervisor before a self-restart."""
+        if self._restart_notice_sent:
+            return
+        repo_root = Path(__file__).resolve().parents[2]
+        notice = read_restart_notice(repo_root)
+        if notice is None:
+            self._restart_notice_sent = True
+            return
+        channel_id = self.context.config.alert_channel_id
+        if channel_id is None:
+            log.warning(
+                "runtime restart notice is pending but AUREON_ALERT_CHANNEL_ID is not set"
+            )
+            return
+
+        reason = str(notice.get("reason") or "planned restart")
+        detail = str(notice.get("detail") or "")
+        old_sha = notice.get("old_sha")
+        new_sha = notice.get("new_sha")
+        lines = [f"**Reason:** {reason}"]
+        if detail:
+            lines.append(detail)
+        if old_sha and new_sha:
+            lines.append(f"`{str(old_sha)[:12]} → {str(new_sha)[:12]}`")
+        try:
+            await self.announce(
+                channel_id,
+                embed=notice_embed("Aureon restarted", "\n".join(lines)),
+            )
+        except Exception:  # noqa: BLE001 - retain the file so the next reconnect can retry
+            log.exception("could not post runtime restart notice")
+            return
+
+        clear_restart_notice(repo_root)
+        self._restart_notice_sent = True
+
     async def on_ready(self) -> None:  # pragma: no cover - requires a gateway
         log.info("connected as %s", self.user)
+        await self._announce_restart_notice()
 
 
 def _attachment(

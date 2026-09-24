@@ -965,6 +965,14 @@ class Observer:
             "volatility": context.get("volatility"),
         }
 
+    def _latest_tick_at(self, symbol: str):
+        """The broker timestamp of the most recent tick, or None when unavailable."""
+        try:
+            return self.provider.last_tick_time(symbol)
+        except Exception:  # noqa: BLE001 - diagnostic state must not stop observation
+            log.debug("could not read last tick time for %s", symbol, exc_info=True)
+            return None
+
     def _latest_quote(self, symbol: str):
         """The provider's current quote, or None if it cannot be read.
 
@@ -993,6 +1001,7 @@ class Observer:
                         timeframe=timeframe,
                         market_state=self._state_of(symbol),
                         last_closed_candle_time=candle.open_time.utc if candle else None,
+                        last_tick_at=self._latest_tick_at(symbol),
                         # Published so Discord can show bid/ask and judge staleness without
                         # calling the broker (decision 80). One snapshot, overwritten in
                         # place -- not a tick stream.

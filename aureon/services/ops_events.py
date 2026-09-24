@@ -121,6 +121,13 @@ SPECS: tuple[OpsEventSpec, ...] = (
         scoped=True,
     ),
     OpsEventSpec(
+        "market_holiday",
+        "the weekly market is closed and the last tick has been quiet beyond the guardian "
+        "threshold — this is expected weekend silence and automatic restart is suppressed",
+        "the market is no longer in the confirmed weekend-holiday state",
+        scoped=True,
+    ),
+    OpsEventSpec(
         "mt5_reconnect",
         "the MT5 connection dropped and is being re-established",
         "the MT5 connection is back",
