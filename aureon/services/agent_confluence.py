@@ -7,7 +7,8 @@ a probability model. Discord only renders the frozen result.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from aureon.models.confluence import (
     AGENT_CONFLUENCE_ROSTER,
@@ -19,8 +20,7 @@ from aureon.models.confluence import (
 )
 from aureon.models.enums import DirectionContext, TrendBias
 
-RSI_BULLISH_FLOOR = 55.0
-RSI_BEARISH_CEILING = 45.0
+RSI_MIDPOINT = 50.0
 
 
 def build_agent_confluence(
@@ -123,15 +123,15 @@ def _rsi_vote(inputs: Any, target: DirectionContext) -> AgentConfluenceVote:
     if value is None:
         return _vote("rsi", DirectionContext.NEUTRAL, target, "RSI unavailable")
     value = float(value)
-    if value >= RSI_BULLISH_FLOOR:
+    if value > RSI_MIDPOINT:
         stance = DirectionContext.BULLISH
-        label = "bullish momentum band"
-    elif value <= RSI_BEARISH_CEILING:
+        label = "above 50 midpoint"
+    elif value < RSI_MIDPOINT:
         stance = DirectionContext.BEARISH
-        label = "bearish momentum band"
+        label = "below 50 midpoint"
     else:
         stance = DirectionContext.NEUTRAL
-        label = "neutral momentum band"
+        label = "at 50 midpoint"
     return _vote("rsi", stance, target, f"{value:.1f} · {label}")
 
 
