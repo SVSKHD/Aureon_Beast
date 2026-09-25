@@ -16,7 +16,9 @@ Two invariants from CLAUDE.md are enforced in this file:
 
 from __future__ import annotations
 
-from pydantic import ConfigDict, Field
+import math
+
+from pydantic import ConfigDict, Field, model_validator
 
 from aureon.models.base import AureonDocument, AureonModel, MarketTime
 from aureon.models.enums import Direction, SessionName, Timeframe
@@ -53,6 +55,18 @@ class AgentEvidence(AureonModel):
     numeric: dict[str, float] = Field(default_factory=dict)
     categorical: dict[str, str] = Field(default_factory=dict)
     flags: dict[str, bool] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _training_values_are_clean(self) -> AgentEvidence:
+        groups = (self.numeric, self.categorical, self.flags)
+        if any(not key.strip() for group in groups for key in group):
+            raise ValueError("agent evidence keys must be non-empty")
+        bad = [key for key, value in self.numeric.items() if not math.isfinite(value)]
+        if bad:
+            raise ValueError(f"agent evidence contains non-finite numeric values: {bad}")
+        if any(not value.strip() for value in self.categorical.values()):
+            raise ValueError("agent evidence categorical values must be non-empty")
+        return self
 
 
 class SessionContext(AureonModel):
