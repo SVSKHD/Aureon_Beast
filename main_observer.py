@@ -58,7 +58,7 @@ from aureon.agents.volume_participation_agent import (
 from aureon.agents.wick_agent import WickAgent
 from aureon.config import AureonConfig
 from aureon.config.sessions import session_for
-from aureon.config.symbol_tuning import require_tuning, tuning_for
+from aureon.config.symbol_tuning import tuning_for
 from aureon.data.base_provider import BaseMarketDataProvider
 from aureon.data.live_candle_archive import LiveCandleArchive
 from aureon.engine.analysis_engine import AnalysisEngine
@@ -98,6 +98,7 @@ from aureon.services.observer_state import ObserverState
 from aureon.services.ops_events import OpsRegister
 from aureon.services.shutdown import flushed, install_handlers
 from aureon.services.sleep_cycle import SleepCycle, SleepGate
+from aureon.services.symbol_intelligence_agent import SymbolIntelligenceAgent
 from aureon.storage import paths
 
 log = logging.getLogger("aureon.observer")
@@ -196,6 +197,8 @@ class Observer:
         # agent gets an isolated bridge; a crash changes health state rather than unwinding
         # sibling agents or the candle loop.
         self.agent_highway = AgentHighway()
+        self.symbol_intelligence_agent = SymbolIntelligenceAgent()
+        self._symbol_info_cache: dict[str, object] = {}
 
         # One engine, one roster and one LevelTracker per symbol. See SymbolEngines for
         # why a single shared engine cannot do this: it would keep the right history and
@@ -1412,6 +1415,66 @@ class Observer:
             log.debug("could not read a quote for %s", symbol, exc_info=True)
             return None
 
+    def _symbol_intelligence_report(self):
+        """Agent 18 view of this Windows/MT5 server's configured symbols.
+
+        Broker metadata is cached because point/digits/trade-mode are contract metadata,
+        not tick data. Market state remains live and is read for every report.
+        """
+
+        profiles = []
+        for symbol in self.config.symbols:
+            info = self._symbol_info_cache.get(symbol)
+            if info is None:
+                try:
+                    info = self.provider.symbol_info(symbol)
+                    self._symbol_info_cache[symbol] = info
+                except Exception as exc:  # noqa: BLE001 - reported as unsupported/unknown
+                    log.warning("Agent 18 could not read symbol_info for %s: %s", symbol, exc)
+                    info = None
+
+            market_result = None
+            if self.market_state is not None:
+                try:
+                    market_result = self.market_state.state_for(symbol)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Agent 18 could not classify %s market state: %s", symbol, exc)
+
+            bridge = self.agent_highway.bridge(
+                f"{self.symbol_intelligence_agent.agent_name}:{symbol}:SERVER"
+            )
+            result, profile = bridge.call(
+                self.symbol_intelligence_agent.inspect,
+                symbol=symbol,
+                configured=True,
+                market_result=market_result,
+                symbol_info=info,
+            )
+            if not result.ok or profile is None:
+                continue
+            profiles.append(profile)
+            self.agent_highway.publish(
+                topic="symbol.profile",
+                source_agent=self.symbol_intelligence_agent.agent_name,
+                symbol=symbol,
+                timeframe=None,
+                observed_at=self.provider.now_utc(),
+                payload=profile.model_dump(mode="json"),
+            )
+
+        bridge = self.agent_highway.bridge(
+            f"{self.symbol_intelligence_agent.agent_name}:SERVER"
+        )
+        result, report = bridge.call(self.symbol_intelligence_agent.report, profiles)
+        if not result.ok or report is None:
+            return None
+        self.agent_highway.publish(
+            topic="symbol.registry",
+            source_agent=self.symbol_intelligence_agent.agent_name,
+            payload=report.model_dump(mode="json"),
+        )
+        return report
+
     def _write_system_state(self, *, force: bool = False) -> None:
         if self.state_repository is None:
             return
@@ -1457,6 +1520,7 @@ class Observer:
                 SystemState(
                     symbols=tuple(symbols),
                     agent_health=self.agent_highway.health_snapshot(),
+                    symbol_intelligence=self._symbol_intelligence_report(),
                     account_mode=self._account_mode(),
                     # 11B: so Discord can say "closed until Sunday 22:00" without
                     # computing the weekly boundary itself.
@@ -1931,15 +1995,13 @@ def default_agents(
     timeframe = config.timeframes[0]
     wanted = symbol or config.symbols[0]
     levels = LevelTracker()
-    # EVERY configured symbol, not just the one the roster is built for: the observer
-    # watches them all, and finding out about the third one three hours in is finding
-    # out too late.
+    tuning_agent = SymbolIntelligenceAgent()
+    # EVERY configured symbol is resolved by Agent 18 before any roster is accepted.
+    # Classification may know an instrument family without authorising its thresholds:
+    # an unreviewed symbol still fails fast here rather than borrowing gold's numbers.
     for configured in config.symbols:
-        require_tuning(configured)
-    # Per-symbol, because the level and wick thresholds are NOT dimensionless:
-    # min_penetration_points = 5 is $0.05 on gold and something else entirely on a
-    # symbol with a different tick and a different daily range (D-15).
-    tuning = require_tuning(wanted, point=point)
+        tuning_agent.resolve_tuning(configured)
+    tuning = tuning_agent.resolve_tuning(wanted, point=point)
     if not tuning.is_default:
         log.info(
             "%s runs tuned agent parameters: %s",
@@ -2018,7 +2080,7 @@ def build_observer(config: AureonConfig) -> Observer:
             symbol: OutcomeTracker(
                 get_rule(config.rule_id_for(symbol)),
                 market_tz=config.market_tz,
-                point=require_tuning(symbol).point,
+                point=SymbolIntelligenceAgent().resolve_tuning(symbol).point,
             )
             for symbol in config.symbols
         },
