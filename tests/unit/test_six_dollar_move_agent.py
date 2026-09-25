@@ -1,4 +1,4 @@
-"""The six-dollar setup outcome agent freezes one detection and records one reached fact."""
+"""The favourable-move agent freezes one detection and records 6/20/40 milestones."""
 
 from __future__ import annotations
 
@@ -127,16 +127,19 @@ def test_agent_freezes_first_linked_detection_as_reference() -> None:
         detection_lookup=lambda detection_id: detection if detection_id == "d1" else None,
     )
 
-    observation = agent.observe(
+    observations = agent.observe(
         _setup(),
         _inputs(high=2402.0, low=2399.0, close=2401.0),
     )
 
-    assert observation is not None
+    assert len(observations) == 1
+    observation = observations[0]
     assert observation.event_type is SetupEventType.FAVOURABLE_MOVE_6_TRACKING
     assert observation.detail["reference_detection_id"] == "d1"
     assert observation.detail["reference_price"] == "2400.00000"
-    assert observation.detail["threshold_price"] == "2406.00000"
+    assert observation.detail["threshold_6"] == "2406.00000"
+    assert observation.detail["threshold_20"] == "2420.00000"
+    assert observation.detail["threshold_40"] == "2440.00000"
     assert observation.detail["source_timeframe"] == "M15"
 
 
@@ -148,14 +151,14 @@ def test_bullish_setup_uses_intrabar_high_to_record_six_dollar_move() -> None:
         detection_lookup=lambda _: _detection(),
     )
 
-    observation = agent.observe(
+    observations = agent.observe(
         _setup(DirectionContext.BULLISH),
         _inputs(high=2406.25, low=2399.0, close=2404.0),
     )
 
-    assert observation is not None
-    assert observation.event_type is SetupEventType.FAVOURABLE_MOVE_6_REACHED
-    assert observation.detail["favourable_excursion"] == "6.25000"
+    assert len(observations) == 1
+    assert observations[0].event_type is SetupEventType.FAVOURABLE_MOVE_6_REACHED
+    assert observations[0].detail["favourable_excursion"] == "6.25000"
 
 
 def test_bearish_setup_uses_intrabar_low_to_record_six_dollar_move() -> None:
@@ -175,14 +178,14 @@ def test_bearish_setup_uses_intrabar_low_to_record_six_dollar_move() -> None:
         detection_lookup=lambda _: _detection(),
     )
 
-    observation = agent.observe(
+    observations = agent.observe(
         _setup(DirectionContext.BEARISH),
         _inputs(high=2401.0, low=2393.75, close=2395.0),
     )
 
-    assert observation is not None
-    assert observation.event_type is SetupEventType.FAVOURABLE_MOVE_6_REACHED
-    assert observation.detail["favourable_excursion"] == "6.25000"
+    assert len(observations) == 1
+    assert observations[0].event_type is SetupEventType.FAVOURABLE_MOVE_6_REACHED
+    assert observations[0].detail["favourable_excursion"] == "6.25000"
 
 
 def test_reached_outcome_is_never_emitted_twice() -> None:
@@ -203,10 +206,27 @@ def test_reached_outcome_is_never_emitted_twice() -> None:
         detection_lookup=lambda _: _detection(),
     )
 
-    assert (
-        agent.observe(
-            _setup(),
-            _inputs(high=2410.0, low=2399.0, close=2408.0),
-        )
-        is None
+    assert agent.observe(
+        _setup(),
+        _inputs(high=2410.0, low=2399.0, close=2408.0),
+    ) == ()
+
+
+def test_one_large_candle_records_all_new_milestones() -> None:
+    repository = _Repository()
+    repository.events.rows.append(_tracking_event())
+    agent = SixDollarMoveAgent(
+        setup_repository=repository,
+        detection_lookup=lambda _: _detection(),
     )
+
+    observations = agent.observe(
+        _setup(DirectionContext.BULLISH),
+        _inputs(high=2442.0, low=2399.0, close=2435.0),
+    )
+
+    assert [one.event_type for one in observations] == [
+        SetupEventType.FAVOURABLE_MOVE_6_REACHED,
+        SetupEventType.FAVOURABLE_MOVE_20_REACHED,
+        SetupEventType.FAVOURABLE_MOVE_40_REACHED,
+    ]
