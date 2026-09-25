@@ -11,6 +11,7 @@ from dataclasses import dataclass, asdict
 from typing import Any
 
 from aureon.agents.ema_rsi_eligibility_agent import EmaRsiEligibilityAgent
+from aureon.config.sessions import session_for
 from aureon.ml.logistic import binary_metrics, fit_logistic
 from aureon.models.enums import Direction, Timeframe
 from aureon.services.higher_timeframe_agent import HigherTimeframeAgent
@@ -58,13 +59,16 @@ def run_decision_replay(*, candles: list[Any], engine: Any, target_move: float =
     snapshot = MarketSnapshot(symbol=candles[0].symbol if candles else "UNKNOWN")
     htf_agent = HigherTimeframeAgent()
     director = MarketDirector(primary_target_move=target_move)
-    pending: list[tuple[int, Any, Any, Any, Any]] = []
+    pending: list[tuple[int, Any, Any, Any, Any, list[str]]] = []
 
     for index, candle in enumerate(candles):
         detections = engine.on_closed_candle(candle)
         snapshot.observe_candle(
-            high=candle.high, low=candle.low, open=candle.open, close=candle.close,
-            session=candle.open_time.market.astimezone(candle.open_time.market.tzinfo) and candle.open_time.market and __import__("aureon.config.sessions", fromlist=["session_for"]).session_for(candle.open_time.market),
+            high=candle.high,
+            low=candle.low,
+            open=candle.open,
+            close=candle.close,
+            session=session_for(candle.open_time.market),
         )
         for detection in detections:
             snapshot.observe(detection)
@@ -96,10 +100,19 @@ def run_decision_replay(*, candles: list[Any], engine: Any, target_move: float =
                 as_of=candle.close_time,
             )
         )
-        pending.append((index, eligibility, htf, decision, current))
+        pending.append(
+            (
+                index,
+                eligibility,
+                htf,
+                decision,
+                current,
+                sorted({d.agent_name for d in detections}),
+            )
+        )
 
     rows: list[DecisionReplayRow] = []
-    for index, detection, htf, decision, current in pending:
+    for index, detection, htf, decision, current, same_candle_agents in pending:
         direction = (
             Direction.BUY
             if detection.evidence.categorical.get("cross_direction") == "bullish"
@@ -145,7 +158,7 @@ def run_decision_replay(*, candles: list[Any], engine: Any, target_move: float =
                 director_opposing=decision.opposing,
                 regime=(current.get("market_regime") or {}).get("regime") if isinstance(current.get("market_regime"), dict) else None,
                 participation=(current.get("volume_participation") or {}).get("state") if isinstance(current.get("volume_participation"), dict) else None,
-                same_candle_agents=sorted({d.agent_name for d in engine.on_closed_candle(candles[index])}) if False else [],
+                same_candle_agents=same_candle_agents,
                 mfe_1=metrics[1][0], mae_1=metrics[1][1],
                 mfe_3=metrics[3][0], mae_3=metrics[3][1],
                 mfe_6=metrics[6][0], mae_6=metrics[6][1],
