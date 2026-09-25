@@ -75,6 +75,8 @@ def upgrade() -> None:
         sa.Column("unavailable_six", sa.Integer(), nullable=False),
         sa.Column("complete_evaluations", sa.Integer(), nullable=False),
         sa.Column("mae_before_six_available", sa.Integer(), nullable=False),
+        sa.Column("median_mae_before_six_price", sa.Float(), nullable=True),
+        sa.Column("max_mae_before_six_price", sa.Float(), nullable=True),
         sa.Column("by_timeframe", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("generated_at", sa.DateTime(timezone=True), nullable=False),
     )
