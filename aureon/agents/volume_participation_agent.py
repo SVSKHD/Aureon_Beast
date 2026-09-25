@@ -95,7 +95,7 @@ class VolumeParticipationAgent(BaseAgent):
 
         current = participation_snapshot(
             window,
-            ctx,
+            market_tz=ctx.market_tz,
             point=self.point,
             baseline_bars=self.baseline_bars,
             expansion_ratio=self.expansion_ratio,
@@ -108,7 +108,7 @@ class VolumeParticipationAgent(BaseAgent):
         )
         previous = participation_snapshot(
             window.iloc[:-1],
-            ctx,
+            market_tz=ctx.market_tz,
             point=self.point,
             baseline_bars=self.baseline_bars,
             expansion_ratio=self.expansion_ratio,
@@ -176,8 +176,8 @@ class VolumeParticipationAgent(BaseAgent):
 
 def participation_snapshot(
     window: pd.DataFrame,
-    ctx: CandleContext,
     *,
+    market_tz: str,
     point: float,
     baseline_bars: int,
     expansion_ratio: float,
@@ -233,7 +233,7 @@ def participation_snapshot(
         elif close < open_ and close_position <= (1.0 - close_extreme):
             impulse = "bearish"
 
-    local_index = window.index.tz_convert(ctx.market_tz)
+    local_index = window.index.tz_convert(market_tz)
     dates = [stamp.date().isoformat() for stamp in local_index.to_pydatetime()]
     sessions = sessions_for_index(local_index)
     current_date = dates[-1]
