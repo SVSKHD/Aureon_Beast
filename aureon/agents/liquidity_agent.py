@@ -33,7 +33,7 @@ import pandas as pd
 
 from aureon.agents.base_agent import BaseAgent, validate_window
 from aureon.engine.levels import Level, LevelTracker
-from aureon.models.detection import CandleContext, Detection, IndicatorSnapshot
+from aureon.models.detection import AgentEvidence, CandleContext, Detection, IndicatorSnapshot
 from aureon.models.enums import Direction, Timeframe
 
 SWEEP_UP = "up"
@@ -52,7 +52,7 @@ class LiquidityAgent(BaseAgent):
     """Detects levels swept and rejected (§15)."""
 
     agent_name = "liquidity"
-    agent_version = "1.2.0"  # 11D
+    agent_version = "1.3.0"  # normalized evidence contract
 
     def __init__(
         self,
@@ -169,6 +169,21 @@ class LiquidityAgent(BaseAgent):
         sweep_direction = SWEEP_UP if level.is_high else SWEEP_DOWN
         # The implied reversal, NOT where price went -- see the module docstring.
         implied = Direction.SELL if level.is_high else Direction.BUY
+        evidence = AgentEvidence(
+            numeric={
+                **dict(measures),
+                "close_distance_from_level_points": abs(close - level.price) / self.point,
+            },
+            categorical={
+                "level_type": level.level_type,
+                "sweep_direction": sweep_direction,
+                "implied_reversal": implied.value,
+            },
+            flags={
+                "level_is_high": level.is_high,
+                "closed_back_inside": True,
+            },
+        )
         return self.build_detection(
             ctx=ctx,
             event_key=f"{sweep_direction}|{level.level_type}",
@@ -176,4 +191,5 @@ class LiquidityAgent(BaseAgent):
             direction=implied,
             indicators=IndicatorSnapshot(extras=dict(measures)),
             levels={level.level_type: level.price},
+            evidence=evidence,
         )
