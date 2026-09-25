@@ -49,6 +49,10 @@ REQUIRED_TABLES = {
     "ops_events",
     "training_examples",
     "daily_training_status",
+    "model_registry",
+    "model_training_runs",
+    "model_backtests",
+    "model_predictions",
 }
 
 REQUIRED_DETECTION_COLUMNS = {
@@ -134,6 +138,10 @@ def inspect_local_database(database: LocalDatabase) -> dict[str, Any]:
             "detection_evaluations",
             "training_examples",
             "daily_training_status",
+            "model_registry",
+            "model_training_runs",
+            "model_backtests",
+            "model_predictions",
         ):
             if table in tables:
                 counts[table] = int(

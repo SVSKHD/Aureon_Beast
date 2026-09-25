@@ -72,6 +72,7 @@ from aureon.models.detection import Detection
 from aureon.models.enums import (
     MarketState,
     MtfAlignment,
+    SetupEventType,
     SetupState,
     Timeframe,
     TrendBias,
@@ -149,6 +150,8 @@ class Observer:
         self.alerts = (
             AlertWatcher(alert_repository) if alert_repository is not None else None
         )
+        # Research-only predictor. Wired by build_observer; tests may leave it absent.
+        self.shadow_model: object | None = None
 
         #: 11B. The schedule comes from the market-state service when there is one, so the
         #: two cannot disagree about when the open is -- a second WeeklySchedule would be a
@@ -625,7 +628,7 @@ class Observer:
             log.exception("the setup evaluator raised on %s", candle.open_time.utc)
         tracked = getattr(engine, "tracked", {})
         for event in events:
-            if event.to_state is not SetupState.CONFIRMED:
+            if event.event_type is not SetupEventType.CONFIRMED:
                 continue
             setup = tracked.get(event.setup_id)
             if setup is None:
@@ -634,6 +637,11 @@ class Observer:
                 evaluator.on_confirmed(setup, candle)
             except Exception:  # noqa: BLE001
                 log.exception("could not begin evaluating setup %s", event.setup_id)
+            if self.shadow_model is not None:
+                try:
+                    self.shadow_model.predict_setup(setup, event)
+                except Exception:  # noqa: BLE001 - shadow inference must never stop observation
+                    log.exception("shadow prediction failed for setup %s", event.setup_id)
 
     def _setup_inputs(self, candle: Candle, detections: list[Detection]):
         """Assemble what the setup engine needs from what this candle already computed.
@@ -1788,6 +1796,9 @@ def build_observer(config: AureonConfig) -> Observer:
     # 11D, and assigned the same way for the same reason: a test of observation should not
     # have to stand up a day cache to watch a candle close.
     observer.market_days = storage.market_days
+    from aureon.services.shadow_model import ShadowModelService
+
+    observer.shadow_model = ShadowModelService(storage.models)
     _wire_setups(observer, config, storage)
     return observer
 

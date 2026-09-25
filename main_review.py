@@ -87,13 +87,15 @@ def build_training_agent(config: AureonConfig, symbol: str):
         account_scope=config.account_scope,
         state_heartbeat_seconds=config.state_heartbeat_seconds,
     )
-    return EodTrainingAgent(
+    agent = EodTrainingAgent(
         setups=storage.setups,
         setup_evaluations=storage.setup_evaluations,
         market_days=storage.market_days,
         memory=storage.training_memory,
         rule_id=config.rule_id_for(symbol),
     )
+    agent.model_repository = storage.models
+    return agent
 
 
 def run_training(
@@ -109,13 +111,21 @@ def run_training(
         market_date = complete[-1].market_date
 
     status = agent.build_day(symbol=symbol, market_date=market_date)
+    from aureon.services.shadow_model import ShadowModelService
+
+    reconciled = ShadowModelService(agent.model_repository).reconcile_day(
+        agent.memory,
+        symbol,
+        market_date,
+    )
     print(
         f"training {status.market_date} [{status.symbol}]: "
         f"{status.examples_written} examples, "
         f"{status.reached_six} reached +$6, "
         f"{status.not_reached_six} did not reach +$6 by EOD, "
         f"{status.unavailable_six} unavailable, "
-        f"{status.mae_before_six_available} with pre-$6 MAE"
+        f"{status.mae_before_six_available} with pre-$6 MAE, "
+        f"{reconciled} shadow prediction(s) reconciled"
     )
     for one in status.by_timeframe:
         print(
@@ -331,12 +341,33 @@ class ReviewWatcher:
                     feature_schema_version=agent.feature_schema_version,
                     label_schema_version=agent.label_schema_version,
                 )
+                from aureon.services.shadow_model import ShadowModelService
+
                 if existing is not None:
+                    reconciled = ShadowModelService(
+                        agent.model_repository
+                    ).reconcile_day(
+                        agent.memory,
+                        symbol,
+                        market_date,
+                    )
+                    if reconciled:
+                        log.info(
+                            "reconciled %d shadow prediction(s) for %s %s",
+                            reconciled,
+                            symbol,
+                            market_date,
+                        )
                     continue
                 status = agent.build_day(symbol=symbol, market_date=market_date)
+                reconciled = ShadowModelService(agent.model_repository).reconcile_day(
+                    agent.memory,
+                    symbol,
+                    market_date,
+                )
                 log.info(
                     "EOD training %s %s: examples=%d reached6=%d not_reached6=%d "
-                    "unavailable=%d pre6_mae=%d",
+                    "unavailable=%d pre6_mae=%d shadow_reconciled=%d",
                     symbol,
                     market_date,
                     status.examples_written,
@@ -344,6 +375,7 @@ class ReviewWatcher:
                     status.not_reached_six,
                     status.unavailable_six,
                     status.mae_before_six_available,
+                    reconciled,
                 )
             except Exception:  # noqa: BLE001 - training must not stop the review watcher
                 log.exception("EOD training build failed for %s", symbol)
