@@ -491,7 +491,9 @@ class Observer:
                 )
 
         mtf = analysis.mtf_context(candle.symbol, candle.timeframe)
-        htf_bridge = self.agent_highway.bridge(self.higher_timeframe_agent.agent_name)
+        htf_bridge = self.agent_highway.bridge(
+            f"{self.higher_timeframe_agent.agent_name}:{candle.symbol}:{candle.timeframe.value}"
+        )
         htf_result, htf = htf_bridge.call(self.higher_timeframe_agent.assess, mtf)
         if htf_result.ok and htf is not None:
             self._higher_timeframe_reads[key] = htf
@@ -514,7 +516,9 @@ class Observer:
             if d.direction is not None
         )
 
-        expansion_bridge = self.agent_highway.bridge(self.expansion_agent.agent_name)
+        expansion_bridge = self.agent_highway.bridge(
+            f"{self.expansion_agent.agent_name}:{candle.symbol}:{candle.timeframe.value}"
+        )
         expansion_result, opportunity = expansion_bridge.call(
             self.expansion_agent.assess,
             ExpansionInputs(
@@ -554,7 +558,9 @@ class Observer:
         else:
             self._expansion_reads[key] = None
 
-        director_bridge = self.agent_highway.bridge(self.market_director.agent_name)
+        director_bridge = self.agent_highway.bridge(
+            f"{self.market_director.agent_name}:{candle.symbol}:{candle.timeframe.value}"
+        )
         director_result, decision = director_bridge.call(
             self.market_director.decide,
             DirectorInputs(
