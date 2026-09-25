@@ -107,6 +107,16 @@ class ModelRepository(PostgresRepository):
         rows = self._rows(statement)
         return None if not rows else ModelBacktest.model_validate(self._backtest_dict(rows[0]))
 
+    def latest_backtest_for_model(self, model_id: str) -> ModelBacktest | None:
+        statement = (
+            select(self.backtests)
+            .where(self.backtests.c.model_id == model_id)
+            .order_by(self.backtests.c.started_at.desc())
+            .limit(1)
+        )
+        rows = self._rows(statement)
+        return None if not rows else ModelBacktest.model_validate(self._backtest_dict(rows[0]))
+
     def prediction_for(self, model_id: str, setup_id: str) -> ModelPrediction | None:
         statement = (
             select(self.predictions)
