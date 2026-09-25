@@ -407,7 +407,8 @@ class Observer:
             # On the candle clock, so expiry runs on the same clock as everything else the
             # observer records and needs no second scheduler (9C).
             self.alerts.expire()
-        self._write_system_state(force=True)
+        # System state is written from _on_analysis, after Agents 12/15 have consumed
+        # this same candle. Writing here would publish the previous Director decision.
 
     # ── Setups (12, T-7) ──────────────────────────────────────────────────────
 
@@ -423,6 +424,8 @@ class Observer:
         setup is context; a missed candle is a hole in the archive and in the parity check.
         """
         self._update_decision_agents(candle, detections)
+        # One forced write per closed candle, now that the decision layer is current.
+        self._write_system_state(force=True)
 
         engine = self.setups.get((candle.symbol, candle.timeframe))
         if engine is None:
