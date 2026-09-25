@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pydantic import Field
 
-from aureon.models.base import AureonDocument, UtcDatetime
+from aureon.models.base import AureonDocument, AureonModel, UtcDatetime
 from aureon.models.enums import DirectionContext, SetupFamily, Timeframe
 
 
@@ -57,7 +57,7 @@ class TrainingExample(AureonDocument):
     generated_at: UtcDatetime
 
 
-class TrainingTimeframeStatus(AureonDocument):
+class TrainingTimeframeStatus(AureonModel):
     timeframe: Timeframe
     setups: int = Field(default=0, ge=0)
     reached_six: int = Field(default=0, ge=0)
