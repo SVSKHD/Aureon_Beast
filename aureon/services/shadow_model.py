@@ -80,29 +80,28 @@ class ShadowModelService:
         return prediction
 
     def reconcile_day(self, training_memory: Any, symbol: str, market_date: str) -> int:
-        """Attach completed EOD outcomes to any shadow predictions from that day's setups."""
-        model = self.models.active_shadow(symbol)
-        if model is None:
-            return 0
+        """Attach EOD outcomes to every unreconciled shadow prediction for the day's setups."""
         count = 0
         moment = to_utc(self._now())
         for example in training_memory.examples_for(symbol, market_date):
-            prediction = self.models.prediction_for(model.model_id, example.setup_id)
-            if prediction is None or prediction.actual_outcomes is not None:
-                continue
-            self.models.reconcile_prediction(
-                model.model_id,
+            predictions = self.models.predictions_for_setup(
                 example.setup_id,
-                outcomes={
-                    "six": example.six_dollar_reached,
-                    "twenty": example.twenty_dollar_reached,
-                    "forty": example.forty_dollar_reached,
-                    "max_favourable_move_price": example.max_favourable_move_price,
-                    "mae_before_six_price": example.mae_before_six_price,
-                },
-                at=moment,
+                unreconciled_only=True,
             )
-            count += 1
+            for prediction in predictions:
+                self.models.reconcile_prediction(
+                    prediction.model_id,
+                    example.setup_id,
+                    outcomes={
+                        "six": example.six_dollar_reached,
+                        "twenty": example.twenty_dollar_reached,
+                        "forty": example.forty_dollar_reached,
+                        "max_favourable_move_price": example.max_favourable_move_price,
+                        "mae_before_six_price": example.mae_before_six_price,
+                    },
+                    at=moment,
+                )
+                count += 1
         return count
 
 
