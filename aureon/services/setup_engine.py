@@ -840,25 +840,31 @@ class SetupEngine:
                     continue
                 if observation is None:
                     continue
-                event = self._write(
-                    setup,
-                    inputs,
-                    Advance(
-                        setup.state,
-                        observation.event_type,
-                        reason=observation.reason,
-                        linked_detection_id=observation.detail.get(
-                            "reference_detection_id"
-                        ),
-                    ),
-                    snapshot={
-                        **_snapshot(inputs),
-                        **dict(observation.detail),
-                    },
+                observations = (
+                    observation
+                    if isinstance(observation, (tuple, list))
+                    else (observation,)
                 )
-                if event is not None:
-                    written.append(event)
-                    setup = self._tracked.get(setup.setup_id, setup)
+                for one in observations:
+                    event = self._write(
+                        setup,
+                        inputs,
+                        Advance(
+                            setup.state,
+                            one.event_type,
+                            reason=one.reason,
+                            linked_detection_id=one.detail.get(
+                                "reference_detection_id"
+                            ),
+                        ),
+                        snapshot={
+                            **_snapshot(inputs),
+                            **dict(one.detail),
+                        },
+                    )
+                    if event is not None:
+                        written.append(event)
+                        setup = self._tracked.get(setup.setup_id, setup)
         return written
 
     def _same_anchor(
