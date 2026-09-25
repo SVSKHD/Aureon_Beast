@@ -297,7 +297,12 @@ class ReviewWatcher:
                 if not complete:
                     continue
                 market_date = complete[-1].market_date
-                existing = agent.memory.status_for(symbol, market_date)
+                existing = agent.memory.status_for(
+                    symbol,
+                    market_date,
+                    feature_schema_version=agent.feature_schema_version,
+                    label_schema_version=agent.label_schema_version,
+                )
                 if existing is not None:
                     continue
                 status = agent.build_day(symbol=symbol, market_date=market_date)
