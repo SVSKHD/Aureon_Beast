@@ -127,6 +127,23 @@ class ModelRepository(PostgresRepository):
         rows = self._rows(statement)
         return None if not rows else ModelPrediction.model_validate(self._prediction_dict(rows[0]))
 
+    def predictions_for_setup(
+        self,
+        setup_id: str,
+        *,
+        unreconciled_only: bool = False,
+    ) -> list[ModelPrediction]:
+        statement = select(self.predictions).where(
+            self.predictions.c.setup_id == setup_id
+        )
+        if unreconciled_only:
+            statement = statement.where(self.predictions.c.reconciled_at.is_(None))
+        statement = statement.order_by(self.predictions.c.predicted_at)
+        return [
+            ModelPrediction.model_validate(self._prediction_dict(row))
+            for row in self._rows(statement)
+        ]
+
     def reconcile_prediction(
         self,
         model_id: str,
