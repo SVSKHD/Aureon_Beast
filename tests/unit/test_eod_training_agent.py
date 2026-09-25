@@ -221,6 +221,9 @@ def test_eod_training_freezes_agent_decisions_and_six_dollar_label() -> None:
     assert row.six_dollar_reached is True
     assert row.time_to_six_seconds == 900.0
     assert row.mae_before_six_price == pytest.approx(1.5)
+    assert status.median_mae_before_six_price == pytest.approx(1.5)
+    assert status.max_mae_before_six_price == pytest.approx(1.5)
+    assert status.by_timeframe[0].median_mae_before_six_price == pytest.approx(1.5)
 
 
 def test_completed_day_without_six_dollar_reach_is_a_negative_eod_label() -> None:
