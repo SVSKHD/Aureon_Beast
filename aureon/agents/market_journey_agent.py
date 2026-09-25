@@ -63,7 +63,7 @@ class MarketJourneyAgent(BaseAgent):
         if len(window) < self.min_window():
             return []
 
-        current = market_journey_snapshot(window, ctx, point=self.point, recent_days=self.recent_days)
+        current = market_journey_snapshot(\n            window, ctx, point=self.point, recent_days=self.recent_days,\n            near_level_points=self.near_level_points,\n        )
         if current is None:
             return []
         previous = market_journey_snapshot(
