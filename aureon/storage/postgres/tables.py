@@ -827,6 +827,103 @@ class DailyTrainingStatus(Base):
     )
 
 
+class ModelRegistry(Base):
+    """Versioned trained model artifacts. Shadow is the only live-active status."""
+
+    __tablename__ = "model_registry"
+
+    model_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    symbol: Mapped[str] = mapped_column(String)
+    algorithm: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String)
+    feature_schema_version: Mapped[str] = mapped_column(String)
+    label_schema_version: Mapped[str] = mapped_column(String)
+    model_schema_version: Mapped[str] = mapped_column(String)
+    trained_from: Mapped[str] = mapped_column(String)
+    trained_through: Mapped[str] = mapped_column(String)
+    training_samples: Mapped[int] = mapped_column(Integer)
+    target_metrics: Mapped[dict[str, Any]] = mapped_column(Json)
+    artifact: Mapped[dict[str, Any]] = mapped_column(Json)
+    created_at: Mapped[datetime] = mapped_column()
+    activated_at: Mapped[datetime | None] = mapped_column()
+
+    __table_args__ = (
+        Index("ix_model_registry_symbol_created", "symbol", "created_at"),
+        Index("ix_model_registry_symbol_status", "symbol", "status"),
+    )
+
+
+class ModelTrainingRun(Base):
+    __tablename__ = "model_training_runs"
+
+    run_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    model_id: Mapped[str | None] = mapped_column(String)
+    symbol: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String)
+    algorithm: Mapped[str] = mapped_column(String)
+    feature_schema_version: Mapped[str] = mapped_column(String)
+    label_schema_version: Mapped[str] = mapped_column(String)
+    started_at: Mapped[datetime] = mapped_column()
+    completed_at: Mapped[datetime | None] = mapped_column()
+    sample_count: Mapped[int] = mapped_column(Integer)
+    trained_from: Mapped[str | None] = mapped_column(String)
+    trained_through: Mapped[str | None] = mapped_column(String)
+    target_metrics: Mapped[dict[str, Any]] = mapped_column(Json)
+    failure_message: Mapped[str | None] = mapped_column(String)
+
+    __table_args__ = (Index("ix_model_training_symbol_started", "symbol", "started_at"),)
+
+
+class ModelBacktest(Base):
+    __tablename__ = "model_backtests"
+
+    backtest_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    model_id: Mapped[str | None] = mapped_column(String)
+    symbol: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String)
+    algorithm: Mapped[str] = mapped_column(String)
+    feature_schema_version: Mapped[str] = mapped_column(String)
+    label_schema_version: Mapped[str] = mapped_column(String)
+    started_at: Mapped[datetime] = mapped_column()
+    completed_at: Mapped[datetime | None] = mapped_column()
+    start_market_date: Mapped[str | None] = mapped_column(String)
+    end_market_date: Mapped[str | None] = mapped_column(String)
+    folds: Mapped[dict[str, Any]] = mapped_column(Json)
+    aggregate_metrics: Mapped[dict[str, Any]] = mapped_column(Json)
+    out_of_sample_predictions: Mapped[int] = mapped_column(Integer)
+    failure_message: Mapped[str | None] = mapped_column(String)
+
+    __table_args__ = (Index("ix_model_backtests_symbol_started", "symbol", "started_at"),)
+
+
+class ModelPrediction(Base):
+    __tablename__ = "model_predictions"
+
+    prediction_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    model_id: Mapped[str] = mapped_column(String)
+    setup_id: Mapped[str] = mapped_column(String)
+    event_id: Mapped[str] = mapped_column(String)
+    symbol: Mapped[str] = mapped_column(String)
+    timeframe: Mapped[str] = mapped_column(String)
+    predicted_at: Mapped[datetime] = mapped_column()
+    feature_schema_version: Mapped[str] = mapped_column(String)
+    label_schema_version: Mapped[str] = mapped_column(String)
+    probabilities: Mapped[dict[str, Any]] = mapped_column(Json)
+    feature_snapshot: Mapped[dict[str, Any]] = mapped_column(Json)
+    actual_outcomes: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    reconciled_at: Mapped[datetime | None] = mapped_column()
+
+    __table_args__ = (
+        Index("ix_model_predictions_symbol_time", "symbol", "predicted_at"),
+        Index("ix_model_predictions_model", "model_id", "predicted_at"),
+        UniqueConstraint("model_id", "setup_id", name="uq_model_prediction_setup"),
+    )
+
+
 class DailyReview(Base):
     """§37 (Phase 7). Keyed by broker date and symbol, so regenerating a day overwrites it.
 
