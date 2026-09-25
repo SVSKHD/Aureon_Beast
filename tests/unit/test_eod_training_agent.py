@@ -220,6 +220,10 @@ def test_eod_training_freezes_agent_decisions_and_six_dollar_label() -> None:
     assert row.agent_read["ema_cross"]["alignment"] == "aligned"
     assert row.six_dollar_reached is True
     assert row.time_to_six_seconds == 900.0
+    assert row.twenty_dollar_reached is False
+    assert row.forty_dollar_reached is False
+    assert row.max_favourable_move_price == pytest.approx(6.2)
+    assert row.extension_after_six_price == pytest.approx(0.2)
     assert row.mae_before_six_price == pytest.approx(1.5)
     assert status.median_mae_before_six_price == pytest.approx(1.5)
     assert status.max_mae_before_six_price == pytest.approx(1.5)
@@ -249,4 +253,4 @@ def test_training_checkpoint_identity_includes_contract_versions() -> None:
     status = agent.build_day(symbol="XAUUSD", market_date=DATE)
 
     assert "EOD_SETUP_FEATURES_V1" in status.status_id
-    assert "FAVOURABLE_MOVE_6_V1" in status.status_id
+    assert "FAVOURABLE_MOVE_LADDER_V2" in status.status_id
