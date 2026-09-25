@@ -200,9 +200,10 @@ def test_the_card_shows_six_dollar_move_tracking_and_reached_state() -> None:
         },
     )
     fields = dict(build_setup_card(a_setup(), events=[tracking]).fields)
-    assert "tracking" in fields["Move ladder"]
-    assert "2400.00000" in fields["$6 favourable move"]
-    assert "2406.00000" in fields["$6 favourable move"]
+    assert "ref 2400.00000" in fields["Move ladder"]
+    assert "$6 …" in fields["Move ladder"]
+    assert "$20 …" in fields["Move ladder"]
+    assert "$40 …" in fields["Move ladder"]
 
     reached = an_event(
         SetupEventType.FAVOURABLE_MOVE_6_REACHED,
@@ -216,8 +217,9 @@ def test_the_card_shows_six_dollar_move_tracking_and_reached_state() -> None:
         },
     )
     fields = dict(build_setup_card(a_setup(), events=[tracking, reached]).fields)
-    assert "reached" in fields["$6 favourable move"]
-    assert "6.25000" in fields["$6 favourable move"]
+    assert "$6 ✓" in fields["Move ladder"]
+    assert "$20 …" in fields["Move ladder"]
+    assert "seen 6.25000" in fields["Move ladder"]
 
 
 def test_the_card_shows_frozen_ema_cross_and_rsi_status() -> None:
