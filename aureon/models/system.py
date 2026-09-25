@@ -185,6 +185,10 @@ class SymbolState(AureonModel):
         default=None,
         description="Agent 13 pre-trade risk read when account context is available.",
     )
+    cross_venue_blueprint: CrossVenueBlueprint | None = Field(
+        default=None,
+        description="Agent 19 latest MT5-to-cTrader blueprint for this symbol.",
+    )
 
     # ── Session context (§18) ─────────────────────────────────────────────────
     session: SessionName | None = None
