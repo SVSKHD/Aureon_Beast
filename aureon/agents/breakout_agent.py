@@ -24,7 +24,7 @@ import pandas as pd
 
 from aureon.agents.base_agent import BaseAgent, validate_window
 from aureon.engine.levels import Level, LevelTracker
-from aureon.models.detection import CandleContext, Detection, IndicatorSnapshot
+from aureon.models.detection import AgentEvidence, CandleContext, Detection, IndicatorSnapshot
 from aureon.models.enums import Direction, Timeframe
 
 BREAK_UP = "up"
@@ -39,7 +39,7 @@ class BreakoutAgent(BaseAgent):
     """Detects levels broken and held through the close (§17)."""
 
     agent_name = "breakout"
-    agent_version = "1.2.0"  # 11D
+    agent_version = "1.3.0"  # normalized evidence contract
 
     def __init__(
         self,
@@ -127,6 +127,26 @@ class BreakoutAgent(BaseAgent):
         break_direction = BREAK_UP if level.is_high else BREAK_DOWN
         # Continuation: agrees with where price broke, unlike a sweep's reversal bias.
         implied = Direction.BUY if level.is_high else Direction.SELL
+        previous_close = measures["previous_close"]
+        evidence = AgentEvidence(
+            numeric={
+                **dict(measures),
+                "close_distance_from_level_points": abs(close - level.price) / self.point,
+                "previous_close_distance_from_level_points": (
+                    abs(previous_close - level.price) / self.point
+                ),
+            },
+            categorical={
+                "level_type": level.level_type,
+                "break_direction": break_direction,
+                "continuation_direction": implied.value,
+            },
+            flags={
+                "level_is_high": level.is_high,
+                "previous_close_other_side": True,
+                "closed_beyond_level": True,
+            },
+        )
         return self.build_detection(
             ctx=ctx,
             event_key=f"{break_direction}|{level.level_type}",
@@ -134,4 +154,5 @@ class BreakoutAgent(BaseAgent):
             direction=implied,
             indicators=IndicatorSnapshot(extras=dict(measures)),
             levels={level.level_type: level.price},
+            evidence=evidence,
         )
