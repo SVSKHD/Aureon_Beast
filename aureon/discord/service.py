@@ -2324,6 +2324,7 @@ def build_setup_card(
             else UNKNOWN,
         ),
         ("Context", _setup_context_line(setup)),
+        ("$6 favourable move", _six_dollar_move_line(events)),
         ("Events", f"{setup.event_count}"),
     ]
 
@@ -2373,6 +2374,49 @@ def build_setup_card(
     )
     screen.reference = render_reference(setup.reference)
     return screen
+
+
+def _six_dollar_move_line(events: Sequence[Any]) -> str:
+    """Render only the stored six-dollar outcome-agent facts."""
+    from aureon.models.enums import SetupEventType
+
+    reached = next(
+        (
+            event
+            for event in reversed(events)
+            if event.event_type is SetupEventType.FAVOURABLE_MOVE_6_REACHED
+        ),
+        None,
+    )
+    if reached is not None:
+        snapshot = reached.context_snapshot or {}
+        reference = snapshot.get("reference_price", UNKNOWN)
+        extreme = snapshot.get("observed_extreme", UNKNOWN)
+        excursion = snapshot.get("favourable_excursion", "6")
+        detection_id = snapshot.get("reference_detection_id", "")
+        tail = f" · detection `{detection_id}`" if detection_id else ""
+        return (
+            f"✓ reached · from {reference} to {extreme} · "
+            f"favourable move {excursion}{tail}"
+        )
+
+    tracking = next(
+        (
+            event
+            for event in reversed(events)
+            if event.event_type is SetupEventType.FAVOURABLE_MOVE_6_TRACKING
+        ),
+        None,
+    )
+    if tracking is not None:
+        snapshot = tracking.context_snapshot or {}
+        reference = snapshot.get("reference_price", UNKNOWN)
+        threshold = snapshot.get("threshold_price", UNKNOWN)
+        detection_id = snapshot.get("reference_detection_id", "")
+        tail = f" · detection `{detection_id}`" if detection_id else ""
+        return f"tracking · reference {reference} · threshold {threshold}{tail}"
+
+    return "— · waiting for a linked detection"
 
 
 def _family_words(family: str) -> str:
