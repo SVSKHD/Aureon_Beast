@@ -132,6 +132,8 @@ class TrainingMemoryRepository(PostgresRepository):
             "unavailable_six": status.unavailable_six,
             "complete_evaluations": status.complete_evaluations,
             "mae_before_six_available": status.mae_before_six_available,
+            "median_mae_before_six_price": status.median_mae_before_six_price,
+            "max_mae_before_six_price": status.max_mae_before_six_price,
             "by_timeframe": {"items": payload["by_timeframe"]},
             "generated_at": status.generated_at,
         }
