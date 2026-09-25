@@ -47,11 +47,14 @@ from aureon.agents.base_agent import BaseAgent
 from aureon.agents.breakout_agent import BreakoutAgent
 from aureon.agents.ema_cross_agent import EmaCrossAgent
 from aureon.agents.liquidity_agent import LiquidityAgent
-from aureon.agents.market_journey_agent import MarketJourneyAgent
-from aureon.agents.market_regime_agent import MarketRegimeAgent
+from aureon.agents.market_journey_agent import MarketJourneyAgent, market_journey_snapshot
+from aureon.agents.market_regime_agent import MarketRegimeAgent, classify_market_regime
 from aureon.agents.rsi_agent import RsiAgent
 from aureon.agents.session_trend_agent import SessionTrendAgent, summary_from_detection
-from aureon.agents.volume_participation_agent import VolumeParticipationAgent
+from aureon.agents.volume_participation_agent import (
+    VolumeParticipationAgent,
+    participation_snapshot,
+)
 from aureon.agents.wick_agent import WickAgent
 from aureon.config import AureonConfig
 from aureon.config.sessions import session_for
@@ -447,6 +450,7 @@ class Observer:
 
         key = (candle.symbol, candle.timeframe)
         analysis = self.engines.for_symbol(candle.symbol)
+        self._refresh_context_agents(candle, analysis)
         mtf = analysis.mtf_context(candle.symbol, candle.timeframe)
         htf = self.higher_timeframe_agent.assess(mtf)
         self._higher_timeframe_reads[key] = htf
@@ -474,6 +478,135 @@ class Observer:
             )
         )
         self._director_decisions[key] = decision
+
+    def _refresh_context_agents(self, candle: Candle, analysis: AnalysisEngine) -> None:
+        """Refresh Agents 9-11 on every closed candle without creating event detections.
+
+        Their stored detections remain sparse transition events. The Director and /status need
+        the current state even when the label did not change, so this reuses the same pure
+        snapshot functions over the same engine window.
+        """
+
+        frame = analysis.window(candle.symbol, candle.timeframe)
+        snapshot = self._snapshot(candle.symbol, candle.timeframe)
+        at = candle.close_time.isoformat()
+
+        for agent in analysis.agents:
+            if isinstance(agent, MarketJourneyAgent):
+                if len(frame) < agent.min_window():
+                    continue
+                view = frame.iloc[-agent.min_window():]
+                value = market_journey_snapshot(
+                    view,
+                    market_tz=self.config.market_tz,
+                    point=agent.point,
+                    recent_days=agent.recent_days,
+                    near_level_points=agent.near_level_points,
+                )
+                if value is not None:
+                    levels = {
+                        key: value.get(key)
+                        for key in (
+                            "asia_open",
+                            "asia_high",
+                            "asia_low",
+                            "previous_day_high",
+                            "previous_day_low",
+                            "previous_day_close",
+                            "recent_high",
+                            "recent_low",
+                        )
+                        if value.get(key) is not None
+                    }
+                    snapshot.market_journey = {
+                        "at": at,
+                        "state": value.get("journey_state"),
+                        "session": value.get("session"),
+                        "asia_location": value.get("asia_location"),
+                        "previous_day_location": value.get("previous_day_location"),
+                        "previous_close_relation": value.get("previous_close_relation"),
+                        "current_price": value.get("current_price"),
+                        "levels": levels,
+                        "flags": {
+                            "above_asia_open": bool(value.get("above_asia_open")),
+                            "above_previous_close": bool(value.get("above_previous_close")),
+                            "near_previous_day_high": bool(
+                                value.get("near_previous_day_high")
+                            ),
+                            "near_previous_day_low": bool(
+                                value.get("near_previous_day_low")
+                            ),
+                        },
+                    }
+
+            elif isinstance(agent, MarketRegimeAgent):
+                if len(frame) < agent.min_window():
+                    continue
+                view = frame.iloc[-agent.min_window():]
+                value = classify_market_regime(
+                    view,
+                    point=agent.point,
+                    baseline_bars=agent.baseline_bars,
+                    short_bars=agent.short_bars,
+                    trend_bars=agent.trend_bars,
+                    compression_ratio=agent.compression_ratio,
+                    expansion_ratio=agent.expansion_ratio,
+                    trend_efficiency=agent.trend_efficiency,
+                    range_efficiency=agent.range_efficiency,
+                    messy_reversal_rate=agent.messy_reversal_rate,
+                )
+                if value is not None:
+                    snapshot.market_regime = {
+                        "at": at,
+                        "regime": value.get("state"),
+                        "volatility_state": value.get("volatility_state"),
+                        "structure_state": value.get("structure_state"),
+                        "volatility_ratio": value.get("volatility_ratio"),
+                        "path_efficiency": value.get("path_efficiency"),
+                        "reversal_rate": value.get("reversal_rate"),
+                        "flags": {
+                            "is_compressed": bool(value.get("is_compressed")),
+                            "is_expanding": bool(value.get("is_expanding")),
+                        },
+                    }
+
+            elif isinstance(agent, VolumeParticipationAgent):
+                if len(frame) < agent.min_window():
+                    continue
+                view = frame.iloc[-agent.min_window():]
+                value = participation_snapshot(
+                    view,
+                    market_tz=self.config.market_tz,
+                    point=agent.point,
+                    baseline_bars=agent.baseline_bars,
+                    expansion_ratio=agent.expansion_ratio,
+                    abnormal_ratio=agent.abnormal_ratio,
+                    contraction_ratio=agent.contraction_ratio,
+                    impulse_range_ratio=agent.impulse_range_ratio,
+                    close_extreme=agent.close_extreme,
+                    vwap_neutral_points=agent.vwap_neutral_points,
+                    real_volume_coverage=agent.real_volume_coverage,
+                )
+                if value is not None:
+                    tracker = analysis.context_tracker(candle.symbol, candle.timeframe)
+                    profile = tracker.reference(candle.close) if tracker is not None else None
+                    snapshot.volume_participation = {
+                        "at": at,
+                        "state": value.get("participation_state"),
+                        "source": value.get("volume_source"),
+                        "relative_volume": value.get("relative_volume"),
+                        "session_vwap": value.get("session_vwap"),
+                        "vwap_relation": value.get("vwap_relation"),
+                        "price_impulse": value.get("price_impulse"),
+                        "poc_price": None if profile is None else profile.poc_price,
+                        "va_high": None if profile is None else profile.va_high,
+                        "va_low": None if profile is None else profile.va_low,
+                        "flags": {
+                            "volume_expanding": bool(value.get("volume_expanding")),
+                            "volume_contracting": bool(value.get("volume_contracting")),
+                            "abnormal_volume": bool(value.get("abnormal_volume")),
+                        },
+                    }
 
     def _evaluate_setups(self, candle: Candle, engine: object, events: list) -> None:
         """Advance the open measurements, then start one for anything that just confirmed.
