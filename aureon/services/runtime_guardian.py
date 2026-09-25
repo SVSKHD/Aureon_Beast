@@ -25,6 +25,7 @@ from typing import Any
 
 from aureon.config import AureonConfig
 from aureon.models.base import to_utc, utc_now
+from aureon.services.manual_restart import consume_restart_request
 from aureon.services.market_state_service import WeeklySchedule
 from aureon.services.restart_notice import write_restart_notice
 from aureon.storage.runtime import build_storage
@@ -162,7 +163,17 @@ class RuntimeGuardian:
             log.warning("guardian git fetch probe failed: %s", status["fetch_error"])
 
     def poll(self) -> RestartRequest | None:
-        """Return a restart request at most once per configured poll interval."""
+        """Return a planned restart, checking manual Discord requests every supervisor tick."""
+
+        manual = consume_restart_request(self.repo_root)
+        if manual is not None:
+            requested_by = str(manual.get("requested_by") or "unknown")
+            reason = str(manual.get("reason") or "Discord /restart")
+            detail = f"requested by Discord user {requested_by}: {reason}"
+            write_restart_notice(self.repo_root, reason="manual Discord restart", detail=detail)
+            log.warning("planned restart: %s", detail)
+            return RestartRequest("manual Discord restart", detail)
+
         now_mono = time.monotonic()
         if now_mono < self._next_poll:
             return None
@@ -413,15 +424,11 @@ def build_runtime_guardian(
     ops: Any | None = None,
     run_preflight: bool = True,
 ) -> RuntimeGuardian | None:
-    """Build the guardian only when one of its active behaviours is enabled.
+    """Build the guardian for manual /restart plus optional automatic behaviours.
 
-    Weekend classification already exists inside the observer. The supervisor guardian is needed
-    only when it may take an operational action: auto-update or stale-feed restart.
+    Manual Discord restart is always available, so the supervisor always owns a guardian.
+    Auto-update and stale-feed restart remain opt-in.
     """
-    auto_update = _env_bool("AUREON_AUTO_UPDATE_MAIN", False)
-    auto_restart = _env_bool("AUREON_AUTO_RESTART_STALE_FEED", False)
-    if not (auto_update or auto_restart):
-        return None
     guardian = RuntimeGuardian.from_env(
         repo_root=repo_root,
         ops=ops,
