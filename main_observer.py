@@ -210,7 +210,7 @@ class Observer:
                 market_tz=config.market_tz,
                 # 11B: a bar straddling the weekly close is not a bar -- its range IS the
                 # weekend gap. The engine refuses to analyse one and records why.
-                gap_guard=self.sleep.schedule.close_spanned_by,
+                gap_guard=self.symbol_intelligence_agent.market_schedule(symbol).close_spanned_by,
                 # 11D: a longer M5 tail than the analysis window, for the higher timeframes.
                 mtf_bars=config.mtf_m5_bars,
                 mtf_periods=(config.ema_fast, config.ema_slow),
@@ -1519,8 +1519,8 @@ class Observer:
             self.state_repository.write(  # type: ignore[attr-defined]
                 SystemState(
                     symbols=tuple(symbols),
-                    agent_health=self.agent_highway.health_snapshot(),
                     symbol_intelligence=self._symbol_intelligence_report(),
+                    agent_health=self.agent_highway.health_snapshot(),
                     account_mode=self._account_mode(),
                     # 11B: so Discord can say "closed until Sunday 22:00" without
                     # computing the weekly boundary itself.
@@ -2067,7 +2067,10 @@ def build_observer(config: AureonConfig) -> Observer:
         outbox=outbox,
         worker=worker,
         state=ObserverState(config.observer_state_path),
-        market_state=MarketStateService(provider),
+        market_state=MarketStateService(
+            provider,
+            schedule_resolver=SymbolIntelligenceAgent().market_schedule,
+        ),
         state_repository=storage.system_state,
         session_repository=storage.sessions,
         symbol_repository=storage.symbols,
