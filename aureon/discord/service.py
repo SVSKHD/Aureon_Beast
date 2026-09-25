@@ -2324,7 +2324,7 @@ def build_setup_card(
             else UNKNOWN,
         ),
         ("Context", _setup_context_line(setup)),
-        ("$6 favourable move", _six_dollar_move_line(events)),
+        ("Move ladder", _move_ladder_line(events)),
         ("Events", f"{setup.event_count}"),
     ]
 
@@ -2376,30 +2376,15 @@ def build_setup_card(
     return screen
 
 
-def _six_dollar_move_line(events: Sequence[Any]) -> str:
-    """Render only the stored six-dollar outcome-agent facts."""
+def _move_ladder_line(events: Sequence[Any]) -> str:
+    """Render the stored 6/20/40 favourable-move milestones."""
     from aureon.models.enums import SetupEventType
 
-    reached = next(
-        (
-            event
-            for event in reversed(events)
-            if event.event_type is SetupEventType.FAVOURABLE_MOVE_6_REACHED
-        ),
-        None,
-    )
-    if reached is not None:
-        snapshot = reached.context_snapshot or {}
-        reference = snapshot.get("reference_price", UNKNOWN)
-        extreme = snapshot.get("observed_extreme", UNKNOWN)
-        excursion = snapshot.get("favourable_excursion", "6")
-        detection_id = snapshot.get("reference_detection_id", "")
-        tail = f" · detection `{detection_id}`" if detection_id else ""
-        return (
-            f"✓ reached · from {reference} to {extreme} · "
-            f"favourable move {excursion}{tail}"
-        )
-
+    event_for = {
+        6: SetupEventType.FAVOURABLE_MOVE_6_REACHED,
+        20: SetupEventType.FAVOURABLE_MOVE_20_REACHED,
+        40: SetupEventType.FAVOURABLE_MOVE_40_REACHED,
+    }
     tracking = next(
         (
             event
@@ -2408,16 +2393,35 @@ def _six_dollar_move_line(events: Sequence[Any]) -> str:
         ),
         None,
     )
-    if tracking is not None:
-        snapshot = tracking.context_snapshot or {}
-        reference = snapshot.get("reference_price", UNKNOWN)
-        threshold = snapshot.get("threshold_price", UNKNOWN)
-        detection_id = snapshot.get("reference_detection_id", "")
-        tail = f" · detection `{detection_id}`" if detection_id else ""
-        return f"tracking · reference {reference} · threshold {threshold}{tail}"
+    if tracking is None:
+        return "— · waiting for a linked detection"
 
-    return "— · waiting for a linked detection"
+    snapshot = tracking.context_snapshot or {}
+    reference = snapshot.get("reference_price", UNKNOWN)
+    parts = [f"ref {reference}"]
+    for target, event_type in event_for.items():
+        reached = next(
+            (
+                event
+                for event in reversed(events)
+                if event.event_type is event_type
+            ),
+            None,
+        )
+        parts.append(f"${target} ✓" if reached is not None else f"${target} …")
 
+    reached_events = [
+        event
+        for event in events
+        if event.event_type in set(event_for.values())
+    ]
+    if reached_events:
+        last = reached_events[-1]
+        last_snapshot = last.context_snapshot or {}
+        excursion = last_snapshot.get("favourable_excursion")
+        if excursion is not None:
+            parts.append(f"seen {excursion}")
+    return " · ".join(parts)
 
 def _family_words(family: str) -> str:
     """``liquidity_reversal`` → ``liquidity reversal``. The enum is for storage, not for a card."""
