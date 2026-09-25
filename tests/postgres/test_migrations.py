@@ -149,6 +149,7 @@ def _a_detection(detection_id: str) -> dict:
         "agent_params_snapshot": {},
         "indicators": None,
         "levels": {},
+        "evidence": {},
         "volume_profile_ref": None,
         "volatility": None,
         "mtf": None,
