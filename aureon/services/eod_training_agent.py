@@ -117,7 +117,10 @@ class EodTrainingAgent:
         tracking_snapshot = getattr(tracking, "context_snapshot", {}) or {}
         reached_snapshot = getattr(reached, "context_snapshot", {}) or {}
         reference_price = self._float(tracking_snapshot.get("reference_price"))
-        threshold_price = self._float(tracking_snapshot.get("threshold_price"))
+        threshold_price = self._float(
+            tracking_snapshot.get("threshold_6")
+            or tracking_snapshot.get("threshold_price")
+        )
         reached_at = getattr(getattr(reached, "market_time", None), "utc", None)
 
         time_to_six = self._time_to(tracking, reached)
