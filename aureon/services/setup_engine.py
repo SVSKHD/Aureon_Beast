@@ -729,6 +729,7 @@ class SetupEngine:
         market_tz: str,
         families: Sequence[Family] = FAMILIES,
         reference: Callable[[Setup], Any] | None = None,
+        outcome_agents: Sequence[Any] = (),
         now: Any = utc_now,
     ) -> None:
         self.account_scope = account_scope
@@ -738,6 +739,7 @@ class SetupEngine:
         self.point = point
         self.market_tz = market_tz
         self.families = tuple(families)
+        self.outcome_agents = tuple(outcome_agents)
         #: T-9. Given a setup about to be created, returns the measured historical block to
         #: attach. Optional and never consulted for anything else: the engine's decisions do not
         #: read it, and an engine constructed without one tracks exactly the same setups.
@@ -773,6 +775,7 @@ class SetupEngine:
 
         written.extend(self._open_new(inputs))
         written.extend(self._record_observations(inputs))
+        written.extend(self._record_outcome_agents(inputs))
         return written
 
     # ── descriptive observations (T-8) ────────────────────────────────────────
@@ -816,6 +819,46 @@ class SetupEngine:
                 event = self._write_observation(setup, inputs, observation)
                 if event is not None:
                     written.append(event)
+        return written
+
+    def _record_outcome_agents(self, inputs: SetupInputs) -> list[SetupEvent]:
+        """Record research outcomes that do not change the setup lifecycle state."""
+        if not self.outcome_agents or not self._tracked:
+            return []
+
+        written: list[SetupEvent] = []
+        for setup in list(self._tracked.values()):
+            for agent in self.outcome_agents:
+                try:
+                    observation = agent.observe(setup, inputs)
+                except Exception:  # noqa: BLE001 - outcome memory must not stop observation
+                    log.exception(
+                        "setup outcome agent %s raised on %s",
+                        getattr(agent, "agent_name", type(agent).__name__),
+                        setup.setup_id,
+                    )
+                    continue
+                if observation is None:
+                    continue
+                event = self._write(
+                    setup,
+                    inputs,
+                    Advance(
+                        setup.state,
+                        observation.event_type,
+                        reason=observation.reason,
+                        linked_detection_id=observation.detail.get(
+                            "reference_detection_id"
+                        ),
+                    ),
+                    snapshot={
+                        **_snapshot(inputs),
+                        **dict(observation.detail),
+                    },
+                )
+                if event is not None:
+                    written.append(event)
+                    setup = self._tracked.get(setup.setup_id, setup)
         return written
 
     def _same_anchor(
