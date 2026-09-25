@@ -348,7 +348,10 @@ def main(argv: list[str] | None = None) -> int:
             "generate scheduled research outputs"
         ),
     )
-    parser.add_argument("--date", help="broker date YYYY-MM-DD (daily); default: yesterday")
+    parser.add_argument(
+        "--date",
+        help="broker date YYYY-MM-DD (daily/training); default: latest completed day",
+    )
     parser.add_argument("--iso-year", type=int, help="ISO year (weekly)")
     parser.add_argument("--iso-week", type=int, help="ISO week (weekly)")
     parser.add_argument(
@@ -394,12 +397,14 @@ def main(argv: list[str] | None = None) -> int:
 
     exit_code = 0
     for one in symbols:
-        service = build_service(config, one)
         try:
+            if args.period == "training":
+                exit_code |= run_training(config, one, args.date)
+                continue
+
+            service = build_service(config, one)
             if args.period == "daily":
                 exit_code |= run_daily(service, args.date, now=now)
-            elif args.period == "training":
-                exit_code |= run_training(config, one, args.date)
             else:
                 exit_code |= run_weekly(
                     service, iso, now=now, with_dailies=args.with_dailies
