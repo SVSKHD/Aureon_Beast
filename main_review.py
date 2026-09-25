@@ -37,6 +37,7 @@ import argparse
 import logging
 import sys
 import threading
+import time
 from datetime import datetime
 
 from aureon.config import AureonConfig
@@ -75,6 +76,56 @@ def build_service(config: AureonConfig, symbol: str | None = None) -> ReviewServ
         account_scope=config.account_scope,
         symbol=symbol,
     )
+
+
+def build_training_agent(config: AureonConfig, symbol: str):
+    """Build the local EOD training-memory agent for one symbol."""
+    from aureon.services.eod_training_agent import EodTrainingAgent
+    from aureon.storage.runtime import build_storage
+
+    storage = build_storage(
+        account_scope=config.account_scope,
+        state_heartbeat_seconds=config.state_heartbeat_seconds,
+    )
+    return EodTrainingAgent(
+        setups=storage.setups,
+        setup_evaluations=storage.setup_evaluations,
+        market_days=storage.market_days,
+        memory=storage.training_memory,
+        rule_id=config.rule_id_for(symbol),
+    )
+
+
+def run_training(
+    config: AureonConfig,
+    symbol: str,
+    market_date: str | None,
+) -> int:
+    agent = build_training_agent(config, symbol)
+    if market_date is None:
+        complete = agent.market_days.complete_days(symbol, limit=1)
+        if not complete:
+            raise RuntimeError(f"{symbol}: no completed broker day is stored")
+        market_date = complete[-1].market_date
+
+    status = agent.build_day(symbol=symbol, market_date=market_date)
+    print(
+        f"training {status.market_date} [{status.symbol}]: "
+        f"{status.examples_written} examples, "
+        f"{status.reached_six} reached +$6, "
+        f"{status.not_reached_six} did not reach +$6 by EOD, "
+        f"{status.unavailable_six} unavailable, "
+        f"{status.mae_before_six_available} with pre-$6 MAE"
+    )
+    for one in status.by_timeframe:
+        print(
+            f"  {one.timeframe.value}: setups={one.setups} "
+            f"reached6={one.reached_six} not_reached6={one.not_reached_six} "
+            f"unavailable={one.unavailable_six} "
+            f"complete_eval={one.complete_evaluations} "
+            f"pre6_mae={one.mae_before_six_available}"
+        )
+    return 0
 
 
 def run_daily(service: ReviewService, market_date: str | None, *, now: datetime) -> int:
@@ -190,6 +241,9 @@ class ReviewWatcher:
         #: What the last close generated, for a test and for the log.
         self.generated: list[str] = []
         self._stop = threading.Event()
+        self._last_training_check_monotonic = 0.0
+        self._training_check_seconds = 60.0
+        self._training_agents: dict[str, object] = {}
 
     def _market_states(self) -> dict[str, MarketState]:
         if self._market_state_provider is None:
@@ -224,6 +278,42 @@ class ReviewWatcher:
 
     def poll_once(self) -> None:
         self.gate.tick()
+        self._training_tick()
+
+    def _training_tick(self) -> None:
+        """Build the newest completed day once, retrying after restarts or prior failures."""
+        now_mono = time.monotonic()
+        if now_mono - self._last_training_check_monotonic < self._training_check_seconds:
+            return
+        self._last_training_check_monotonic = now_mono
+
+        for symbol in self.config.symbols:
+            try:
+                agent = self._training_agents.get(symbol)
+                if agent is None:
+                    agent = build_training_agent(self.config, symbol)
+                    self._training_agents[symbol] = agent
+                complete = agent.market_days.complete_days(symbol, limit=1)
+                if not complete:
+                    continue
+                market_date = complete[-1].market_date
+                existing = agent.memory.status_for(symbol, market_date)
+                if existing is not None:
+                    continue
+                status = agent.build_day(symbol=symbol, market_date=market_date)
+                log.info(
+                    "EOD training %s %s: examples=%d reached6=%d not_reached6=%d "
+                    "unavailable=%d pre6_mae=%d",
+                    symbol,
+                    market_date,
+                    status.examples_written,
+                    status.reached_six,
+                    status.not_reached_six,
+                    status.unavailable_six,
+                    status.mae_before_six_available,
+                )
+            except Exception:  # noqa: BLE001 - training must not stop the review watcher
+                log.exception("EOD training build failed for %s", symbol)
 
     def run(self) -> None:
         """Watch until stopped."""
@@ -252,10 +342,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "period",
-        choices=["daily", "weekly", "watch"],
+        choices=["daily", "weekly", "training", "watch"],
         help=(
-            "which review to generate, or 'watch' to stay up and generate the week's "
-            "last daily and every symbol's weekly at the close (11B)"
+            "daily/weekly review, EOD training memory, or 'watch' to stay up and "
+            "generate scheduled research outputs"
         ),
     )
     parser.add_argument("--date", help="broker date YYYY-MM-DD (daily); default: yesterday")
@@ -308,6 +398,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if args.period == "daily":
                 exit_code |= run_daily(service, args.date, now=now)
+            elif args.period == "training":
+                exit_code |= run_training(config, one, args.date)
             else:
                 exit_code |= run_weekly(
                     service, iso, now=now, with_dailies=args.with_dailies
