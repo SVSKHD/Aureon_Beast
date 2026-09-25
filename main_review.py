@@ -341,11 +341,25 @@ class ReviewWatcher:
                     feature_schema_version=agent.feature_schema_version,
                     label_schema_version=agent.label_schema_version,
                 )
-                if existing is not None:
-                    continue
-                status = agent.build_day(symbol=symbol, market_date=market_date)
                 from aureon.services.shadow_model import ShadowModelService
 
+                if existing is not None:
+                    reconciled = ShadowModelService(
+                        agent.model_repository
+                    ).reconcile_day(
+                        agent.memory,
+                        symbol,
+                        market_date,
+                    )
+                    if reconciled:
+                        log.info(
+                            "reconciled %d shadow prediction(s) for %s %s",
+                            reconciled,
+                            symbol,
+                            market_date,
+                        )
+                    continue
+                status = agent.build_day(symbol=symbol, market_date=market_date)
                 reconciled = ShadowModelService(agent.model_repository).reconcile_day(
                     agent.memory,
                     symbol,
