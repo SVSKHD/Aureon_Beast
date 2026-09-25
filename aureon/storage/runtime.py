@@ -19,6 +19,7 @@ from aureon.storage.postgres.repositories.control_requests import ControlRequest
 from aureon.storage.postgres.repositories.detections import DetectionRepository
 from aureon.storage.postgres.repositories.evaluations import EvaluationRepository
 from aureon.storage.postgres.repositories.market_days import MarketDayRepository
+from aureon.storage.postgres.repositories.models import ModelRepository
 from aureon.storage.postgres.repositories.notifications import NotificationRepository
 from aureon.storage.postgres.repositories.operations import (
     ExecutionSettingsRepository,
@@ -97,6 +98,28 @@ class TrainingMemoryReadAdapter:
         )
 
 
+class ModelReadAdapter:
+    """Read-only model status surface for Discord."""
+
+    def __init__(self, repository: ModelRepository) -> None:
+        self._repo = repository
+
+    def latest_model(self, symbol: str) -> Any:
+        return self._repo.latest_model(symbol)
+
+    def active_shadow(self, symbol: str) -> Any:
+        return self._repo.active_shadow(symbol)
+
+    def latest_training_run(self, symbol: str) -> Any:
+        return self._repo.latest_training_run(symbol)
+
+    def latest_backtest(self, symbol: str) -> Any:
+        return self._repo.latest_backtest(symbol)
+
+    def shadow_summary(self, symbol: str) -> Any:
+        return self._repo.shadow_summary(symbol)
+
+
 class SessionReadAdapter:
     """Read-only session shape exposed to Discord."""
 
@@ -163,6 +186,7 @@ class StorageRuntime:
     heartbeats: HeartbeatRepository
     system_state: SystemStateRepository
     training_memory: TrainingMemoryRepository
+    models: ModelRepository
 
     @property
     def setup_reader(self) -> SetupReadAdapter:
@@ -175,6 +199,10 @@ class StorageRuntime:
     @property
     def training_reader(self) -> TrainingMemoryReadAdapter:
         return TrainingMemoryReadAdapter(self.training_memory)
+
+    @property
+    def model_reader(self) -> ModelReadAdapter:
+        return ModelReadAdapter(self.models)
 
     @property
     def period_reader(self) -> PeriodReadAdapter:
@@ -217,6 +245,7 @@ def build_storage(
         heartbeats=HeartbeatRepository(db, min_interval_seconds=state_heartbeat_seconds),
         system_state=SystemStateRepository(db, min_interval_seconds=state_heartbeat_seconds),
         training_memory=TrainingMemoryRepository(db),
+        models=ModelRepository(db),
     )
 
 
@@ -224,6 +253,7 @@ __all__ = [
     "PeriodReadAdapter",
     "SessionReadAdapter",
     "TrainingMemoryReadAdapter",
+    "ModelReadAdapter",
     "SetupReadAdapter",
     "StorageRuntime",
     "build_storage",
