@@ -1456,6 +1456,7 @@ class Observer:
             self.state_repository.write(  # type: ignore[attr-defined]
                 SystemState(
                     symbols=tuple(symbols),
+                    agent_health=self.agent_highway.health_snapshot(),
                     account_mode=self._account_mode(),
                     # 11B: so Discord can say "closed until Sunday 22:00" without
                     # computing the weekly boundary itself.
