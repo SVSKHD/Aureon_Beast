@@ -65,7 +65,7 @@ class MarketJourneyAgent(BaseAgent):
 
         current = market_journey_snapshot(
             window,
-            ctx,
+            market_tz=ctx.market_tz,
             point=self.point,
             recent_days=self.recent_days,
             near_level_points=self.near_level_points,
@@ -74,7 +74,7 @@ class MarketJourneyAgent(BaseAgent):
             return []
         previous = market_journey_snapshot(
             window.iloc[:-1],
-            ctx,
+            market_tz=ctx.market_tz,
             point=self.point,
             recent_days=self.recent_days,
             near_level_points=self.near_level_points,
@@ -142,8 +142,8 @@ class MarketJourneyAgent(BaseAgent):
 
 def market_journey_snapshot(
     window: pd.DataFrame,
-    ctx: CandleContext,
     *,
+    market_tz: str,
     point: float,
     recent_days: int = 3,
     near_level_points: float = 300.0,
@@ -157,7 +157,7 @@ def market_journey_snapshot(
     if len(window) < 2:
         return None
 
-    local_index = window.index.tz_convert(ctx.market_tz)
+    local_index = window.index.tz_convert(market_tz)
     dates = [stamp.date().isoformat() for stamp in local_index.to_pydatetime()]
     distinct_dates = list(dict.fromkeys(dates))
     current_date = dates[-1]
