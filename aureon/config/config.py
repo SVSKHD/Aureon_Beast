@@ -142,6 +142,8 @@ class AureonConfig(AureonModel):
     ctrader_expected_delay_ms: float = Field(default=0.0, ge=0)
     ctrader_max_valid_delay_ms: float = Field(default=2500.0, gt=0)
     ctrader_max_price_drift: float = Field(default=2.0, ge=0)
+    ctrader_min_capture_gap: float = Field(default=0.0, ge=0)
+    ctrader_max_capture_gap: float | None = Field(default=None, ge=0)
 
     executor_lease_seconds: float = 60.0
     executor_poll_seconds: float = 2.0
@@ -320,6 +322,12 @@ class AureonConfig(AureonModel):
                 "AUREON_CTRADER_MAX_VALID_DELAY_MS", 2500.0
             ),
             ctrader_max_price_drift=_env_float("AUREON_CTRADER_MAX_PRICE_DRIFT", 2.0),
+            ctrader_min_capture_gap=_env_float("AUREON_CTRADER_MIN_CAPTURE_GAP", 0.0),
+            ctrader_max_capture_gap=(
+                _env_float("AUREON_CTRADER_MAX_CAPTURE_GAP", 0.0)
+                if os.getenv("AUREON_CTRADER_MAX_CAPTURE_GAP")
+                else None
+            ),
             executor_lease_seconds=_env_float("AUREON_EXECUTOR_LEASE_SECONDS", 60.0),
             executor_poll_seconds=_env_float("AUREON_EXECUTOR_POLL_SECONDS", 2.0),
             reconcile_grace_seconds=_env_float("AUREON_RECONCILE_GRACE_SECONDS", 120.0),
