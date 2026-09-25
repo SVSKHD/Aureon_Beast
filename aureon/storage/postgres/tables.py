@@ -808,7 +808,14 @@ class DailyTrainingStatus(Base):
     generated_at: Mapped[datetime] = mapped_column()
 
     __table_args__ = (
-        Index("ix_daily_training_status_symbol_date", "symbol", "market_date", unique=True),
+        Index(
+            "ix_daily_training_status_contract",
+            "symbol",
+            "market_date",
+            "feature_schema_version",
+            "label_schema_version",
+            unique=True,
+        ),
     )
 
 
