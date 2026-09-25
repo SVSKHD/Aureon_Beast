@@ -20,7 +20,7 @@ class RiskInputs:
     stop_price: float | None = None
     nearest_obstacle_price: float | None = None
     open_positions: int | None = None
-    max_open_positions: int = 1
+    max_open_positions: int | None = None
     daily_realized_pnl: float | None = None
     daily_loss_limit: float | None = None
     volatility_regime: str | None = None
@@ -69,11 +69,14 @@ class RiskAgent:
                 )
 
         if inputs.open_positions is not None:
-            evidence.append(
-                f"open positions {inputs.open_positions}/{inputs.max_open_positions}"
-            )
-            if inputs.open_positions >= inputs.max_open_positions:
-                blockers.append("maximum open-position exposure reached")
+            if inputs.max_open_positions is None:
+                evidence.append(f"open positions {inputs.open_positions}")
+            else:
+                evidence.append(
+                    f"open positions {inputs.open_positions}/{inputs.max_open_positions}"
+                )
+                if inputs.open_positions >= inputs.max_open_positions:
+                    blockers.append("maximum open-position exposure reached")
 
         if (
             inputs.daily_loss_limit is not None
