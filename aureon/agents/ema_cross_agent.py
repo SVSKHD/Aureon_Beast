@@ -31,7 +31,7 @@ import pandas as pd
 
 from aureon.agents.base_agent import BaseAgent, validate_window
 from aureon.engine.indicators import crossed_at_last, ema, min_warmup, rsi
-from aureon.models.detection import CandleContext, Detection, IndicatorSnapshot
+from aureon.models.detection import AgentEvidence, CandleContext, Detection, IndicatorSnapshot
 from aureon.models.enums import Direction
 
 EVENT_BULLISH = "bullish"
@@ -46,7 +46,7 @@ class EmaCrossAgent(BaseAgent):
     #: 9/21 to 20/50. Under §12 the version is part of the detection id, so this bump
     #: forks history rather than rewriting it -- 1.0.0's detections stay exactly where
     #: they are and the two pairs can be compared over the same week.
-    agent_version = "2.2.0"  # 11D
+    agent_version = "2.3.0"  # normalized evidence contract
 
     def __init__(
         self,
@@ -120,14 +120,45 @@ class EmaCrossAgent(BaseAgent):
         direction = Direction.BUY if signal > 0 else Direction.SELL
 
         rsi_value = self._rsi_value(price)
+        fast_now = _clean(fast.iloc[-1])
+        slow_now = _clean(slow.iloc[-1])
+        fast_prev = _clean(fast.iloc[-2])
+        slow_prev = _clean(slow.iloc[-2])
+        gap_now = _clean(fast_now - slow_now)
+        gap_prev = _clean(fast_prev - slow_prev)
+        fast_slope = _clean(fast_now - fast_prev)
+        slow_slope = _clean(slow_now - slow_prev)
+        numeric = {
+            "ema_fast": fast_now,
+            "ema_slow": slow_now,
+            "ema_gap": gap_now,
+            "previous_ema_gap": gap_prev,
+            "ema_gap_change": _clean(gap_now - gap_prev),
+            "fast_slope": fast_slope,
+            "slow_slope": slow_slope,
+        }
+        if rsi_value is not None:
+            numeric["rsi"] = rsi_value
+            numeric["rsi_distance_from_50"] = rsi_value - 50.0
+
         indicators = IndicatorSnapshot(
-            ema={"fast": _clean(fast.iloc[-1]), "slow": _clean(slow.iloc[-1])},
+            ema={"fast": fast_now, "slow": slow_now},
             rsi=rsi_value,
             extras={
-                "fast_minus_slow": _clean(fast.iloc[-1] - slow.iloc[-1]),
-                # The previous bar's gap, so the crossover is auditable from the
-                # stored record alone without re-reading the candle history.
-                "prev_fast_minus_slow": _clean(fast.iloc[-2] - slow.iloc[-2]),
+                "fast_minus_slow": gap_now,
+                "prev_fast_minus_slow": gap_prev,
+            },
+        )
+        evidence = AgentEvidence(
+            numeric=numeric,
+            categorical={
+                "cross_direction": event_key,
+                "ema_relation": "fast_above" if signal > 0 else "fast_below",
+            },
+            flags={
+                "gap_expanding": abs(gap_now) > abs(gap_prev),
+                "fast_slope_with_cross": fast_slope > 0 if signal > 0 else fast_slope < 0,
+                "slow_slope_with_cross": slow_slope > 0 if signal > 0 else slow_slope < 0,
             },
         )
 
@@ -138,6 +169,7 @@ class EmaCrossAgent(BaseAgent):
                 price=float(window[self.price_field].iloc[-1]),
                 direction=direction,
                 indicators=indicators,
+                evidence=evidence,
             )
         ]
 
