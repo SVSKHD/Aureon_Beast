@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -182,10 +183,12 @@ class ModelTrainer:
         trained_from = min(example.market_date for example in usable)
         trained_through = max(example.market_date for example in usable)
         completed = to_utc(self._now())
+        artifact = bundle.to_artifact()
         digest = hashlib.sha256(
             (
                 f"{symbol}|{FEATURE_SCHEMA}|{LABEL_SCHEMA}|"
-                f"{trained_from}|{trained_through}|{len(usable)}|{completed.isoformat()}"
+                f"{trained_from}|{trained_through}|{len(usable)}|"
+                + json.dumps(artifact, sort_keys=True, separators=(",", ":"))
             ).encode("utf-8")
         ).hexdigest()[:20]
         model_id = f"{symbol.lower()}_move_{digest}"
@@ -200,7 +203,7 @@ class ModelTrainer:
             trained_through=trained_through,
             training_samples=len(usable),
             target_metrics=bundle.metrics,
-            artifact=bundle.to_artifact(),
+            artifact=artifact,
             created_at=completed,
         )
         self.models.write_model(entry)
