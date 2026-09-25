@@ -95,6 +95,8 @@ NOTABLE_SETUP_EVENTS: tuple[str, ...] = (
     "breakout_pressure",
     "volume_expansion_at_level",
     "favourable_move_6_reached",
+    "favourable_move_20_reached",
+    "favourable_move_40_reached",
 )
 
 #: The other fourteen. Configurable and OFF by default, which is the one judgement call in this
