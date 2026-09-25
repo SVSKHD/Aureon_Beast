@@ -64,7 +64,7 @@ def test_market_journey_joins_asia_previous_day_and_recent_days() -> None:
     frame.iloc[-1, frame.columns.get_loc("close")] = 2410.0
 
     snapshot = market_journey_snapshot(
-        frame, _ctx(frame), point=0.01, recent_days=3, near_level_points=300.0
+        frame, market_tz=MARKET_TZ, point=0.01, recent_days=3, near_level_points=300.0
     )
 
     assert snapshot is not None
@@ -135,7 +135,7 @@ def test_participation_uses_tick_volume_when_real_volume_is_empty() -> None:
 
     snapshot = participation_snapshot(
         frame,
-        _ctx(frame),
+        market_tz=MARKET_TZ,
         point=0.01,
         baseline_bars=20,
         expansion_ratio=1.50,
