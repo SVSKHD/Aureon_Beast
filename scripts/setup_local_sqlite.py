@@ -47,6 +47,8 @@ REQUIRED_TABLES = {
     "trades",
     "control_requests",
     "ops_events",
+    "training_examples",
+    "daily_training_status",
 }
 
 REQUIRED_DETECTION_COLUMNS = {
@@ -108,7 +110,7 @@ def inspect_local_database(database: LocalDatabase) -> dict[str, Any]:
             ).fetchall()
         }
         counts: dict[str, int] = {}
-        for table in ("detections", "setups", "setup_events", "detection_evaluations"):
+        for table in ("detections", "setups", "setup_events", "detection_evaluations", "training_examples", "daily_training_status"):
             if table in tables:
                 counts[table] = int(
                     connection.exec_driver_sql(
