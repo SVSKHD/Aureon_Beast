@@ -736,6 +736,82 @@ class TradeNote(Base):
     __table_args__ = (Index("ix_trade_notes_trade", "trade_id", "at"),)
 
 
+class TrainingExample(Base):
+    """Immutable EOD learning row derived from one setup and its later outcomes."""
+
+    __tablename__ = "training_examples"
+
+    example_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+
+    market_date: Mapped[str] = mapped_column(String)
+    symbol: Mapped[str] = mapped_column(String)
+    timeframe: Mapped[str] = mapped_column(String)
+    setup_id: Mapped[str] = mapped_column(String)
+    family: Mapped[str] = mapped_column(String)
+    direction_context: Mapped[str] = mapped_column(String)
+    setup_version: Mapped[str] = mapped_column(String)
+
+    feature_schema_version: Mapped[str] = mapped_column(String)
+    label_schema_version: Mapped[str] = mapped_column(String)
+    context: Mapped[dict[str, Any]] = mapped_column(Json)
+    agent_read: Mapped[dict[str, Any]] = mapped_column(Json)
+
+    six_dollar_status: Mapped[str] = mapped_column(String)
+    six_dollar_reached: Mapped[bool | None] = mapped_column(Boolean)
+    six_dollar_reference_price: Mapped[float | None] = mapped_column(Float)
+    six_dollar_threshold_price: Mapped[float | None] = mapped_column(Float)
+    six_dollar_reached_at: Mapped[datetime | None] = mapped_column()
+    time_to_six_seconds: Mapped[float | None] = mapped_column(Float)
+
+    mfe_points: Mapped[float | None] = mapped_column(Float)
+    mae_points: Mapped[float | None] = mapped_column(Float)
+    mae_before_six_price: Mapped[float | None] = mapped_column(Float)
+
+    evaluation_rule_id: Mapped[str | None] = mapped_column(String)
+    evaluation_complete: Mapped[bool] = mapped_column(Boolean)
+    generated_at: Mapped[datetime] = mapped_column()
+
+    __table_args__ = (
+        Index("ix_training_examples_symbol_date", "symbol", "market_date"),
+        Index("ix_training_examples_timeframe", "symbol", "timeframe", "market_date"),
+        UniqueConstraint(
+            "setup_id",
+            "feature_schema_version",
+            "label_schema_version",
+            name="uq_training_example_contract",
+        ),
+    )
+
+
+class DailyTrainingStatus(Base):
+    """Durable EOD training checkpoint and data-readiness summary."""
+
+    __tablename__ = "daily_training_status"
+
+    status_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+
+    market_date: Mapped[str] = mapped_column(String)
+    symbol: Mapped[str] = mapped_column(String)
+    feature_schema_version: Mapped[str] = mapped_column(String)
+    label_schema_version: Mapped[str] = mapped_column(String)
+
+    examples_written: Mapped[int] = mapped_column(Integer)
+    reached_six: Mapped[int] = mapped_column(Integer)
+    pending_six: Mapped[int] = mapped_column(Integer)
+    unavailable_six: Mapped[int] = mapped_column(Integer)
+    complete_evaluations: Mapped[int] = mapped_column(Integer)
+    mae_before_six_available: Mapped[int] = mapped_column(Integer)
+
+    by_timeframe: Mapped[dict[str, Any]] = mapped_column(Json)
+    generated_at: Mapped[datetime] = mapped_column()
+
+    __table_args__ = (
+        Index("ix_daily_training_status_symbol_date", "symbol", "market_date", unique=True),
+    )
+
+
 class DailyReview(Base):
     """§37 (Phase 7). Keyed by broker date and symbol, so regenerating a day overwrites it.
 
