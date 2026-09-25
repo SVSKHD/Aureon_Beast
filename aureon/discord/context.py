@@ -95,6 +95,7 @@ class BotContext:
     # setup cards. Discord still cannot write session truth.
     sessions: Any | None = None
     training_memory: Any | None = None
+    models: Any | None = None
 
     @property
     def authorized_user_ids(self) -> tuple[str, ...]:
@@ -143,4 +144,5 @@ def build_context(config: AureonConfig, storage: Any) -> BotContext:
         market_days=storage.market_days,
         sessions=storage.session_reader,
         training_memory=storage.training_reader,
+        models=storage.model_reader,
     )
