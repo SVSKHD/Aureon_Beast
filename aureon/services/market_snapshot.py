@@ -36,6 +36,7 @@ from aureon.models.enums import Direction, SessionName
 #: Agent names this reads. Named so a rename breaks here rather than silently producing a
 #: screen that stopped updating one panel.
 AGENT_CROSS = "ema_cross"
+AGENT_EMA_RSI_ELIGIBILITY = "ema_rsi_eligibility"
 AGENT_RSI = "rsi"
 AGENT_LIQUIDITY = "liquidity"
 AGENT_WICK = "wick"
@@ -78,6 +79,7 @@ class MarketSnapshot:
     last_sweep: dict[str, object] | None = None
     last_wick: dict[str, object] | None = None
     last_breakout: dict[str, object] | None = None
+    last_ema_rsi_eligibility: dict[str, object] | None = None
 
     # Latest context-agent readings. These are copied from stored detections rather than
     # recomputed, so /status, Discord and later the Director all see the same facts.
@@ -154,6 +156,14 @@ class MarketSnapshot:
                 "detection_id": detection.detection_id,
             }
             self.last_cross_at = at
+        elif detection.agent_name == AGENT_EMA_RSI_ELIGIBILITY:
+            self.last_ema_rsi_eligibility = {
+                "event": detection.event_key,
+                "direction": None if detection.direction is None else detection.direction.value,
+                "rsi": detection.indicators.rsi,
+                "eligible": detection.evidence.flags.get("eligible"),
+                "at": at.isoformat(),
+            }
         elif detection.agent_name == AGENT_LIQUIDITY:
             direction, _, level_type = detection.event_key.partition("|")
             self.last_sweep = {
@@ -282,6 +292,7 @@ class MarketSnapshot:
             "last_sweep": self.last_sweep,
             "last_wick": self.last_wick,
             "last_breakout": self.last_breakout,
+            "last_ema_rsi_eligibility": self.last_ema_rsi_eligibility,
             "market_journey": self.market_journey,
             "market_regime": self.market_regime,
             "volume_participation": self.volume_participation,
