@@ -32,7 +32,9 @@ class TrainingExample(AureonDocument):
     agent_read: dict = Field(default_factory=dict)
 
     six_dollar_status: str = Field(
-        description="reached, pending, or unavailable; pending is never treated as a miss."
+        description=(
+            "reached, not_reached_eod, or unavailable. EOD is the frozen label horizon."
+        )
     )
     six_dollar_reached: bool | None = None
     six_dollar_reference_price: float | None = None
@@ -59,7 +61,7 @@ class TrainingTimeframeStatus(AureonDocument):
     timeframe: Timeframe
     setups: int = Field(default=0, ge=0)
     reached_six: int = Field(default=0, ge=0)
-    pending_six: int = Field(default=0, ge=0)
+    not_reached_six: int = Field(default=0, ge=0)
     unavailable_six: int = Field(default=0, ge=0)
     complete_evaluations: int = Field(default=0, ge=0)
     mae_before_six_available: int = Field(default=0, ge=0)
@@ -76,7 +78,7 @@ class DailyTrainingStatus(AureonDocument):
 
     examples_written: int = Field(default=0, ge=0)
     reached_six: int = Field(default=0, ge=0)
-    pending_six: int = Field(default=0, ge=0)
+    not_reached_six: int = Field(default=0, ge=0)
     unavailable_six: int = Field(default=0, ge=0)
     complete_evaluations: int = Field(default=0, ge=0)
     mae_before_six_available: int = Field(default=0, ge=0)
