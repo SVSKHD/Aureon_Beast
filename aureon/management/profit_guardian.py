@@ -83,8 +83,17 @@ class ProfitGuardianAgent:
             action = ManagementAction.TRAIL
             fraction = self.trail_fraction_of_peak
 
-        protected_move = max(self.minimum_lock, peak_move * fraction)
-        protected_move = min(protected_move, max(self.minimum_lock, peak_move - 0.01))
+        desired_protection = max(self.minimum_lock, peak_move * fraction)
+        if action is ManagementAction.EXIT:
+            # EXIT is a market-action recommendation, so "protected" means what is still
+            # available now rather than a stop level above/below the executable quote.
+            protected_move = max(0.0, current_move)
+        else:
+            # A stop beyond the current executable price would immediately trigger or be
+            # rejected. Leave a small price-unit buffer and never claim more protection
+            # than the market currently offers.
+            executable_cap = max(0.0, current_move - 0.25)
+            protected_move = min(desired_protection, executable_cap)
         trail_price = entry_price + direction.sign * protected_move
 
         evidence = tuple(f"{name}: healthy" for name in positives)
