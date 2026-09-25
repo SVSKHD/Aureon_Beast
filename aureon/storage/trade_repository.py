@@ -287,6 +287,23 @@ class TradeRepository:
 
         return self._run(self._client.transaction(), txn)
 
+    def closed_in_period(self, start: datetime, end: datetime) -> list[Trade]:
+        """Trades whose broker-observed close time falls in the requested UTC interval."""
+
+        lower, upper = to_utc(start), to_utc(end)
+        found: list[Trade] = []
+        for doc in self._client.collection(paths.TRADES).stream():
+            try:
+                trade = Trade.model_validate(doc.to_dict() or {})
+            except Exception:  # noqa: BLE001
+                log.exception("unreadable trade %s", doc.id)
+                continue
+            if trade.close_time is None:
+                continue
+            if lower <= trade.close_time.utc < upper:
+                found.append(trade)
+        return found
+
     def opened_in_period(self, start: datetime, end: datetime) -> list[Trade]:
         """Trades whose OPEN time falls in ``[start, end)``.
 
