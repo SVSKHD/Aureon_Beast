@@ -37,6 +37,7 @@ from aureon.storage.postgres.repositories.sessions import SessionRepository
 from aureon.storage.postgres.repositories.setup_evaluations import SetupEvaluationRepository
 from aureon.storage.postgres.repositories.setups import SetupRepository
 from aureon.storage.postgres.repositories.trade_requests import TradeRequestRepository
+from aureon.storage.postgres.repositories.training import TrainingMemoryRepository
 from aureon.storage.postgres.repositories.trades import TradeRepository
 
 
@@ -66,6 +67,34 @@ class SetupReadAdapter:
         if symbol is None:
             return rows
         return [row for row in rows if row.symbol == symbol]
+
+
+class TrainingMemoryReadAdapter:
+    """Read-only training-memory surface exposed to Discord."""
+
+    def __init__(self, repository: TrainingMemoryRepository) -> None:
+        self._repo = repository
+
+    def status_for(self, symbol: str, market_date: str) -> Any:
+        return self._repo.status_for(symbol, market_date)
+
+    def latest_status(self, symbol: str) -> Any:
+        return self._repo.latest_status(symbol)
+
+    def examples_for(self, symbol: str, market_date: str) -> list[Any]:
+        return self._repo.examples_for(symbol, market_date)
+
+    def examples_between(
+        self,
+        symbol: str,
+        start_market_date: str,
+        end_market_date: str,
+    ) -> list[Any]:
+        return self._repo.examples_between(
+            symbol,
+            start_market_date,
+            end_market_date,
+        )
 
 
 class SessionReadAdapter:
@@ -133,6 +162,7 @@ class StorageRuntime:
     ops: OpsEventRepository
     heartbeats: HeartbeatRepository
     system_state: SystemStateRepository
+    training_memory: TrainingMemoryRepository
 
     @property
     def setup_reader(self) -> SetupReadAdapter:
@@ -141,6 +171,10 @@ class StorageRuntime:
     @property
     def session_reader(self) -> SessionReadAdapter:
         return SessionReadAdapter(self.sessions)
+
+    @property
+    def training_reader(self) -> TrainingMemoryReadAdapter:
+        return TrainingMemoryReadAdapter(self.training_memory)
 
     @property
     def period_reader(self) -> PeriodReadAdapter:
@@ -182,12 +216,14 @@ def build_storage(
         ops=OpsEventRepository(db),
         heartbeats=HeartbeatRepository(db, min_interval_seconds=state_heartbeat_seconds),
         system_state=SystemStateRepository(db, min_interval_seconds=state_heartbeat_seconds),
+        training_memory=TrainingMemoryRepository(db),
     )
 
 
 __all__ = [
     "PeriodReadAdapter",
     "SessionReadAdapter",
+    "TrainingMemoryReadAdapter",
     "SetupReadAdapter",
     "StorageRuntime",
     "build_storage",

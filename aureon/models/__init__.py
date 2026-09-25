@@ -152,6 +152,11 @@ from aureon.models.system import (
     SystemState,
     freshness_of,
 )
+from aureon.models.training import (
+    DailyTrainingStatus,
+    TrainingExample,
+    TrainingTimeframeStatus,
+)
 from aureon.models.trade import (
     CLOSE_REASON_CONVENTION,
     BrokerOrderRequest,
@@ -181,6 +186,8 @@ DOCUMENT_MODELS: tuple[type[AureonDocument], ...] = (
     Assessment,
     TradeNote,
     OpsEvent,
+    TrainingExample,
+    DailyTrainingStatus,
 )
 
 __all__ = [
@@ -205,6 +212,9 @@ __all__ = [
     "PairedOutcome",
     "ThresholdConfirmation",
     "OpsEvent",
+    "TrainingExample",
+    "TrainingTimeframeStatus",
+    "DailyTrainingStatus",
     "TradeNote",
     "TrendRead",
     "AuditRecord",

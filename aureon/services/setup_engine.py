@@ -840,25 +840,31 @@ class SetupEngine:
                     continue
                 if observation is None:
                     continue
-                event = self._write(
-                    setup,
-                    inputs,
-                    Advance(
-                        setup.state,
-                        observation.event_type,
-                        reason=observation.reason,
-                        linked_detection_id=observation.detail.get(
-                            "reference_detection_id"
-                        ),
-                    ),
-                    snapshot={
-                        **_snapshot(inputs),
-                        **dict(observation.detail),
-                    },
+                observations = (
+                    observation
+                    if isinstance(observation, (tuple, list))
+                    else (observation,)
                 )
-                if event is not None:
-                    written.append(event)
-                    setup = self._tracked.get(setup.setup_id, setup)
+                for one in observations:
+                    event = self._write(
+                        setup,
+                        inputs,
+                        Advance(
+                            setup.state,
+                            one.event_type,
+                            reason=one.reason,
+                            linked_detection_id=one.detail.get(
+                                "reference_detection_id"
+                            ),
+                        ),
+                        snapshot={
+                            **_snapshot(inputs),
+                            **dict(one.detail),
+                        },
+                    )
+                    if event is not None:
+                        written.append(event)
+                        setup = self._tracked.get(setup.setup_id, setup)
         return written
 
     def _same_anchor(
@@ -1046,6 +1052,18 @@ class SetupEngine:
         snapshot: dict[str, str] | None = None,
     ) -> SetupEvent | None:
         moment = to_utc(self._now())
+        confluence = build_agent_confluence(
+            inputs,
+            setup.direction_context,
+            previous=setup.agent_confluence,
+        )
+        frozen_snapshot = dict(snapshot if snapshot is not None else _snapshot(inputs))
+        frozen_snapshot["agent_confidence_pct"] = str(confluence.confidence_pct)
+        for vote in confluence.votes:
+            prefix = f"agent_{vote.agent_name}"
+            frozen_snapshot[f"{prefix}_stance"] = vote.stance.value
+            frozen_snapshot[f"{prefix}_alignment"] = vote.alignment
+            frozen_snapshot[f"{prefix}_observation"] = vote.observation
         event = SetupEvent(
             event_id=setup_event_id(
                 setup_id=setup.setup_id,
@@ -1058,13 +1076,8 @@ class SetupEngine:
             to_state=advance.to_state,
             linked_detection_id=advance.linked_detection_id,
             market_time=MarketTime.from_utc(inputs.candle.close_time, self.market_tz),
-            context_snapshot=snapshot if snapshot is not None else _snapshot(inputs),
+            context_snapshot=frozen_snapshot,
             reason=advance.reason,
-        )
-        confluence = build_agent_confluence(
-            inputs,
-            setup.direction_context,
-            previous=setup.agent_confluence,
         )
         try:
             moved, stored, applied = self.repository.record(
