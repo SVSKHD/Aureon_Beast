@@ -55,6 +55,7 @@ from aureon.discord.embeds import confirmation_embed, notice_embed
 from aureon.discord.service import (
     MARKET_SIDES,
     attach_assessment,
+    attach_risk_agent,
     build_confirmation,
     market_state_of,
     plan_market_order,
@@ -124,7 +125,6 @@ class ExecuteCommands:
             )
             return
 
-        request = await context.run(context.requests.create, plan.draft.to_request())
         screen = build_confirmation(
             plan.draft,
             quote,
@@ -133,11 +133,19 @@ class ExecuteCommands:
             market_state=market_state_of(state, symbol),
             detection=linked,
         )
+        risk = await attach_risk_agent(context, screen, plan.draft, quote, state)
         if plan.filling_note:
             # A substitution or an unknown mode is stated on the screen, never implied by
             # its absence (§39).
             screen.warnings.append(plan.filling_note)
         await attach_assessment(context, screen, symbol)
+        if risk.verdict.value == "veto":
+            await interaction.followup.send(
+                embed=confirmation_embed(screen),
+                ephemeral=True,
+            )
+            return
+        request = await context.run(context.requests.create, plan.draft.to_request())
         await interaction.followup.send(
             embed=confirmation_embed(screen),
             view=ConfirmTradeView(context, request, plan.draft),
