@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
+from statistics import median
 from datetime import datetime
 from typing import Any
 
@@ -275,24 +276,42 @@ class EodTrainingAgent:
         for row in rows:
             grouped[row.timeframe].append(row)
 
-        by_timeframe = tuple(
-            TrainingTimeframeStatus(
-                timeframe=timeframe,
-                setups=len(items),
-                reached_six=sum(one.six_dollar_status == "reached" for one in items),
-                not_reached_six=sum(
-                    one.six_dollar_status == "not_reached_eod" for one in items
-                ),
-                unavailable_six=sum(
-                    one.six_dollar_status == "unavailable" for one in items
-                ),
-                complete_evaluations=sum(one.evaluation_complete for one in items),
-                mae_before_six_available=sum(
-                    one.mae_before_six_price is not None for one in items
-                ),
+        by_timeframe_rows: list[TrainingTimeframeStatus] = []
+        for timeframe, items in sorted(grouped.items(), key=lambda pair: pair[0].minutes):
+            adverse = [
+                one.mae_before_six_price
+                for one in items
+                if one.mae_before_six_price is not None
+            ]
+            by_timeframe_rows.append(
+                TrainingTimeframeStatus(
+                    timeframe=timeframe,
+                    setups=len(items),
+                    reached_six=sum(
+                        one.six_dollar_status == "reached" for one in items
+                    ),
+                    not_reached_six=sum(
+                        one.six_dollar_status == "not_reached_eod" for one in items
+                    ),
+                    unavailable_six=sum(
+                        one.six_dollar_status == "unavailable" for one in items
+                    ),
+                    complete_evaluations=sum(
+                        one.evaluation_complete for one in items
+                    ),
+                    mae_before_six_available=len(adverse),
+                    median_mae_before_six_price=(
+                        float(median(adverse)) if adverse else None
+                    ),
+                    max_mae_before_six_price=max(adverse) if adverse else None,
+                )
             )
-            for timeframe, items in sorted(grouped.items(), key=lambda pair: pair[0].minutes)
-        )
+        by_timeframe = tuple(by_timeframe_rows)
+        daily_adverse = [
+            one.mae_before_six_price
+            for one in rows
+            if one.mae_before_six_price is not None
+        ]
 
         return DailyTrainingStatus(
             status_id=(
@@ -310,8 +329,12 @@ class EodTrainingAgent:
             ),
             unavailable_six=sum(one.six_dollar_status == "unavailable" for one in rows),
             complete_evaluations=sum(one.evaluation_complete for one in rows),
-            mae_before_six_available=sum(
-                one.mae_before_six_price is not None for one in rows
+            mae_before_six_available=len(daily_adverse),
+            median_mae_before_six_price=(
+                float(median(daily_adverse)) if daily_adverse else None
+            ),
+            max_mae_before_six_price=(
+                max(daily_adverse) if daily_adverse else None
             ),
             by_timeframe=by_timeframe,
             generated_at=generated_at,
