@@ -194,6 +194,19 @@ class SymbolState(AureonModel):
         default=None, description="{direction, level_type, at}"
     )
 
+    # ── Context agents 9-11 ──────────────────────────────────────────────────
+    market_journey: dict[str, object] | None = Field(
+        default=None,
+        description="Latest Asia-to-now + previous-day context transition.",
+    )
+    market_regime: dict[str, object] | None = Field(
+        default=None,
+        description="Latest non-directional trend/range/compression/expansion regime.",
+    )
+    volume_participation: dict[str, object] | None = Field(
+        default=None,
+        description="Latest relative-volume, VWAP and participation context.",
+    )
 
     @model_validator(mode="after")
     def _derive_display_values(self) -> SymbolState:
