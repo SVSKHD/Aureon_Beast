@@ -16,10 +16,24 @@ class ExecutionVenue(StrEnum):
     PAPER = "paper"
 
 
+class LeadLagClass(StrEnum):
+    EXECUTABLE_LAG = "executable_lag"
+    DISPLAY_ONLY_LAG = "display_only_lag"
+    NO_LAG = "no_lag"
+    DIVERGENCE = "divergence"
+    REVERSAL = "reversal"
+    UNKNOWN = "unknown"
+
+
 class ReplicationState(StrEnum):
     BLUEPRINT = "blueprint"
     WAITING_TARGET = "waiting_target"
     EXECUTABLE = "executable"
+    LEAD_SIGNAL_CONFIRMED = "lead_signal_confirmed"
+    TARGET_LAG_DETECTED = "target_lag_detected"
+    CAPTURE_WINDOW = "capture_window"
+    TARGET_CATCHING_UP = "target_catching_up"
+    SKIP_SOURCE_INVALID = "skip_source_invalid"
     SKIP_LATE = "skip_late"
     SKIP_MOVED = "skip_moved"
     SKIP_INVALIDATED = "skip_invalidated"
@@ -51,6 +65,16 @@ class CrossVenueBlueprint(AureonModel):
     expected_delay_ms: float = Field(default=0.0, ge=0)
     max_valid_delay_ms: float = Field(default=2500.0, gt=0)
     max_price_drift: float = Field(default=2.0, ge=0)
+    min_capture_gap: float = Field(
+        default=0.0,
+        ge=0,
+        description="Minimum favourable MT5 lead over target executable quote.",
+    )
+    max_capture_gap: float | None = Field(
+        default=None,
+        ge=0,
+        description="Optional maximum favourable gap before treating target as divergent.",
+    )
     max_spread_points: float | None = Field(default=None, ge=0)
 
     # Intentionally no target volume. Contract/volume semantics are target-venue facts
@@ -77,12 +101,20 @@ class CrossVenueDecision(AureonModel):
     target_price: float | None = None
     signed_price_drift: float | None = None
     absolute_price_drift: float | None = Field(default=None, ge=0)
+    lead_gap: float | None = None
+    lead_lag_class: LeadLagClass = LeadLagClass.UNKNOWN
+    source_still_valid: bool = True
+    target_display_price: float | None = None
+    display_lead_gap: float | None = None
     expected_delay_ms: float = Field(default=0.0, ge=0)
     delay_delta_ms: float = 0.0
     within_entry_zone: bool | None = None
     spread_points: float | None = Field(default=None, ge=0)
     reason: str
     evidence: tuple[str, ...] = ()
+    fill_price: float | None = None
+    fill_slippage_from_quote: float | None = None
+    fill_slippage_from_source: float | None = None
 
 
 class VenueLatencySample(AureonModel):
@@ -96,3 +128,16 @@ class VenueLatencySample(AureonModel):
     source_price: float
     target_price: float
     signed_price_drift: float
+
+
+class VenueFillSample(AureonModel):
+    blueprint_id: str
+    source_venue: ExecutionVenue
+    target_venue: ExecutionVenue
+    symbol: str
+    target_quote_price: float
+    fill_price: float
+    source_price: float
+    fill_slippage_from_quote: float
+    fill_slippage_from_source: float
+    observed_at: UtcDatetime
