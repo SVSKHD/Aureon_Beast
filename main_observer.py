@@ -79,6 +79,8 @@ from aureon.outbox.local_outbox import LocalOutbox
 from aureon.outbox.outbox_worker import OutboxWorker
 from aureon.services.alert_watcher import AlertWatcher, build_snapshot, minutes_since
 from aureon.services.heartbeat_service import HeartbeatService
+from aureon.services.higher_timeframe_agent import HigherTimeframeAgent
+from aureon.services.market_director import DirectorInputs, MarketDirector
 from aureon.services.market_snapshot import MarketSnapshot
 from aureon.services.market_state_service import MarketStateService, WeeklySchedule
 from aureon.services.observer_state import ObserverState
@@ -241,6 +243,13 @@ class Observer:
         # recomputation that could disagree with them (§59, §66).
         self._snapshots: dict[tuple[str, Timeframe], MarketSnapshot] = {}
         self.candle_archive = candle_archive
+
+        # Logical agents 12 and 15 consume already-computed observer state. They never fetch
+        # candles and never place trades.
+        self.higher_timeframe_agent = HigherTimeframeAgent()
+        self.market_director = MarketDirector(primary_target_move=10.0)
+        self._higher_timeframe_reads: dict[tuple[str, Timeframe], object] = {}
+        self._director_decisions: dict[tuple[str, Timeframe], object] = {}
 
     # ── Detection sink ────────────────────────────────────────────────────────
 
@@ -413,6 +422,8 @@ class Observer:
         with it -- and the candle loop is the one thing in this process that must not stop. A
         setup is context; a missed candle is a hole in the archive and in the parity check.
         """
+        self._update_decision_agents(candle, detections)
+
         engine = self.setups.get((candle.symbol, candle.timeframe))
         if engine is None:
             return
@@ -425,6 +436,41 @@ class Observer:
             log.exception("the setup engine raised on %s", candle.open_time.utc)
             return
         self._evaluate_setups(candle, engine, events)
+
+    def _update_decision_agents(
+        self, candle: Candle, detections: list[Detection]
+    ) -> None:
+        """Agents 12 and 15 over the SAME closed-candle facts the setup engine sees."""
+
+        key = (candle.symbol, candle.timeframe)
+        analysis = self.engines.for_symbol(candle.symbol)
+        mtf = analysis.mtf_context(candle.symbol, candle.timeframe)
+        htf = self.higher_timeframe_agent.assess(mtf)
+        self._higher_timeframe_reads[key] = htf
+
+        read = analysis.indicator_read(candle.symbol, candle.timeframe)
+        snapshot = self._snapshot(candle.symbol, candle.timeframe)
+        current = snapshot.as_state()
+        decision = self.market_director.decide(
+            DirectorInputs(
+                price=candle.close,
+                ema_fast=read.ema_fast,
+                ema_slow=read.ema_slow,
+                rsi=read.rsi,
+                session_trend=self._live_session_trend(candle.symbol, snapshot),
+                journey=current.get("market_journey"),
+                regime=current.get("market_regime"),
+                participation=current.get("volume_participation"),
+                htf=htf,
+                candle_signals=tuple(
+                    (d.agent_name, d.direction)
+                    for d in detections
+                    if d.direction is not None
+                ),
+                as_of=candle.close_time,
+            )
+        )
+        self._director_decisions[key] = decision
 
     def _evaluate_setups(self, candle: Candle, engine: object, events: list) -> None:
         """Advance the open measurements, then start one for anything that just confirmed.
@@ -1019,6 +1065,10 @@ class Observer:
                         **self._market_context(symbol, timeframe),
                         trend_read=self._trend_read(symbol, timeframe),
                         mtf=self._mtf_read(symbol, timeframe),
+                        higher_timeframe_agent=self._higher_timeframe_reads.get(
+                            (symbol, timeframe)
+                        ),
+                        market_director=self._director_decisions.get((symbol, timeframe)),
                     )
                 )
         try:
