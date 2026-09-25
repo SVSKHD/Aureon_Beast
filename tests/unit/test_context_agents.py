@@ -15,6 +15,9 @@ from aureon.models.detection import CandleContext, SessionContext
 from aureon.models.enums import SessionName, Timeframe
 from main_observer import default_agents
 from aureon.config import AureonConfig
+from aureon.discord.service import build_live_panel
+from aureon.models.system import SymbolState
+from aureon.services.market_snapshot import MarketSnapshot
 
 MARKET_TZ = "Europe/Athens"
 
@@ -184,3 +187,37 @@ def test_default_roster_contains_agents_9_11() -> None:
         "volume_participation",
     ]
     assert len(names) == 9
+
+
+def test_context_agents_publish_into_live_status_panel() -> None:
+    journey_frame = _frame(1200)
+    journey_frame.iloc[-1, journey_frame.columns.get_loc("high")] = 2411.0
+    journey_frame.iloc[-1, journey_frame.columns.get_loc("close")] = 2410.0
+    journey = MarketJourneyAgent(point=0.01, lookback_bars=1200).on_closed_candle(
+        journey_frame, _ctx(journey_frame)
+    )[0]
+
+    volume_frame = _frame(110)
+    volume_frame.iloc[-1, volume_frame.columns.get_loc("tick_volume")] = 400.0
+    volume_frame.iloc[-1, volume_frame.columns.get_loc("high")] = 2403.0
+    volume_frame.iloc[-1, volume_frame.columns.get_loc("low")] = 2399.0
+    volume_frame.iloc[-1, volume_frame.columns.get_loc("close")] = 2402.8
+    participation = VolumeParticipationAgent(
+        timeframe=Timeframe.M5, point=0.01
+    ).on_closed_candle(volume_frame, _ctx(volume_frame))[0]
+
+    snapshot = MarketSnapshot(symbol="XAUUSD")
+    snapshot.observe(journey)
+    snapshot.observe(participation)
+
+    state = SymbolState(
+        symbol="XAUUSD",
+        timeframe=Timeframe.M5,
+        **snapshot.as_state(),
+    )
+    panel = build_live_panel(state)
+
+    assert state.market_journey is not None
+    assert state.volume_participation is not None
+    assert any(line.startswith("journey ") for line in panel.lines)
+    assert any(line.startswith("participation ") for line in panel.lines)
