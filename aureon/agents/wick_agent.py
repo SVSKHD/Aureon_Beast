@@ -27,7 +27,7 @@ from __future__ import annotations
 import pandas as pd
 
 from aureon.agents.base_agent import BaseAgent, validate_window
-from aureon.models.detection import CandleContext, Detection, IndicatorSnapshot
+from aureon.models.detection import AgentEvidence, CandleContext, Detection, IndicatorSnapshot
 
 EVENT_UPPER_REJECTION = "upper_rejection"
 EVENT_LOWER_REJECTION = "lower_rejection"
@@ -43,7 +43,7 @@ class WickAgent(BaseAgent):
     """Classifies wick rejections (§16)."""
 
     agent_name = "wick"
-    agent_version = "1.2.0"  # 11D
+    agent_version = "1.3.0"  # normalized evidence contract
 
     def __init__(
         self,
@@ -113,6 +113,40 @@ class WickAgent(BaseAgent):
         if classification == CLASSIFICATION_NONE:
             return []
 
+        wick_points = wick / self.point
+        body_points = body / self.point
+        range_points = total_range / self.point
+        wick_range_ratio = wick / total_range
+        wick_body_ratio = (wick / body) if body > 0 else -1.0
+        upper_wick_points = upper_wick / self.point
+        lower_wick_points = lower_wick / self.point
+        rejected_price = high if classification == EVENT_UPPER_REJECTION else low
+
+        evidence = AgentEvidence(
+            numeric={
+                "wick_points": wick_points,
+                "body_points": body_points,
+                "range_points": range_points,
+                "wick_range_ratio": wick_range_ratio,
+                "wick_body_ratio": wick_body_ratio,
+                "close_position": close_position,
+                "upper_wick_points": upper_wick_points,
+                "lower_wick_points": lower_wick_points,
+            },
+            categorical={
+                "rejection_side": (
+                    "upper" if classification == EVENT_UPPER_REJECTION else "lower"
+                ),
+                "candle_direction": (
+                    "bullish" if close > open_ else "bearish" if close < open_ else "doji"
+                ),
+            },
+            flags={
+                "zero_body": body == 0,
+                "close_at_opposite_end": True,
+            },
+        )
+
         return [
             self.build_detection(
                 ctx=ctx,
@@ -122,21 +156,18 @@ class WickAgent(BaseAgent):
                 direction=None,
                 indicators=IndicatorSnapshot(
                     extras={
-                        # Numeric values alongside the label, so retuning a threshold
-                        # does not make old detections unreadable.
-                        "wick_points": wick / self.point,
-                        "body_points": body / self.point,
-                        "range_points": total_range / self.point,
-                        "wick_range_ratio": wick / total_range,
-                        # A zero body gives an unbounded ratio; the body in points is
-                        # stored alongside, so a reader can see it was zero.
-                        "wick_body_ratio": (wick / body) if body > 0 else -1.0,
+                        "wick_points": wick_points,
+                        "body_points": body_points,
+                        "range_points": range_points,
+                        "wick_range_ratio": wick_range_ratio,
+                        "wick_body_ratio": wick_body_ratio,
                         "close_position": close_position,
-                        "upper_wick_points": upper_wick / self.point,
-                        "lower_wick_points": lower_wick / self.point,
+                        "upper_wick_points": upper_wick_points,
+                        "lower_wick_points": lower_wick_points,
                     }
                 ),
-                levels={"rejected_price": high if classification == EVENT_UPPER_REJECTION else low},
+                levels={"rejected_price": rejected_price},
+                evidence=evidence,
             )
         ]
 
