@@ -82,13 +82,11 @@ def one_candle(
 
 @pytest.mark.parametrize("agent_class", PART_B)
 def test_every_agent_is_versioned_and_named(agent_class: type[BaseAgent]) -> None:
-    """Every Part B agent sits at 1.2.0: 9B moved them to 1.1.0, 11D to 1.2.0.
+    """Every Part B agent sits at 1.3.0 after the normalized evidence contract.
 
-    Not only the ones each phase named: the reason to bump is that the populations must be
-    **separable**, and every agent's documents changed shape identically when the engine began
-    attaching volume-profile and volatility context (9B) and then the higher-timeframe context
-    (11D). An agent left behind would have detections of two shapes sharing ids with nothing to
-    tell them apart (§12).
+    The population is forked because the stored detection shape now includes standardized
+    numeric/categorical/boolean evidence. Old detections remain reproducible under their old
+    versions rather than being silently rewritten into the new research schema.
 
     The literal is deliberate rather than derived from the class. A test that read the version
     off the agent it is checking would pass for an agent nobody remembered to bump, which is the
@@ -96,7 +94,7 @@ def test_every_agent_is_versioned_and_named(agent_class: type[BaseAgent]) -> Non
     shape must come here, and that is the reminder.
     """
     agent = agent_class()
-    assert agent.agent_version == "1.2.0"
+    assert agent.agent_version == "1.3.0"
     assert agent.agent_name not in {"", "base"}
 
 
