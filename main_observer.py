@@ -217,14 +217,14 @@ class Observer:
         self._last_candles: dict[tuple[str, Timeframe], Candle] = {}
         #: 12 T-7. One setup engine per symbol, or none at all: an observer with no Firestore
         #: client tracks no setups and still observes. Set by ``build_observer``.
-        self.setups: dict[str, object] = {}
+        self.setups: dict[tuple[str, Timeframe], object] = {}
         #: One per symbol, built on first use. See ``_levels_for``.
         self._level_trackers: dict[str, object] = {}
         #: What the setup engines read as "now". Set from each candle's close.
         self._setup_clock = utc_now()
         #: 12 T-7. One per symbol, beside the setup engine. Each holds an ``OutcomeTracker`` over
         #: the SAME frozen rule the detections use, so there is one definition of an outcome.
-        self.setup_evaluators: dict[str, object] = {}
+        self.setup_evaluators: dict[tuple[str, Timeframe], object] = {}
         #: 12 T-9. One reference book per symbol, holding the past outcomes a new setup is
         #: measured against. Empty without a Firestore client, like the engines above.
         self.setup_references: dict[str, object] = {}
@@ -410,8 +410,8 @@ class Observer:
         with it -- and the candle loop is the one thing in this process that must not stop. A
         setup is context; a missed candle is a hole in the archive and in the parity check.
         """
-        engine = self.setups.get(candle.symbol)
-        if engine is None or candle.timeframe is not Timeframe.M5:
+        engine = self.setups.get((candle.symbol, candle.timeframe))
+        if engine is None:
             return
         # The engine's clock, set from the DATA rather than from the wall clock, so a replay
         # stamps what the live session stamped. See ``_wire_setups``.
@@ -431,7 +431,7 @@ class Observer:
         it -- a horizon that counted its own opening bar would report an excursion the market had
         not made yet.
         """
-        evaluator = self.setup_evaluators.get(candle.symbol)
+        evaluator = self.setup_evaluators.get((candle.symbol, candle.timeframe))
         if evaluator is None:
             return
         try:
@@ -1623,6 +1623,8 @@ def _wire_setups(observer: Observer, config: AureonConfig, storage: object) -> N
     from aureon.services.setup_engine import SetupEngine
     from aureon.services.setup_evaluation import SetupEvaluator
     from aureon.services.setup_reference import ReferenceBook
+    from aureon.services.six_dollar_move_agent import SixDollarMoveAgent
+
     repository = storage.setups
     evaluations = storage.setup_evaluations
     for symbol in config.symbols:
@@ -1636,22 +1638,29 @@ def _wire_setups(observer: Observer, config: AureonConfig, storage: object) -> N
             now=lambda: observer._setup_clock,
         )
         observer.setup_references[symbol] = book
-        observer.setups[symbol] = SetupEngine(
-            account_scope=config.account_scope,
-            symbol=symbol,
-            timeframe=config.timeframes[0],
-            repository=repository,
-            point=point,
-            market_tz=config.market_tz,
-            reference=book.for_setup,
-            now=lambda: observer._setup_clock,
-        )
-        observer.setup_evaluators[symbol] = SetupEvaluator(
-            rule=rule,
-            market_tz=config.market_tz,
-            point=point,
-            repository=evaluations,
-        )
+        for timeframe in config.timeframes:
+            key = (symbol, timeframe)
+            move_agent = SixDollarMoveAgent(
+                setup_repository=repository,
+                detection_lookup=storage.detections.get,
+            )
+            observer.setups[key] = SetupEngine(
+                account_scope=config.account_scope,
+                symbol=symbol,
+                timeframe=timeframe,
+                repository=repository,
+                point=point,
+                market_tz=config.market_tz,
+                reference=book.for_setup,
+                outcome_agents=(move_agent,),
+                now=lambda: observer._setup_clock,
+            )
+            observer.setup_evaluators[key] = SetupEvaluator(
+                rule=rule,
+                market_tz=config.market_tz,
+                point=point,
+                repository=evaluations,
+            )
 
 
 def main(argv: list[str] | None = None) -> int:
