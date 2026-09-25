@@ -49,6 +49,27 @@ test suite runs on any OS against a fake broker.
 
 Aureon currently runs entirely on the local Windows machine. Application state is stored in `data/aureon.db` using SQLite WAL mode; raw candle history stays in Parquet and the existing `outbox.db` remains the durable delivery queue. Firebase/Firestore is not required. PostgreSQL is intentionally only a placeholder for the next storage decision.
 
+Bootstrap or verify the local application database before the first run:
+
+```bash
+python scripts/setup_local_sqlite.py
+```
+
+That command creates missing tables/additive columns and reports the exact file, WAL mode,
+foreign-key state, table count, and current detection/setup row counts. To verify an existing
+database without changing its schema:
+
+```bash
+python scripts/setup_local_sqlite.py --check
+```
+
+The intended local settings are:
+
+```env
+AUREON_STORAGE_BACKEND=sqlite
+AUREON_LOCAL_DB_PATH=data/aureon.db
+```
+
 Normal startup remains:
 
 ```bash
