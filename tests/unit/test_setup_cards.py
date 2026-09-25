@@ -200,7 +200,7 @@ def test_the_card_shows_six_dollar_move_tracking_and_reached_state() -> None:
         },
     )
     fields = dict(build_setup_card(a_setup(), events=[tracking]).fields)
-    assert "tracking" in fields["$6 favourable move"]
+    assert "tracking" in fields["Move ladder"]
     assert "2400.00000" in fields["$6 favourable move"]
     assert "2406.00000" in fields["$6 favourable move"]
 
@@ -510,12 +510,12 @@ def test_a_card_without_a_chart_is_still_a_card() -> None:
 # ── the settings ──────────────────────────────────────────────────────────────
 
 
-def test_all_twenty_eight_triggers_are_configurable() -> None:
+def test_all_thirty_triggers_are_configurable() -> None:
     assert len(SETUP_STATE_ANNOUNCEMENTS) == 9
-    assert len(NOTABLE_SETUP_EVENTS) == 4
+    assert len(NOTABLE_SETUP_EVENTS) == 6
     assert len(QUIET_SETUP_EVENTS) == 15
-    assert len(SETUP_ANNOUNCEMENTS) == 28
-    assert len(set(SETUP_ANNOUNCEMENTS)) == 28
+    assert len(SETUP_ANNOUNCEMENTS) == 30
+    assert len(set(SETUP_ANNOUNCEMENTS)) == 30
 
 
 def test_every_state_and_every_watch_event_is_nameable() -> None:
@@ -531,7 +531,7 @@ def test_every_state_and_every_watch_event_is_nameable() -> None:
 def test_the_noisy_fourteen_are_off_by_default() -> None:
     """"Price is near the previous day's high" is true on dozens of consecutive candles, so a
     card subscribed to it would be edited on every one of them."""
-    assert len(DEFAULT_SETUP_ANNOUNCEMENTS) == 13
+    assert len(DEFAULT_SETUP_ANNOUNCEMENTS) == 15
     for quiet in QUIET_SETUP_EVENTS:
         assert quiet not in DEFAULT_SETUP_ANNOUNCEMENTS
     settings = NotificationSettings()
