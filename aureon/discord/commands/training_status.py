@@ -31,6 +31,16 @@ def training_status_embed(status: Any) -> discord.Embed:
         f"**Unavailable labels:** {status.unavailable_six}",
         f"**Complete evaluations:** {status.complete_evaluations}",
         f"**Pre-$6 MAE available:** {status.mae_before_six_available}",
+        (
+            f"**Median pre-$6 MAE:** {status.median_mae_before_six_price:.2f}"
+            if status.median_mae_before_six_price is not None
+            else "**Median pre-$6 MAE:** —"
+        ),
+        (
+            f"**Max pre-$6 MAE:** {status.max_mae_before_six_price:.2f}"
+            if status.max_mae_before_six_price is not None
+            else "**Max pre-$6 MAE:** —"
+        ),
         "",
         "**By timeframe**",
     ]
@@ -40,7 +50,12 @@ def training_status_embed(status: Any) -> discord.Embed:
             f"+$6 {one.reached_six} · "
             f"no +$6 {one.not_reached_six} · "
             f"eval {one.complete_evaluations} · "
-            f"pre-$6 MAE {one.mae_before_six_available}"
+            f"pre-$6 MAE {one.mae_before_six_available} · "
+            + (
+                f"median {one.median_mae_before_six_price:.2f}"
+                if one.median_mae_before_six_price is not None
+                else "median —"
+            )
         )
 
     lines.extend(
