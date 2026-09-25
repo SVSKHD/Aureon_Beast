@@ -1,1 +1,1 @@
-"""Open-position management intelligence."""\n
+"""Open-position management intelligence."""
