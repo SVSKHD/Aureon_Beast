@@ -94,6 +94,7 @@ NOTABLE_SETUP_EVENTS: tuple[str, ...] = (
     "repeated_level_test",
     "breakout_pressure",
     "volume_expansion_at_level",
+    "favourable_move_6_reached",
 )
 
 #: The other fourteen. Configurable and OFF by default, which is the one judgement call in this
@@ -103,6 +104,7 @@ NOTABLE_SETUP_EVENTS: tuple[str, ...] = (
 #: effect on the next sweep without a redeploy -- which is the whole reason this lives in
 #: Firestore rather than in the environment (decision 11).
 QUIET_SETUP_EVENTS: tuple[str, ...] = (
+    "favourable_move_6_tracking",
     "ema_fast_slope_change",
     "ema_gap_narrowing",
     "high_tick_volume_rejection",
@@ -170,7 +172,7 @@ class NotificationSettings(AureonDocument):
         unknown = [name for name in self.setup_states if name not in SETUP_ANNOUNCEMENTS]
         if unknown:
             raise ValueError(
-                f"{unknown} is not a setup announcement trigger; the twenty-six are "
+                f"{unknown} is not a setup announcement trigger; the twenty-eight are "
                 f"{list(SETUP_ANNOUNCEMENTS)}"
             )
         return self
