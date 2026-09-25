@@ -63,11 +63,21 @@ class MarketJourneyAgent(BaseAgent):
         if len(window) < self.min_window():
             return []
 
-        current = market_journey_snapshot(\n            window, ctx, point=self.point, recent_days=self.recent_days,\n            near_level_points=self.near_level_points,\n        )
+        current = market_journey_snapshot(
+            window,
+            ctx,
+            point=self.point,
+            recent_days=self.recent_days,
+            near_level_points=self.near_level_points,
+        )
         if current is None:
             return []
         previous = market_journey_snapshot(
-            window.iloc[:-1], ctx, point=self.point, recent_days=self.recent_days
+            window.iloc[:-1],
+            ctx,
+            point=self.point,
+            recent_days=self.recent_days,
+            near_level_points=self.near_level_points,
         )
 
         # Store transitions rather than one document every five minutes. The helper is public,
@@ -136,6 +146,7 @@ def market_journey_snapshot(
     *,
     point: float,
     recent_days: int = 3,
+    near_level_points: float = 300.0,
 ) -> dict[str, object] | None:
     """Pure journey snapshot from already-closed candles.
 
@@ -226,8 +237,12 @@ def market_journey_snapshot(
         "previous_close_relation": previous_close_relation,
         "above_asia_open": bool(above_asia_open),
         "above_previous_close": bool(above_previous_close),
-        "near_previous_day_high": _near(current_price, previous_high, point, 300.0),
-        "near_previous_day_low": _near(current_price, previous_low, point, 300.0),
+        "near_previous_day_high": _near(
+            current_price, previous_high, point, near_level_points
+        ),
+        "near_previous_day_low": _near(
+            current_price, previous_low, point, near_level_points
+        ),
         "journey_state": (
             f"{current_session.value}|{asia_location}|{previous_location}|"
             f"{previous_close_relation}"
