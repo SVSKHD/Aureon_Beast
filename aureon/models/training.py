@@ -65,6 +65,8 @@ class TrainingTimeframeStatus(AureonModel):
     unavailable_six: int = Field(default=0, ge=0)
     complete_evaluations: int = Field(default=0, ge=0)
     mae_before_six_available: int = Field(default=0, ge=0)
+    median_mae_before_six_price: float | None = Field(default=None, ge=0)
+    max_mae_before_six_price: float | None = Field(default=None, ge=0)
 
 
 class DailyTrainingStatus(AureonDocument):
