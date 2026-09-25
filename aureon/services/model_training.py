@@ -132,7 +132,6 @@ class ModelTrainer:
         self,
         symbol: str,
         *,
-        activate_shadow: bool = False,
         min_samples: int = 30,
         min_class_samples: int = 5,
     ) -> ModelRegistryEntry:
@@ -218,8 +217,6 @@ class ModelTrainer:
                 }
             )
         )
-        if activate_shadow:
-            entry = self.models.activate_shadow(model_id, at=completed)
         return entry
 
     @staticmethod
