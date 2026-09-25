@@ -69,9 +69,9 @@ DEFAULT_NOTIFIED_AGENTS: tuple[str, ...] = ("ema_cross", "wick", "liquidity", "b
 
 
 #: 12 T-11. Every name that may appear in ``settings/notifications.setup_states``: all nine
-#: states a setup can be in, and all seventeen descriptive ``WATCH_*`` event types.
+#: states a setup can be in, and all twenty-one descriptive ``WATCH_*`` event types.
 #:
-#: Twenty-six, not the nine the field's name suggests. A name in this list is a **trigger**,
+#: Thirty, not the nine the field's name suggests. A name in this list is a **trigger**,
 #: matched against either the setup's state or the event type that caused the change, whichever
 #: the change was -- see ``Notifier._setup_trigger``. The field keeps the name ``setup_states``
 #: because that is the documented key an operator edits.
@@ -87,7 +87,7 @@ SETUP_STATE_ANNOUNCEMENTS: tuple[str, ...] = (
     "invalidated",
 )
 
-#: The three observations worth telling a human about before anything has confirmed: a level
+#: The six observations worth telling a human about before anything has confirmed: a level
 #: tested a third time, a bar that poked through and came back, tick volume expanding at a level.
 #: These are ON by default.
 NOTABLE_SETUP_EVENTS: tuple[str, ...] = (
@@ -99,7 +99,7 @@ NOTABLE_SETUP_EVENTS: tuple[str, ...] = (
     "favourable_move_40_reached",
 )
 
-#: The other fourteen. Configurable and OFF by default, which is the one judgement call in this
+#: The other fifteen. Configurable and OFF by default, which is the one judgement call in this
 #: block and is made in the open: "price is near the previous day's high" is true on dozens of
 #: consecutive candles, so a card subscribed to it would be edited on every one of them. Turning
 #: any of these on is a one-line edit to ``settings/notifications.setup_states``, and it takes
@@ -174,7 +174,7 @@ class NotificationSettings(AureonDocument):
         unknown = [name for name in self.setup_states if name not in SETUP_ANNOUNCEMENTS]
         if unknown:
             raise ValueError(
-                f"{unknown} is not a setup announcement trigger; the twenty-eight are "
+                f"{unknown} is not a setup announcement trigger; the thirty are "
                 f"{list(SETUP_ANNOUNCEMENTS)}"
             )
         return self
