@@ -15,7 +15,6 @@ from aureon.storage.runtime import build_storage
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--symbol", default="XAUUSD")
-    parser.add_argument("--activate-shadow", action="store_true")
     parser.add_argument("--min-samples", type=int, default=30)
     parser.add_argument("--min-class-samples", type=int, default=5)
     args = parser.parse_args(argv)
@@ -39,7 +38,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     model = trainer.train(
         symbol,
-        activate_shadow=args.activate_shadow,
         min_samples=args.min_samples,
         min_class_samples=args.min_class_samples,
     )
@@ -55,8 +53,10 @@ def main(argv: list[str] | None = None) -> int:
             f"auc={_fmt(metrics.roc_auc)} brier={_fmt(metrics.brier)} "
             f"precision={_fmt(metrics.precision)} recall={_fmt(metrics.recall)}"
         )
-    if model.status != "shadow":
-        print("  candidate only; pass --activate-shadow after reviewing the backtest")
+    print(
+        "  candidate only; backtest this exact model_id, then activate that artifact "
+        "with scripts/activate_shadow_model.py"
+    )
     return 0
 
 
