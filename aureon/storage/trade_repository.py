@@ -254,6 +254,39 @@ class TradeRepository:
         _ = moment
         return self._run(self._client.transaction(), txn)
 
+    def update_management(
+        self,
+        trade_id: str,
+        *,
+        management: object | None = None,
+        guardian: object | None = None,
+    ) -> Trade | None:
+        """Persist Agents 14/16 state without changing broker-observed trade status.
+
+        Like excursions, these fields update frequently and are not transitions. CLOSED trades
+        are immutable history, so late management reads are ignored.
+        """
+
+        def txn(transaction: Any) -> Trade | None:
+            snapshot = self._ref(trade_id).get(transaction=transaction)
+            if not getattr(snapshot, "exists", False):
+                return None
+            current = Trade.model_validate(snapshot.to_dict())
+            if current.status is TradeStatus.CLOSED:
+                return current
+            updates: dict[str, object] = {}
+            if management is not None:
+                updates["management"] = management
+            if guardian is not None:
+                updates["guardian"] = guardian
+            if not updates:
+                return current
+            updated = current.model_copy(update=updates)
+            transaction.set(self._ref(trade_id), updated.model_dump(mode="json"))
+            return updated
+
+        return self._run(self._client.transaction(), txn)
+
     def opened_in_period(self, start: datetime, end: datetime) -> list[Trade]:
         """Trades whose OPEN time falls in ``[start, end)``.
 
