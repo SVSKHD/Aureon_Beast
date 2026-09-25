@@ -31,6 +31,8 @@ LABEL_SCHEMA_VERSION = "FAVOURABLE_MOVE_6_V1"
 class EodTrainingAgent:
     agent_name = "eod_training_memory"
     agent_version = "1.0.0"
+    feature_schema_version = FEATURE_SCHEMA_VERSION
+    label_schema_version = LABEL_SCHEMA_VERSION
 
     def __init__(
         self,
