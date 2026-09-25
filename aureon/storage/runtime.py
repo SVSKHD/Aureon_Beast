@@ -37,6 +37,7 @@ from aureon.storage.postgres.repositories.sessions import SessionRepository
 from aureon.storage.postgres.repositories.setup_evaluations import SetupEvaluationRepository
 from aureon.storage.postgres.repositories.setups import SetupRepository
 from aureon.storage.postgres.repositories.trade_requests import TradeRequestRepository
+from aureon.storage.postgres.repositories.training import TrainingMemoryRepository
 from aureon.storage.postgres.repositories.trades import TradeRepository
 
 
@@ -133,6 +134,7 @@ class StorageRuntime:
     ops: OpsEventRepository
     heartbeats: HeartbeatRepository
     system_state: SystemStateRepository
+    training_memory: TrainingMemoryRepository
 
     @property
     def setup_reader(self) -> SetupReadAdapter:
@@ -182,6 +184,7 @@ def build_storage(
         ops=OpsEventRepository(db),
         heartbeats=HeartbeatRepository(db, min_interval_seconds=state_heartbeat_seconds),
         system_state=SystemStateRepository(db, min_interval_seconds=state_heartbeat_seconds),
+        training_memory=TrainingMemoryRepository(db),
     )
 
 
