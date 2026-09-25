@@ -120,6 +120,53 @@ available in Discord:
 /training-weekly symbol:XAUUSD
 ```
 
+### Offline movement model, walk-forward backtest, and shadow inference
+
+The first ML layer is a dependency-free logistic baseline trained only from completed,
+versioned `training_examples`. It predicts three research targets:
+
+```text
+P(reaches $6 by EOD)
+P(reaches $20 by EOD)
+P(reaches $40 by EOD)
+```
+
+Train a candidate model:
+
+```bash
+python scripts/train_model.py --symbol XAUUSD
+```
+
+Run a chronological expanding-window backtest:
+
+```bash
+python scripts/backtest_model.py --symbol XAUUSD
+```
+
+After reviewing the walk-forward results, explicitly activate the next training run in
+shadow mode:
+
+```bash
+python scripts/train_model.py --symbol XAUUSD --activate-shadow
+```
+
+A shadow model predicts only when a setup reaches CONFIRMED. It writes a
+`model_predictions` row and has no path to trade requests, the executor, MT5, SL/TP, or
+setup lifecycle decisions. At EOD the review process reconciles those predictions with the
+stored $6/$20/$40 and excursion outcomes.
+
+Discord status:
+
+```text
+/model-status symbol:XAUUSD
+/backtest-status symbol:XAUUSD
+```
+
+`/model-status` separates the latest trained candidate from the active shadow model and
+shows live prediction/reconciliation counts. Training metrics are explicitly in-sample;
+`/backtest-status` is the out-of-sample chronological measurement used to judge whether
+the model generalizes.
+
 For each EMA/RSI/Trend/Wick/Liquidity/Breakout decision and timeframe it shows decision count,
 aligned decisions, +$6/+20/+40 reaches, median/maximum favourable movement, and median extension
 after +$6. Movement outcomes are credited only to decisions aligned with the setup direction.
