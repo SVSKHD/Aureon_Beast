@@ -76,6 +76,18 @@ Normal startup remains:
 python main_aureon.py
 ```
 
+After detections begin accumulating, inspect whether every agent is writing normalized
+training evidence:
+
+```bash
+python scripts/report_agent_evidence.py --symbol XAUUSD
+```
+
+This report is deliberately about **data readiness**, not profitability. It shows the
+agent/version population, evidence coverage, and the numeric/categorical/boolean feature
+keys actually present in SQLite. Outcomes stay separate in the evaluation tables so future
+training cannot leak hindsight into detections.
+
 ## Running it
 
 - `docs/RUNBOOK.md` — **start here to operate it.** What to type, what each tool refuses
