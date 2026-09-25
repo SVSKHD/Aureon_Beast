@@ -134,6 +134,15 @@ class AureonConfig(AureonModel):
     max_deviation_points: int = 20
     max_spread_points: float = 50.0
     max_lot: float = 1.0
+
+    # Agent 19 — MT5 lead -> cTrader target blueprinting.
+    ctrader_symbol_map: dict[str, str] = Field(default_factory=dict)
+    ctrader_expected_delay_ms: float = Field(default=0.0, ge=0)
+    ctrader_max_valid_delay_ms: float = Field(default=2500.0, gt=0)
+    ctrader_max_price_drift: float = Field(default=2.0, ge=0)
+    ctrader_min_capture_gap: float = Field(default=0.0, ge=0)
+    ctrader_max_capture_gap: float | None = Field(default=None, ge=0)
+
     executor_lease_seconds: float = 60.0
     executor_poll_seconds: float = 2.0
     reconcile_grace_seconds: float = 120.0
@@ -305,6 +314,15 @@ class AureonConfig(AureonModel):
             max_deviation_points=_env_int("AUREON_MAX_DEVIATION_POINTS", 20),
             max_spread_points=_env_float("AUREON_MAX_SPREAD_POINTS", 50.0),
             max_lot=_env_float("AUREON_MAX_LOT", 1.0),
+            ctrader_symbol_map=_env_map("AUREON_CTRADER_SYMBOL_MAP"),
+            ctrader_expected_delay_ms=_env_float("AUREON_CTRADER_EXPECTED_DELAY_MS", 0.0),
+            ctrader_max_valid_delay_ms=_env_float("AUREON_CTRADER_MAX_VALID_DELAY_MS", 2500.0),
+            ctrader_max_price_drift=_env_float("AUREON_CTRADER_MAX_PRICE_DRIFT", 2.0),
+            ctrader_min_capture_gap=_env_float("AUREON_CTRADER_MIN_CAPTURE_GAP", 0.0),
+            ctrader_max_capture_gap=(
+                _env_float("AUREON_CTRADER_MAX_CAPTURE_GAP", 0.0)
+                if os.getenv("AUREON_CTRADER_MAX_CAPTURE_GAP") else None
+            ),
             executor_lease_seconds=_env_float("AUREON_EXECUTOR_LEASE_SECONDS", 60.0),
             executor_poll_seconds=_env_float("AUREON_EXECUTOR_POLL_SECONDS", 2.0),
             reconcile_grace_seconds=_env_float("AUREON_RECONCILE_GRACE_SECONDS", 120.0),
