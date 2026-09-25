@@ -18,10 +18,19 @@ def _fmt(value: float | None) -> str:
 
 def model_status_embed(model: Any, shadow: Any, run: Any, summary: Any) -> discord.Embed:
     if model is None:
-        return notice_embed(
-            "🧠 Model status",
-            "No trained model is registered yet.",
-        )
+        if run is None:
+            return notice_embed(
+                "🧠 Model status",
+                "No trained model or training run is registered yet.",
+            )
+        details = [
+            "No model artifact was produced by the latest training run.",
+            f"Run status: `{run.status}`",
+            f"Samples: {run.sample_count}",
+        ]
+        if run.failure_message:
+            details.append(f"Reason: {run.failure_message}")
+        return notice_embed("🧠 Model status", "\n".join(details))
 
     lines = [
         f"**Model:** `{model.model_id}`",
