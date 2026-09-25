@@ -59,6 +59,7 @@ class Monitor:
         heartbeat: HeartbeatService | None = None,
         point: float = 0.01,
         market_state_provider: object | None = None,
+        market_context_provider: object | None = None,
         schedule: object | None = None,
         now: Callable[[], datetime] = utc_now,
     ) -> None:
@@ -109,6 +110,7 @@ class Monitor:
             before_poll=self.gate.tick,
             parked=lambda: self.gate.parked,
             pace=self.gate.pace,
+            market_context_provider=market_context_provider,
         )
 
     def startup(self, *, now: datetime | None = None) -> None:
@@ -259,6 +261,11 @@ def build_monitor(config: AureonConfig) -> Monitor:
         candle_provider=provider,
         heartbeat=HeartbeatService(storage.heartbeats, paths.SERVICE_MONITOR),
         market_state_provider=lambda symbol: market_state.state_for(symbol).state,
+        market_context_provider=lambda symbol: (
+            (state.symbols[0] if state and state.symbols else None)
+            if (state := storage.system_state.read_symbol(symbol, config.timeframes[0]))
+            else None
+        ),
         schedule=market_state.schedule,
         now=provider.now_utc,
     )
