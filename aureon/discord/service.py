@@ -1703,6 +1703,7 @@ def build_live_panel(state: Any) -> LivePanel:
         f"last wick {_event(state.last_wick, 'classification')} at "
         f"{_fmt_at((state.last_wick or {}).get('at'))}",
         *_context_agent_lines(state),
+        *_decision_agent_lines(state),
         f"detections today {state.detections_today}",
         *_mtf_lines(state),
         *_context_lines(state, quote),
@@ -1753,6 +1754,34 @@ def _context_agent_lines(state: Any) -> list[str]:
     )
 
     return [journey_line, regime_line, participation_line]
+
+
+def _decision_agent_lines(state: Any) -> list[str]:
+    """Logical Agents 12/15, rendered from observer-published state."""
+
+    htf = getattr(state, "higher_timeframe_agent", None)
+    if htf is None:
+        htf_line = f"HTF agent {UNKNOWN}"
+    else:
+        cells = " ".join(
+            f"{name}:{bias[:4]}" for name, bias in htf.reads.items()
+        )
+        htf_line = f"HTF agent {htf.state.value} · {cells or UNKNOWN}"
+
+    director = getattr(state, "market_director", None)
+    if director is None:
+        director_line = f"director {UNKNOWN}"
+    else:
+        side = director.direction.value if director.direction is not None else UNKNOWN
+        total = director.supporting + director.opposing + director.neutral
+        director_line = (
+            f"director {director.state.value} {side} · "
+            f"support {director.supporting}/{total}"
+        )
+        if director.trigger_required:
+            director_line += f" · needs {director.trigger_required}"
+
+    return [htf_line, director_line]
 
 
 def _mtf_lines(state: Any) -> list[str]:
