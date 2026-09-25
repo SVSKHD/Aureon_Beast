@@ -141,6 +141,34 @@ def run_daily(service: ReviewService, market_date: str | None, *, now: datetime)
     return 0
 
 
+def run_weekly_training_report(
+    config: AureonConfig,
+    symbol: str,
+    iso: tuple[int, int] | None,
+    *,
+    now: datetime,
+) -> int:
+    from aureon.services.weekly_training_report import (
+        build_weekly_training_report,
+        render_weekly_training_report,
+    )
+    from aureon.storage.runtime import build_storage
+
+    year, week = iso or previous_iso_week(config.market_tz, now=now)
+    storage = build_storage(
+        account_scope=config.account_scope,
+        state_heartbeat_seconds=config.state_heartbeat_seconds,
+    )
+    report = build_weekly_training_report(
+        storage.training_memory,
+        symbol=symbol,
+        iso_year=year,
+        iso_week=week,
+    )
+    print(render_weekly_training_report(report))
+    return 0
+
+
 def run_weekly(
     service: ReviewService,
     iso: tuple[int, int] | None,
@@ -413,6 +441,12 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 exit_code |= run_weekly(
                     service, iso, now=now, with_dailies=args.with_dailies
+                )
+                exit_code |= run_weekly_training_report(
+                    config,
+                    one,
+                    iso,
+                    now=now,
                 )
         except Exception:  # noqa: BLE001 - one symbol failing must not lose the others
             log.exception("review failed for %s", one)
