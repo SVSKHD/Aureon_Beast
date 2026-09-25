@@ -139,6 +139,12 @@ def status_embed(screen: StatusScreen) -> Any:
             value=f"💤 {closed}\n{market}" if closed else market,
             inline=False,
         )
+    if screen.agent_highway:
+        embed.add_field(
+            name="Agent Highway",
+            value="\n".join(screen.agent_highway),
+            inline=False,
+        )
     embed.add_field(
         name="Trading",
         value="🟢 enabled" if screen.trading_enabled else "🔴 disabled",
