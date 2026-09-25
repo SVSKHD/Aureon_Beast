@@ -308,7 +308,10 @@ class AnalysisEngine:
             # health state and the siblings continue on this candle.
             needed = agent.min_window()
             view = frame if len(frame) <= needed else frame.iloc[-needed:]
-            bridge = self.agent_highway.bridge(agent.agent_name)
+            bridge_id = (
+                f"{agent.agent_name}:{candle.symbol}:{candle.timeframe.value}"
+            )
+            bridge = self.agent_highway.bridge(bridge_id)
             result, emitted = bridge.call(agent.on_closed_candle, view, ctx)
             if not result.ok:
                 continue
