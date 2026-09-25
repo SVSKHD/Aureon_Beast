@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
-from aureon.config.symbol_tuning import has_tuning, tuning_for
+from aureon.config.symbol_tuning import UnknownSymbolTuning, has_tuning, tuning_for
 from aureon.models.enums import MarketState
 from aureon.models.symbol_intelligence import (
     InstrumentClass,
@@ -64,6 +64,21 @@ class SymbolIntelligenceAgent:
         if len(clean) >= 6 and clean[:3] in _FX_CURRENCIES and clean[3:6] in _FX_CURRENCIES:
             return InstrumentClass.FOREX
         return InstrumentClass.OTHER
+
+    def resolve_tuning(self, symbol: str, *, point: float | None = None):
+        """Return the approved tuning selected for this symbol.
+
+        Classification may know a symbol is FX/crypto/metal, but analysis is enabled only
+        when a reviewed symbol profile exists. The live broker point wins over the stored
+        expectation when supplied.
+        """
+
+        if not has_tuning(symbol):
+            family = self.classify(symbol)
+            raise UnknownSymbolTuning(
+                f"{symbol} is classified as {family.value} but has no approved tuning profile"
+            )
+        return tuning_for(symbol, point=point)
 
     def inspect(
         self,
