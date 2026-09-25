@@ -1702,11 +1702,57 @@ def build_live_panel(state: Any) -> LivePanel:
         f"{_fmt_at((state.last_breakout or {}).get('at'))}",
         f"last wick {_event(state.last_wick, 'classification')} at "
         f"{_fmt_at((state.last_wick or {}).get('at'))}",
+        *_context_agent_lines(state),
         f"detections today {state.detections_today}",
         *_mtf_lines(state),
         *_context_lines(state, quote),
     ]
     return panel
+
+
+def _context_agent_lines(state: Any) -> list[str]:
+    """Latest Agent 9-11 readings already computed by the observer."""
+
+    journey = getattr(state, "market_journey", None) or {}
+    regime = getattr(state, "market_regime", None) or {}
+    participation = getattr(state, "volume_participation", None) or {}
+
+    journey_line = (
+        f"journey {journey.get('session') or UNKNOWN} · "
+        f"{journey.get('asia_location') or UNKNOWN} · "
+        f"{journey.get('previous_day_location') or UNKNOWN} · "
+        f"prev close {journey.get('previous_close_relation') or UNKNOWN}"
+        if journey
+        else f"journey {UNKNOWN}"
+    )
+
+    ratio = regime.get("volatility_ratio")
+    efficiency = regime.get("path_efficiency")
+    regime_tail = (
+        f" · vol {ratio:.2f}x" if isinstance(ratio, (int, float)) else ""
+    )
+    if isinstance(efficiency, (int, float)):
+        regime_tail += f" · eff {efficiency:.2f}"
+    regime_line = (
+        f"market regime {regime.get('regime') or UNKNOWN}{regime_tail}"
+        if regime
+        else f"market regime {UNKNOWN}"
+    )
+
+    relative = participation.get("relative_volume")
+    volume_tail = (
+        f" {relative:.2f}x" if isinstance(relative, (int, float)) else ""
+    )
+    participation_line = (
+        f"participation {participation.get('state') or UNKNOWN}{volume_tail} · "
+        f"{participation.get('source') or UNKNOWN} · "
+        f"VWAP {participation.get('vwap_relation') or UNKNOWN} · "
+        f"impulse {participation.get('price_impulse') or UNKNOWN}"
+        if participation
+        else f"participation {UNKNOWN}"
+    )
+
+    return [journey_line, regime_line, participation_line]
 
 
 def _mtf_lines(state: Any) -> list[str]:

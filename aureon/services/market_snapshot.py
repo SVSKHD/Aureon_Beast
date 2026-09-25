@@ -41,6 +41,9 @@ AGENT_LIQUIDITY = "liquidity"
 AGENT_WICK = "wick"
 AGENT_BREAKOUT = "breakout"
 AGENT_SESSION_TREND = "session_trend"
+AGENT_MARKET_JOURNEY = "market_journey"
+AGENT_MARKET_REGIME = "market_regime"
+AGENT_VOLUME_PARTICIPATION = "volume_participation"
 
 RSI_ZONES = frozenset({ZONE_OVERBOUGHT, ZONE_OVERSOLD, ZONE_NEUTRAL})
 
@@ -75,6 +78,12 @@ class MarketSnapshot:
     last_sweep: dict[str, object] | None = None
     last_wick: dict[str, object] | None = None
     last_breakout: dict[str, object] | None = None
+
+    # Latest context-agent readings. These are copied from stored detections rather than
+    # recomputed, so /status, Discord and later the Director all see the same facts.
+    market_journey: dict[str, object] | None = None
+    market_regime: dict[str, object] | None = None
+    volume_participation: dict[str, object] | None = None
 
     detections_today: int = 0
     _seen: set[str] = field(default_factory=set, repr=False)
@@ -164,6 +173,48 @@ class MarketSnapshot:
         elif detection.agent_name == AGENT_SESSION_TREND:
             _, _, trend = detection.event_key.partition("|")
             self.session_trend = trend
+        elif detection.agent_name == AGENT_MARKET_JOURNEY:
+            self.market_journey = {
+                "at": at.isoformat(),
+                "state": detection.evidence.categorical.get("journey_state"),
+                "session": detection.evidence.categorical.get("session"),
+                "asia_location": detection.evidence.categorical.get("asia_location"),
+                "previous_day_location": detection.evidence.categorical.get(
+                    "previous_day_location"
+                ),
+                "previous_close_relation": detection.evidence.categorical.get(
+                    "previous_close_relation"
+                ),
+                "current_price": detection.price,
+                "levels": dict(detection.levels),
+                "flags": dict(detection.evidence.flags),
+            }
+        elif detection.agent_name == AGENT_MARKET_REGIME:
+            self.market_regime = {
+                "at": at.isoformat(),
+                "regime": detection.evidence.categorical.get("regime"),
+                "volatility_state": detection.evidence.categorical.get("volatility_state"),
+                "structure_state": detection.evidence.categorical.get("structure_state"),
+                "volatility_ratio": detection.evidence.numeric.get("volatility_ratio"),
+                "path_efficiency": detection.evidence.numeric.get("path_efficiency"),
+                "reversal_rate": detection.evidence.numeric.get("reversal_rate"),
+                "flags": dict(detection.evidence.flags),
+            }
+        elif detection.agent_name == AGENT_VOLUME_PARTICIPATION:
+            profile = detection.volume_profile_ref
+            self.volume_participation = {
+                "at": at.isoformat(),
+                "state": detection.evidence.categorical.get("participation_state"),
+                "source": detection.evidence.categorical.get("volume_source"),
+                "relative_volume": detection.evidence.numeric.get("relative_volume"),
+                "session_vwap": detection.evidence.numeric.get("session_vwap"),
+                "vwap_relation": detection.evidence.categorical.get("vwap_relation"),
+                "price_impulse": detection.evidence.categorical.get("price_impulse"),
+                "poc_price": None if profile is None else profile.poc_price,
+                "va_high": None if profile is None else profile.va_high,
+                "va_low": None if profile is None else profile.va_low,
+                "flags": dict(detection.evidence.flags),
+            }
 
     def observe_candle(
         self,
@@ -231,6 +282,9 @@ class MarketSnapshot:
             "last_sweep": self.last_sweep,
             "last_wick": self.last_wick,
             "last_breakout": self.last_breakout,
+            "market_journey": self.market_journey,
+            "market_regime": self.market_regime,
+            "volume_participation": self.volume_participation,
             "detections_today": self.detections_today,
         }
 

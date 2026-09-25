@@ -47,8 +47,11 @@ from aureon.agents.base_agent import BaseAgent
 from aureon.agents.breakout_agent import BreakoutAgent
 from aureon.agents.ema_cross_agent import EmaCrossAgent
 from aureon.agents.liquidity_agent import LiquidityAgent
+from aureon.agents.market_journey_agent import MarketJourneyAgent
+from aureon.agents.market_regime_agent import MarketRegimeAgent
 from aureon.agents.rsi_agent import RsiAgent
 from aureon.agents.session_trend_agent import SessionTrendAgent, summary_from_detection
+from aureon.agents.volume_participation_agent import VolumeParticipationAgent
 from aureon.agents.wick_agent import WickAgent
 from aureon.config import AureonConfig
 from aureon.config.sessions import session_for
@@ -1330,8 +1333,17 @@ class Observer:
         bar = timedelta(minutes=timeframe.minutes)
 
         if cursor is None:
-            start = now - bar * COLD_START_BARS
-            log.info("no cursor for %s %s; cold start from %s", symbol, timeframe.value, start)
+            cold_start_bars = max(
+                COLD_START_BARS, self.engines.for_symbol(symbol).window_size * 3
+            )
+            start = now - bar * cold_start_bars
+            log.info(
+                "no cursor for %s %s; cold start from %s (%d bars of wall-clock reach)",
+                symbol,
+                timeframe.value,
+                start,
+                cold_start_bars,
+            )
             candles = self.provider.get_closed_candles(symbol, timeframe, start, now)
         else:
             log.info(
@@ -1464,7 +1476,7 @@ def default_agents(
     symbol: str | None = None,
     point: float | None = None,
 ) -> list[BaseAgent]:
-    """The full Part A + Part B roster.
+    """The full production roster, including context agents 9-11.
 
     The liquidity and breakout agents are handed **the same** ``LevelTracker``
     instance (§15, §17). Two trackers would be two implementations of where a level
@@ -1528,6 +1540,9 @@ def default_agents(
             level_tracker=levels,
             min_close_beyond_points=tuning.min_close_beyond_points,
         ),
+        MarketJourneyAgent(point=tuning.point),
+        MarketRegimeAgent(point=tuning.point),
+        VolumeParticipationAgent(timeframe=timeframe, point=tuning.point),
     ]
 
 
