@@ -799,7 +799,7 @@ class DailyTrainingStatus(Base):
 
     examples_written: Mapped[int] = mapped_column(Integer)
     reached_six: Mapped[int] = mapped_column(Integer)
-    pending_six: Mapped[int] = mapped_column(Integer)
+    not_reached_six: Mapped[int] = mapped_column(Integer)
     unavailable_six: Mapped[int] = mapped_column(Integer)
     complete_evaluations: Mapped[int] = mapped_column(Integer)
     mae_before_six_available: Mapped[int] = mapped_column(Integer)
