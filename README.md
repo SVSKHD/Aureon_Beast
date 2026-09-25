@@ -107,10 +107,22 @@ The status is stored in SQLite and can be inspected from Discord with:
 /training-status symbol:XAUUSD
 ```
 
-The primary label is whether a setup reached a favourable +6.0 XAUUSD price move by EOD.
-Training also records MFE/MAE and, when the stored timeframe bars can prove it, maximum adverse
-price excursion before the first +$6 reach. This is research memory only and never changes
-execution rules automatically.
+The primary daily target remains a favourable +$6 XAUUSD price move by EOD, while the
+movement ladder also records +$20, +$40, the maximum favourable move after the frozen detection
+reference, and how much farther price travelled after first reaching +$6. Training also records
+MFE/MAE and, when stored timeframe bars can prove it, maximum adverse price excursion before the
+first +$6 reach. This is research memory only and never changes execution rules automatically.
+
+The normal weekly review now appends an agent/timeframe movement table. The same report is
+available in Discord:
+
+```text
+/training-weekly symbol:XAUUSD
+```
+
+For each EMA/RSI/Trend/Wick/Liquidity/Breakout decision and timeframe it shows decision count,
+aligned decisions, +$6/+20/+40 reaches, median/maximum favourable movement, and median extension
+after +$6. Movement outcomes are credited only to decisions aligned with the setup direction.
 
 This report is deliberately about **data readiness**, not profitability. It shows the
 agent/version population, evidence coverage, and the numeric/categorical/boolean feature
