@@ -1831,7 +1831,9 @@ def build_live_panel(state: Any) -> LivePanel:
         f"last wick {_event(state.last_wick, 'classification')} at "
         f"{_fmt_at((state.last_wick or {}).get('at'))}",
         *_context_agent_lines(state),
+        *_m5_execution_gate_lines(state),
         *_decision_agent_lines(state),
+        *_agent19_lines(state),
         f"detections today {state.detections_today}",
         *_mtf_lines(state),
         *_context_lines(state, quote),
@@ -1882,6 +1884,73 @@ def _context_agent_lines(state: Any) -> list[str]:
     )
 
     return [journey_line, regime_line, participation_line]
+
+
+def _m5_execution_gate_lines(state: Any) -> list[str]:
+    """M5-first execution verdict with M15/H1/H4 as context, never as a second entry clock.
+
+    ALIGNED means the current M5 READY direction agrees with the normalized HTF context.
+    CAUTION means M5 is READY but HTF is mixed/neutral/missing.
+    BLOCKED means M5 is not READY or HTF directly opposes it.
+    These are execution-quality labels, not guarantees that a trade is risk-free.
+    """
+
+    timeframe = getattr(getattr(state, "timeframe", None), "value", None)
+    director = getattr(state, "market_director", None)
+    htf = getattr(state, "higher_timeframe_agent", None)
+
+    if timeframe != "M5":
+        return [f"M5 execution BLOCKED · state is {timeframe or UNKNOWN}, execution lane is M5"]
+
+    if director is None or getattr(director, "direction", None) is None:
+        return ["M5 execution BLOCKED · Director has no directional READY setup"]
+
+    direction = director.direction.value
+    director_state = getattr(getattr(director, "state", None), "value", "unknown")
+    if director_state != "ready":
+        need = getattr(director, "trigger_required", None)
+        tail = f" · needs {need}" if need else ""
+        return [f"M5 execution BLOCKED · Director {director_state} {direction}{tail}"]
+
+    if htf is None:
+        verdict = "CAUTION"
+        why = "M15/H1/H4 unavailable"
+    else:
+        state_name = getattr(getattr(htf, "state", None), "value", "neutral")
+        if (direction == "buy" and state_name == "bullish") or (
+            direction == "sell" and state_name == "bearish"
+        ):
+            verdict = "ALIGNED"
+            why = "M15/H1/H4 support M5 direction"
+        elif (direction == "buy" and state_name == "bearish") or (
+            direction == "sell" and state_name == "bullish"
+        ):
+            verdict = "BLOCKED"
+            why = "higher timeframes oppose M5 direction"
+        else:
+            verdict = "CAUTION"
+            why = f"higher timeframes are {state_name}"
+
+    return [
+        f"M5 execution {verdict} · {direction.upper()} · {why}",
+        "plan immediate M5 entry only after Risk ALLOW · primary +10 · exit/runner handled by Agents 14/16",
+    ]
+
+
+def _agent19_lines(state: Any) -> list[str]:
+    blueprint = getattr(state, "cross_venue_blueprint", None)
+    if blueprint is None:
+        return [f"Agent19 cTrader blueprint {UNKNOWN}"]
+    zone = (
+        f"{blueprint.preferred_zone_low:.2f}–{blueprint.preferred_zone_high:.2f}"
+        if blueprint.preferred_zone_low is not None
+        and blueprint.preferred_zone_high is not None
+        else UNKNOWN
+    )
+    return [
+        f"Agent19 {blueprint.source_symbol}→{blueprint.target_symbol} "
+        f"{blueprint.direction.value.upper()} · source {_fmt(blueprint.source_price)} · zone {zone}"
+    ]
 
 
 def _decision_agent_lines(state: Any) -> list[str]:

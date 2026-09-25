@@ -21,6 +21,7 @@ from aureon.models.agent_decision import (
 )
 from aureon.models.assessment import TrendRead
 from aureon.models.base import AureonDocument, AureonModel, UtcDatetime, to_utc, utc_now
+from aureon.models.cross_venue import CrossVenueBlueprint
 from aureon.models.enums import (
     AccountMode,
     Freshness,
@@ -184,6 +185,10 @@ class SymbolState(AureonModel):
         default=None,
         description="Agent 13 pre-trade risk read when account context is available.",
     )
+    cross_venue_blueprint: CrossVenueBlueprint | None = Field(
+        default=None,
+        description="Agent 19 latest MT5-to-cTrader blueprint for this symbol.",
+    )
 
     # ── Session context (§18) ─────────────────────────────────────────────────
     session: SessionName | None = None
@@ -280,6 +285,10 @@ class SystemState(AureonDocument):
     symbol_intelligence: SymbolIntelligenceReport | None = Field(
         default=None,
         description="Agent 18 symbol classes, approved tuning provenance and active server symbols.",
+    )
+    cross_venue_blueprints: dict[str, CrossVenueBlueprint] = Field(
+        default_factory=dict,
+        description="Latest Agent 19 MT5-to-cTrader blueprint per source symbol.",
     )
     trading_enabled: bool | None = Field(
         default=None, description="Mirror of settings/execution, for display only."
