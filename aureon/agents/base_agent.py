@@ -31,7 +31,7 @@ from abc import ABC, abstractmethod
 import pandas as pd
 
 from aureon.models.base import MarketTime
-from aureon.models.detection import CandleContext, Detection, IndicatorSnapshot
+from aureon.models.detection import AgentEvidence, CandleContext, Detection, IndicatorSnapshot
 from aureon.models.enums import Direction
 from aureon.models.identity import detection_id
 
@@ -96,6 +96,7 @@ class BaseAgent(ABC):
         direction: Direction | None = None,
         indicators: IndicatorSnapshot | None = None,
         levels: dict[str, float] | None = None,
+        evidence: AgentEvidence | None = None,
     ) -> Detection:
         """Assemble a Detection with a correct, deterministic id.
 
@@ -131,6 +132,7 @@ class BaseAgent(ABC):
             indicators=indicators or IndicatorSnapshot(),
             session=ctx.session,
             levels=levels or {},
+            evidence=evidence or AgentEvidence(),
             sequence_today=ctx.sequence_today,
             sequence_session=ctx.sequence_session,
         )
