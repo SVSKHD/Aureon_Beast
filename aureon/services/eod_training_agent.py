@@ -293,7 +293,10 @@ class EodTrainingAgent:
         )
 
         return DailyTrainingStatus(
-            status_id=f"{symbol}_{market_date}",
+            status_id=(
+                f"{symbol}_{market_date}_"
+                f"{FEATURE_SCHEMA_VERSION}_{LABEL_SCHEMA_VERSION}"
+            ),
             market_date=market_date,
             symbol=symbol,
             feature_schema_version=FEATURE_SCHEMA_VERSION,
