@@ -21,6 +21,7 @@ from aureon.models.agent_decision import (
 )
 from aureon.models.assessment import TrendRead
 from aureon.models.base import AureonDocument, AureonModel, UtcDatetime, to_utc, utc_now
+from aureon.models.cross_venue import CrossVenueBlueprint
 from aureon.models.enums import (
     AccountMode,
     Freshness,
@@ -275,6 +276,10 @@ class SystemState(AureonDocument):
     agent_health: dict[str, AgentHealth] = Field(
         default_factory=dict,
         description="Latest health of every Agent Highway bridge, scoped by symbol/timeframe.",
+    )
+    cross_venue_blueprints: dict[str, CrossVenueBlueprint] = Field(
+        default_factory=dict,
+        description="Latest Agent 19 MT5-to-target venue blueprint per source symbol.",
     )
     trading_enabled: bool | None = Field(
         default=None, description="Mirror of settings/execution, for display only."
