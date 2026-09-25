@@ -84,6 +84,18 @@ class TrainingMemoryReadAdapter:
     def examples_for(self, symbol: str, market_date: str) -> list[Any]:
         return self._repo.examples_for(symbol, market_date)
 
+    def examples_between(
+        self,
+        symbol: str,
+        start_market_date: str,
+        end_market_date: str,
+    ) -> list[Any]:
+        return self._repo.examples_between(
+            symbol,
+            start_market_date,
+            end_market_date,
+        )
+
 
 class SessionReadAdapter:
     """Read-only session shape exposed to Discord."""
