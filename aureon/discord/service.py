@@ -1824,6 +1824,12 @@ def build_live_panel(state: Any) -> LivePanel:
         f" ({state.bullish_crosses_session}↑ {state.bearish_crosses_session}↓)",
         f"last cross {_event(state.last_cross, 'direction')} at "
         f"{_fmt_at((state.last_cross or {}).get('at'))}",
+        (
+            "Agent20 EMA/RSI "
+            f"{(state.last_ema_rsi_eligibility or {}).get('event') or UNKNOWN} · "
+            f"RSI {_fmt((state.last_ema_rsi_eligibility or {}).get('rsi'), digits=1)} · "
+            f"{'ELIGIBLE' if (state.last_ema_rsi_eligibility or {}).get('eligible') is True else 'NOT ELIGIBLE' if (state.last_ema_rsi_eligibility or {}).get('eligible') is False else UNKNOWN}"
+        ),
         f"last sweep {_event(state.last_sweep, 'direction', 'level_type')} at "
         f"{_fmt_at((state.last_sweep or {}).get('at'))}",
         f"last breakout {_event(state.last_breakout, 'direction', 'level_type')} at "

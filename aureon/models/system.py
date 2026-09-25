@@ -222,6 +222,10 @@ class SymbolState(AureonModel):
     last_breakout: dict[str, object] | None = Field(
         default=None, description="{direction, level_type, at}"
     )
+    last_ema_rsi_eligibility: dict[str, object] | None = Field(
+        default=None,
+        description="{event, direction, rsi, eligible, at} from Agent 20.",
+    )
 
     # ── Context agents 9-11 ──────────────────────────────────────────────────
     market_journey: dict[str, object] | None = Field(
