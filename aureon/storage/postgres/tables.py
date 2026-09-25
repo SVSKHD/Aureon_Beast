@@ -94,6 +94,7 @@ class Detection(Base):
     agent_params_snapshot: Mapped[dict[str, Any]] = mapped_column(Json)
     indicators: Mapped[dict[str, Any] | None] = mapped_column(Json)
     levels: Mapped[dict[str, Any]] = mapped_column(Json)
+    evidence: Mapped[dict[str, Any]] = mapped_column(Json)
     volume_profile_ref: Mapped[dict[str, Any] | None] = mapped_column(Json)
     volatility: Mapped[dict[str, Any] | None] = mapped_column(Json)
     mtf: Mapped[dict[str, Any] | None] = mapped_column(Json)
