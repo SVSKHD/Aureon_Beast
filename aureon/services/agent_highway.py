@@ -122,6 +122,11 @@ class AgentBridge:
         current = self.highway.health(self.agent_name)
         invocation = current.invocations + 1
 
+        if current.state is AgentHealthState.DISABLED:
+            health = current.model_copy(update={"invocations": invocation})
+            self.highway._set_health(health)
+            return BridgeResult(ok=False, skipped=True, health=health), None
+
         if (
             current.state is AgentHealthState.CIRCUIT_OPEN
             and current.circuit_open_until_invocation is not None
@@ -182,6 +187,7 @@ class AgentBridge:
                 None,
             )
 
+        was_unhealthy = current.state is not AgentHealthState.HEALTHY
         health = current.model_copy(
             update={
                 "state": AgentHealthState.HEALTHY,
@@ -194,6 +200,12 @@ class AgentBridge:
             }
         )
         self.highway._set_health(health)
+        if was_unhealthy:
+            self.highway.publish(
+                topic="agent.health",
+                source_agent=self.agent_name,
+                payload={"state": AgentHealthState.HEALTHY.value, "recovered": True},
+            )
         return BridgeResult(ok=True, health=health), value
 
     def disable(self) -> AgentHealth:
