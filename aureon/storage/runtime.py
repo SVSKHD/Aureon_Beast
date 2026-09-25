@@ -69,6 +69,19 @@ class SetupReadAdapter:
         return [row for row in rows if row.symbol == symbol]
 
 
+class TrainingMemoryReadAdapter:
+    """Read-only training-memory surface exposed to Discord."""
+
+    def __init__(self, repository: TrainingMemoryRepository) -> None:
+        self._repo = repository
+
+    def status_for(self, symbol: str, market_date: str) -> Any:
+        return self._repo.status_for(symbol, market_date)
+
+    def examples_for(self, symbol: str, market_date: str) -> list[Any]:
+        return self._repo.examples_for(symbol, market_date)
+
+
 class SessionReadAdapter:
     """Read-only session shape exposed to Discord."""
 
@@ -145,6 +158,10 @@ class StorageRuntime:
         return SessionReadAdapter(self.sessions)
 
     @property
+    def training_reader(self) -> TrainingMemoryReadAdapter:
+        return TrainingMemoryReadAdapter(self.training_memory)
+
+    @property
     def period_reader(self) -> PeriodReadAdapter:
         return PeriodReadAdapter(self)
 
@@ -191,6 +208,7 @@ def build_storage(
 __all__ = [
     "PeriodReadAdapter",
     "SessionReadAdapter",
+    "TrainingMemoryReadAdapter",
     "SetupReadAdapter",
     "StorageRuntime",
     "build_storage",
