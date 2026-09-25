@@ -763,6 +763,12 @@ class TrainingExample(Base):
     six_dollar_threshold_price: Mapped[float | None] = mapped_column(Float)
     six_dollar_reached_at: Mapped[datetime | None] = mapped_column()
     time_to_six_seconds: Mapped[float | None] = mapped_column(Float)
+    twenty_dollar_reached: Mapped[bool | None] = mapped_column(Boolean)
+    forty_dollar_reached: Mapped[bool | None] = mapped_column(Boolean)
+    time_to_twenty_seconds: Mapped[float | None] = mapped_column(Float)
+    time_to_forty_seconds: Mapped[float | None] = mapped_column(Float)
+    max_favourable_move_price: Mapped[float | None] = mapped_column(Float)
+    extension_after_six_price: Mapped[float | None] = mapped_column(Float)
 
     mfe_points: Mapped[float | None] = mapped_column(Float)
     mae_points: Mapped[float | None] = mapped_column(Float)
