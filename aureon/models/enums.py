@@ -869,6 +869,8 @@ class SetupEventType(StrEnum):
     BREAKOUT_PRESSURE = "breakout_pressure"
     FAVOURABLE_MOVE_6_TRACKING = "favourable_move_6_tracking"
     FAVOURABLE_MOVE_6_REACHED = "favourable_move_6_reached"
+    FAVOURABLE_MOVE_20_REACHED = "favourable_move_20_reached"
+    FAVOURABLE_MOVE_40_REACHED = "favourable_move_40_reached"
 
     @property
     def is_watch_event(self) -> bool:
@@ -901,6 +903,8 @@ WATCH_EVENT_TYPES: frozenset[SetupEventType] = frozenset(
         SetupEventType.BREAKOUT_PRESSURE,
         SetupEventType.FAVOURABLE_MOVE_6_TRACKING,
         SetupEventType.FAVOURABLE_MOVE_6_REACHED,
+        SetupEventType.FAVOURABLE_MOVE_20_REACHED,
+        SetupEventType.FAVOURABLE_MOVE_40_REACHED,
     }
 )
 
