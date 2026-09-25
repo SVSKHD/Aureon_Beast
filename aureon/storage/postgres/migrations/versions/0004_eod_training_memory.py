@@ -71,7 +71,7 @@ def upgrade() -> None:
         sa.Column("label_schema_version", sa.String(), nullable=False),
         sa.Column("examples_written", sa.Integer(), nullable=False),
         sa.Column("reached_six", sa.Integer(), nullable=False),
-        sa.Column("pending_six", sa.Integer(), nullable=False),
+        sa.Column("not_reached_six", sa.Integer(), nullable=False),
         sa.Column("unavailable_six", sa.Integer(), nullable=False),
         sa.Column("complete_evaluations", sa.Integer(), nullable=False),
         sa.Column("mae_before_six_available", sa.Integer(), nullable=False),
