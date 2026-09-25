@@ -69,7 +69,7 @@ from aureon.evaluation.outcome_tracker import OutcomeTracker
 from aureon.evaluation.rules import get_rule
 from aureon.models.base import to_utc, utc_now
 from aureon.models.detection import AgentEvidence, Detection, IndicatorSnapshot
-from aureon.models.agent_decision import ExpansionPhase
+from aureon.models.agent_decision import DirectorState, ExpansionPhase
 from aureon.models.enums import (
     MarketState,
     MtfAlignment,
@@ -86,6 +86,7 @@ from aureon.outbox.outbox_worker import OutboxWorker
 from aureon.services.agent_highway import AgentHighway
 from aureon.services.alert_watcher import AlertWatcher, build_snapshot, minutes_since
 from aureon.services.heartbeat_service import HeartbeatService
+from aureon.services.cross_venue_replication_agent import CrossVenueReplicationAgent
 from aureon.services.expansion_opportunity_agent import (
     ExpansionInputs,
     ExpansionOpportunityAgent,
@@ -196,6 +197,8 @@ class Observer:
         # agent gets an isolated bridge; a crash changes health state rather than unwinding
         # sibling agents or the candle loop.
         self.agent_highway = AgentHighway()
+        self.cross_venue_agent = CrossVenueReplicationAgent()
+        self._cross_venue_blueprints: dict[str, object] = {}
 
         # One engine, one roster and one LevelTracker per symbol. See SymbolEngines for
         # why a single shared engine cannot do this: it would keep the right history and
@@ -558,6 +561,7 @@ class Observer:
         else:
             self._expansion_reads[key] = None
 
+        previous_decision = self._director_decisions.get(key)
         director_bridge = self.agent_highway.bridge(
             f"{self.market_director.agent_name}:{candle.symbol}:{candle.timeframe.value}"
         )
@@ -589,6 +593,114 @@ class Observer:
             )
         else:
             self._director_decisions[key] = None
+            decision = None
+
+        self._maybe_publish_cross_venue_blueprint(
+            candle,
+            detections,
+            opportunity=opportunity if expansion_result.ok else None,
+            previous_opportunity=previous_opportunity,
+            decision=decision,
+            previous_decision=previous_decision,
+        )
+
+    def _maybe_publish_cross_venue_blueprint(
+        self,
+        candle: Candle,
+        detections: list[Detection],
+        *,
+        opportunity: object | None,
+        previous_opportunity: object | None,
+        decision: object | None,
+        previous_decision: object | None,
+    ) -> None:
+        """Agent 19: turn a NEW MT5 opportunity into a target-venue blueprint.
+
+        Blueprints are emitted only for symbols explicitly mapped to cTrader. They carry
+        market intent, not target volume and not authority to trade.
+        """
+
+        target_symbol = self.config.ctrader_symbol_map.get(candle.symbol.upper())
+        if not target_symbol:
+            return
+
+        new_entry_window = (
+            opportunity is not None
+            and getattr(opportunity, "phase", None) is ExpansionPhase.ENTRY_WINDOW
+            and (
+                previous_opportunity is None
+                or getattr(previous_opportunity, "phase", None)
+                is not ExpansionPhase.ENTRY_WINDOW
+                or getattr(previous_opportunity, "signature", None)
+                != getattr(opportunity, "signature", None)
+            )
+        )
+        new_ready = (
+            decision is not None
+            and getattr(decision, "state", None) is DirectorState.READY
+            and (
+                previous_decision is None
+                or getattr(previous_decision, "state", None) is not DirectorState.READY
+                or getattr(previous_decision, "direction", None)
+                is not getattr(decision, "direction", None)
+            )
+        )
+        if not (new_entry_window or new_ready):
+            return
+
+        direction = (
+            getattr(opportunity, "direction", None)
+            if new_entry_window
+            else getattr(decision, "direction", None)
+        )
+        if direction is None:
+            return
+
+        source_detection = next(
+            (
+                d for d in detections
+                if d.direction is direction
+                and d.agent_name in {"breakout", "liquidity", "wick", "ema_cross"}
+            ),
+            None,
+        )
+        bridge = self.agent_highway.bridge(
+            f"{self.cross_venue_agent.agent_name}:{candle.symbol}:{candle.timeframe.value}"
+        )
+        result, blueprint = bridge.call(
+            self.cross_venue_agent.create_blueprint,
+            source_symbol=candle.symbol,
+            target_symbol=target_symbol,
+            direction=direction,
+            observed_at=candle.close_time,
+            source_price=candle.close,
+            scenario_signature=getattr(opportunity, "signature", None),
+            preferred_zone_low=getattr(opportunity, "preferred_zone_low", None),
+            preferred_zone_high=getattr(opportunity, "preferred_zone_high", None),
+            invalidation_price=getattr(opportunity, "invalidation_reference", None),
+            primary_target_move=10.0,
+            expected_delay_ms=self.config.ctrader_expected_delay_ms,
+            max_valid_delay_ms=self.config.ctrader_max_valid_delay_ms,
+            max_price_drift=self.config.ctrader_max_price_drift,
+            source_detection_id=(
+                source_detection.detection_id if source_detection is not None else None
+            ),
+            metadata={
+                "source_timeframe": candle.timeframe.value,
+                "trigger": "expansion_entry_window" if new_entry_window else "director_ready",
+            },
+        )
+        if not result.ok or blueprint is None:
+            return
+        self._cross_venue_blueprints[candle.symbol.upper()] = blueprint
+        self.agent_highway.publish(
+            topic="execution.blueprint.ctrader",
+            source_agent=self.cross_venue_agent.agent_name,
+            symbol=candle.symbol,
+            timeframe=candle.timeframe.value,
+            observed_at=candle.close_time,
+            payload=blueprint.model_dump(mode="json"),
+        )
 
     def _freeze_expansion_entry(
         self,
@@ -1457,6 +1569,7 @@ class Observer:
                 SystemState(
                     symbols=tuple(symbols),
                     agent_health=self.agent_highway.health_snapshot(),
+                    cross_venue_blueprints=dict(self._cross_venue_blueprints),
                     account_mode=self._account_mode(),
                     # 11B: so Discord can say "closed until Sunday 22:00" without
                     # computing the weekly boundary itself.
