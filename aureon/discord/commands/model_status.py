@@ -16,7 +16,7 @@ def _fmt(value: float | None) -> str:
     return "—" if value is None else f"{value:.3f}"
 
 
-def model_status_embed(model: Any, run: Any, summary: Any) -> discord.Embed:
+def model_status_embed(model: Any, shadow: Any, run: Any, summary: Any) -> discord.Embed:
     if model is None:
         return notice_embed(
             "🧠 Model status",
@@ -25,12 +25,13 @@ def model_status_embed(model: Any, run: Any, summary: Any) -> discord.Embed:
 
     lines = [
         f"**Model:** `{model.model_id}`",
-        f"**Status:** `{model.status}`",
+        f"**Latest status:** `{model.status}`",
+        f"**Active shadow:** `{shadow.model_id if shadow is not None else 'none'}`",
         f"**Algorithm:** `{model.algorithm}`",
         f"**Training samples:** {model.training_samples}",
         f"**Training period:** {model.trained_from} → {model.trained_through}",
         "",
-        "**Training metrics**",
+        "**Training metrics (in-sample)**",
     ]
     for target in ("six", "twenty", "forty"):
         metric = model.target_metrics.get(target)
@@ -90,10 +91,11 @@ class ModelStatusCommands:
 
         symbol = (symbol or self.context.config.symbols[0]).upper()
         model = await self.context.run(self.context.models.latest_model, symbol)
+        shadow = await self.context.run(self.context.models.active_shadow, symbol)
         run = await self.context.run(self.context.models.latest_training_run, symbol)
         summary = await self.context.run(self.context.models.shadow_summary, symbol)
         await interaction.followup.send(
-            embed=model_status_embed(model, run, summary),
+            embed=model_status_embed(model, shadow, run, summary),
             ephemeral=True,
         )
 
