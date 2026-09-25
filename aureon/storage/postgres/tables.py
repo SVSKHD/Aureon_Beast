@@ -803,6 +803,8 @@ class DailyTrainingStatus(Base):
     unavailable_six: Mapped[int] = mapped_column(Integer)
     complete_evaluations: Mapped[int] = mapped_column(Integer)
     mae_before_six_available: Mapped[int] = mapped_column(Integer)
+    median_mae_before_six_price: Mapped[float | None] = mapped_column(Float)
+    max_mae_before_six_price: Mapped[float | None] = mapped_column(Float)
 
     by_timeframe: Mapped[dict[str, Any]] = mapped_column(Json)
     generated_at: Mapped[datetime] = mapped_column()
