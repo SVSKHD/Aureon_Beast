@@ -12,7 +12,12 @@ from datetime import datetime
 
 from pydantic import Field, model_validator
 
-from aureon.models.agent_decision import DirectorDecision, HigherTimeframeAssessment, RiskAssessment
+from aureon.models.agent_decision import (
+    DirectorDecision,
+    ExpansionOpportunity,
+    HigherTimeframeAssessment,
+    RiskAssessment,
+)
 from aureon.models.assessment import TrendRead
 from aureon.models.base import AureonDocument, AureonModel, UtcDatetime, to_utc, utc_now
 from aureon.models.enums import (
@@ -168,6 +173,10 @@ class SymbolState(AureonModel):
     market_director: DirectorDecision | None = Field(
         default=None,
         description="Agent 15 WAIT/WATCH/FORMING/READY decision.",
+    )
+    expansion_opportunity: ExpansionOpportunity | None = Field(
+        default=None,
+        description="Agent 17 big-move scenario and hypothetical entry windows.",
     )
     risk_agent: RiskAssessment | None = Field(
         default=None,
