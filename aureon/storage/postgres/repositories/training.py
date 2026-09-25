@@ -67,10 +67,31 @@ class TrainingMemoryRepository(PostgresRepository):
     def _example_row(example: TrainingExample) -> dict[str, Any]:
         payload = example.model_dump(mode="json")
         return {
-            **payload,
+            "example_id": example.example_id,
+            "schema_version": example.schema_version,
+            "market_date": example.market_date,
+            "symbol": example.symbol,
             "timeframe": example.timeframe.value,
+            "setup_id": example.setup_id,
             "family": example.family.value,
             "direction_context": example.direction_context.value,
+            "setup_version": example.setup_version,
+            "feature_schema_version": example.feature_schema_version,
+            "label_schema_version": example.label_schema_version,
+            "context": payload["context"],
+            "agent_read": payload["agent_read"],
+            "six_dollar_status": example.six_dollar_status,
+            "six_dollar_reached": example.six_dollar_reached,
+            "six_dollar_reference_price": example.six_dollar_reference_price,
+            "six_dollar_threshold_price": example.six_dollar_threshold_price,
+            "six_dollar_reached_at": example.six_dollar_reached_at,
+            "time_to_six_seconds": example.time_to_six_seconds,
+            "mfe_points": example.mfe_points,
+            "mae_points": example.mae_points,
+            "mae_before_six_price": example.mae_before_six_price,
+            "evaluation_rule_id": example.evaluation_rule_id,
+            "evaluation_complete": example.evaluation_complete,
+            "generated_at": example.generated_at,
         }
 
     @staticmethod
@@ -80,8 +101,22 @@ class TrainingMemoryRepository(PostgresRepository):
     @staticmethod
     def _status_row(status: DailyTrainingStatus) -> dict[str, Any]:
         payload = status.model_dump(mode="json")
-        payload["by_timeframe"] = {"items": payload["by_timeframe"]}
-        return payload
+        return {
+            "status_id": status.status_id,
+            "schema_version": status.schema_version,
+            "market_date": status.market_date,
+            "symbol": status.symbol,
+            "feature_schema_version": status.feature_schema_version,
+            "label_schema_version": status.label_schema_version,
+            "examples_written": status.examples_written,
+            "reached_six": status.reached_six,
+            "not_reached_six": status.not_reached_six,
+            "unavailable_six": status.unavailable_six,
+            "complete_evaluations": status.complete_evaluations,
+            "mae_before_six_available": status.mae_before_six_available,
+            "by_timeframe": {"items": payload["by_timeframe"]},
+            "generated_at": status.generated_at,
+        }
 
     @staticmethod
     def _status_dict(row: Any) -> dict[str, Any]:
