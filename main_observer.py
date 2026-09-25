@@ -83,6 +83,7 @@ from aureon.models.market import Candle
 from aureon.models.system import SymbolState, SystemState
 from aureon.outbox.local_outbox import LocalOutbox
 from aureon.outbox.outbox_worker import OutboxWorker
+from aureon.services.agent_highway import AgentHighway
 from aureon.services.alert_watcher import AlertWatcher, build_snapshot, minutes_since
 from aureon.services.heartbeat_service import HeartbeatService
 from aureon.services.expansion_opportunity_agent import (
@@ -191,6 +192,11 @@ class Observer:
         #: whose first bar arrived as a rollover is complete.
         self._day_clean: dict[tuple[str, Timeframe], bool] = {}
 
+        # One deterministic in-process highway connects every analytical agent. Each
+        # agent gets an isolated bridge; a crash changes health state rather than unwinding
+        # sibling agents or the candle loop.
+        self.agent_highway = AgentHighway()
+
         # One engine, one roster and one LevelTracker per symbol. See SymbolEngines for
         # why a single shared engine cannot do this: it would keep the right history and
         # the wrong thresholds.
@@ -205,6 +211,7 @@ class Observer:
                 # 11D: a longer M5 tail than the analysis window, for the higher timeframes.
                 mtf_bars=config.mtf_m5_bars,
                 mtf_periods=(config.ema_fast, config.ema_slow),
+                agent_highway=self.agent_highway,
             )
                 for symbol, roster in _rosters(config, agents).items()}
         )
@@ -457,19 +464,59 @@ class Observer:
     def _update_decision_agents(
         self, candle: Candle, detections: list[Detection]
     ) -> None:
-        """Agents 12 and 15 over the SAME closed-candle facts the setup engine sees."""
+        """Run logical agents through Highway bridges on the same closed-candle facts."""
 
         key = (candle.symbol, candle.timeframe)
         analysis = self.engines.for_symbol(candle.symbol)
         self._refresh_context_agents(candle, analysis)
-        mtf = analysis.mtf_context(candle.symbol, candle.timeframe)
-        htf = self.higher_timeframe_agent.assess(mtf)
-        self._higher_timeframe_reads[key] = htf
 
-        read = analysis.indicator_read(candle.symbol, candle.timeframe)
+        # Publish the current context lanes first. Downstream agents can read the same
+        # immutable snapshots rather than reaching into each other.
         snapshot = self._snapshot(candle.symbol, candle.timeframe)
         current = snapshot.as_state()
-        opportunity = self.expansion_agent.assess(
+        for topic, field, source in (
+            ("context.journey", "market_journey", "market_journey"),
+            ("context.regime", "market_regime", "market_regime"),
+            ("context.participation", "volume_participation", "volume_participation"),
+        ):
+            payload = current.get(field)
+            if isinstance(payload, dict):
+                self.agent_highway.publish(
+                    topic=topic,
+                    source_agent=source,
+                    symbol=candle.symbol,
+                    timeframe=candle.timeframe.value,
+                    observed_at=candle.close_time,
+                    payload=payload,
+                )
+
+        mtf = analysis.mtf_context(candle.symbol, candle.timeframe)
+        htf_bridge = self.agent_highway.bridge(self.higher_timeframe_agent.agent_name)
+        htf_result, htf = htf_bridge.call(self.higher_timeframe_agent.assess, mtf)
+        if htf_result.ok and htf is not None:
+            self._higher_timeframe_reads[key] = htf
+            self.agent_highway.publish(
+                topic="context.htf",
+                source_agent=self.higher_timeframe_agent.agent_name,
+                symbol=candle.symbol,
+                timeframe=candle.timeframe.value,
+                observed_at=candle.close_time,
+                payload=htf.model_dump(mode="json"),
+            )
+        else:
+            self._higher_timeframe_reads[key] = None
+            htf = None
+
+        read = analysis.indicator_read(candle.symbol, candle.timeframe)
+        signal_tuple = tuple(
+            (d.agent_name, d.direction)
+            for d in detections
+            if d.direction is not None
+        )
+
+        expansion_bridge = self.agent_highway.bridge(self.expansion_agent.agent_name)
+        expansion_result, opportunity = expansion_bridge.call(
+            self.expansion_agent.assess,
             ExpansionInputs(
                 frame=analysis.window(candle.symbol, candle.timeframe),
                 price=candle.close,
@@ -483,24 +530,33 @@ class Observer:
                 regime=current.get("market_regime"),
                 participation=current.get("volume_participation"),
                 htf=htf,
-                candle_signals=tuple(
-                    (d.agent_name, d.direction)
-                    for d in detections
-                    if d.direction is not None
-                ),
+                candle_signals=signal_tuple,
                 as_of=candle.close_time,
-            )
+            ),
         )
         previous_opportunity = self._expansion_reads.get(key)
-        self._expansion_reads[key] = opportunity
-        self._freeze_expansion_entry(
-            candle,
-            detections,
-            opportunity,
-            previous_opportunity=previous_opportunity,
-        )
+        if expansion_result.ok and opportunity is not None:
+            self._expansion_reads[key] = opportunity
+            self.agent_highway.publish(
+                topic="opportunity.expansion",
+                source_agent=self.expansion_agent.agent_name,
+                symbol=candle.symbol,
+                timeframe=candle.timeframe.value,
+                observed_at=candle.close_time,
+                payload=opportunity.model_dump(mode="json"),
+            )
+            self._freeze_expansion_entry(
+                candle,
+                detections,
+                opportunity,
+                previous_opportunity=previous_opportunity,
+            )
+        else:
+            self._expansion_reads[key] = None
 
-        decision = self.market_director.decide(
+        director_bridge = self.agent_highway.bridge(self.market_director.agent_name)
+        director_result, decision = director_bridge.call(
+            self.market_director.decide,
             DirectorInputs(
                 price=candle.close,
                 ema_fast=read.ema_fast,
@@ -511,15 +567,22 @@ class Observer:
                 regime=current.get("market_regime"),
                 participation=current.get("volume_participation"),
                 htf=htf,
-                candle_signals=tuple(
-                    (d.agent_name, d.direction)
-                    for d in detections
-                    if d.direction is not None
-                ),
+                candle_signals=signal_tuple,
                 as_of=candle.close_time,
-            )
+            ),
         )
-        self._director_decisions[key] = decision
+        if director_result.ok and decision is not None:
+            self._director_decisions[key] = decision
+            self.agent_highway.publish(
+                topic="decision.director",
+                source_agent=self.market_director.agent_name,
+                symbol=candle.symbol,
+                timeframe=candle.timeframe.value,
+                observed_at=candle.close_time,
+                payload=decision.model_dump(mode="json"),
+            )
+        else:
+            self._director_decisions[key] = None
 
     def _freeze_expansion_entry(
         self,
