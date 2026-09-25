@@ -1619,6 +1619,7 @@ class Observer:
                         expansion_opportunity=self._expansion_reads.get(
                             (symbol, timeframe)
                         ),
+                        cross_venue_blueprint=self._cross_venue_blueprints.get(symbol.upper()),
                     )
                 )
         try:
