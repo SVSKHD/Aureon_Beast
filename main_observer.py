@@ -66,6 +66,7 @@ from aureon.models.detection import Detection
 from aureon.models.enums import (
     MarketState,
     MtfAlignment,
+    SetupEventType,
     SetupState,
     Timeframe,
     TrendBias,
@@ -442,7 +443,7 @@ class Observer:
             log.exception("the setup evaluator raised on %s", candle.open_time.utc)
         tracked = getattr(engine, "tracked", {})
         for event in events:
-            if event.to_state is not SetupState.CONFIRMED:
+            if event.event_type is not SetupEventType.CONFIRMED:
                 continue
             setup = tracked.get(event.setup_id)
             if setup is None:
