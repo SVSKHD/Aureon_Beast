@@ -76,6 +76,17 @@ Normal startup remains:
 python main_aureon.py
 ```
 
+When automatic updates are enabled, keep the live checkout on a clean `main` branch and verify
+eligibility with:
+
+```bash
+python scripts/guardian_status.py
+```
+
+A merged change on `origin/main` is then eligible for the Runtime Guardian's normal
+fetch → fast-forward → preflight → graceful restart flow.
+
+
 After detections begin accumulating, inspect whether every agent is writing normalized
 training evidence:
 
