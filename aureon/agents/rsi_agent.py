@@ -32,7 +32,7 @@ import pandas as pd
 
 from aureon.agents.base_agent import BaseAgent, validate_window
 from aureon.engine.indicators import min_warmup, rsi
-from aureon.models.detection import CandleContext, Detection, IndicatorSnapshot
+from aureon.models.detection import AgentEvidence, CandleContext, Detection, IndicatorSnapshot
 
 EVENT_OVERBOUGHT_ENTRY = "overbought_entry"
 EVENT_OVERBOUGHT_EXIT = "overbought_exit"
@@ -68,7 +68,7 @@ class RsiAgent(BaseAgent):
     """Context-only RSI zone transitions (§14)."""
 
     agent_name = "rsi"
-    agent_version = "1.2.0"  # 11D
+    agent_version = "1.3.0"  # normalized evidence contract
 
     def __init__(
         self,
@@ -133,6 +133,33 @@ class RsiAgent(BaseAgent):
             # zone; reporting it as one would mislabel it.
             return []
 
+        current_value = float(current)
+        previous_value = float(previous)
+        delta = current_value - previous_value
+        crossed_midpoint = (
+            (previous_value < 50.0 <= current_value)
+            or (previous_value > 50.0 >= current_value)
+        )
+        evidence = AgentEvidence(
+            numeric={
+                "rsi": current_value,
+                "rsi_previous": previous_value,
+                "rsi_delta": delta,
+                "rsi_distance_from_50": current_value - 50.0,
+                "overbought_threshold": self.overbought,
+                "oversold_threshold": self.oversold,
+            },
+            categorical={
+                "previous_zone": previous_zone,
+                "current_zone": current_zone,
+                "transition": event_key,
+            },
+            flags={
+                "rsi_rising": delta > 0,
+                "rsi_falling": delta < 0,
+                "crossed_midpoint": crossed_midpoint,
+            },
+        )
         return [
             self.build_detection(
                 ctx=ctx,
@@ -141,15 +168,16 @@ class RsiAgent(BaseAgent):
                 # Context only: this agent never asserts a direction (§14).
                 direction=None,
                 indicators=IndicatorSnapshot(
-                    rsi=float(current),
+                    rsi=current_value,
                     extras={
                         # Numeric values stored alongside the labels, so a later
                         # threshold change does not make old detections unreadable.
-                        "rsi_previous": float(previous),
+                        "rsi_previous": previous_value,
                         "overbought": self.overbought,
                         "oversold": self.oversold,
                     },
                 ),
+                evidence=evidence,
             )
         ]
 

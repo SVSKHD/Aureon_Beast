@@ -31,7 +31,7 @@ import pandas as pd
 
 from aureon.agents.base_agent import BaseAgent, validate_window
 from aureon.config.sessions import SESSION_CONFIG_VERSION, sessions_for_index
-from aureon.models.detection import CandleContext, Detection, IndicatorSnapshot
+from aureon.models.detection import AgentEvidence, CandleContext, Detection, IndicatorSnapshot
 from aureon.models.enums import SessionName, Timeframe
 from aureon.models.session import TREND_DOWN, TREND_FLAT, TREND_UP, SessionSummary
 from aureon.storage.paths import session_doc_id
@@ -47,7 +47,7 @@ class SessionTrendAgent(BaseAgent):
     """Summarises each completed session (§18)."""
 
     agent_name = "session_trend"
-    agent_version = "1.2.0"  # 11D
+    agent_version = "1.3.0"  # normalized evidence contract
 
     def __init__(
         self,
@@ -120,6 +120,18 @@ class SessionTrendAgent(BaseAgent):
         summary_values = self._summarise(block)
         trend = self._trend(summary_values["change_points"])
 
+        evidence = AgentEvidence(
+            numeric=dict(summary_values),
+            categorical={
+                "completed_session": previous.value,
+                "trend": trend,
+            },
+            flags={
+                "trend_up": trend == TREND_UP,
+                "trend_down": trend == TREND_DOWN,
+                "trend_flat": trend == TREND_FLAT,
+            },
+        )
         return [
             self.build_detection(
                 ctx=ctx,
@@ -134,6 +146,7 @@ class SessionTrendAgent(BaseAgent):
                     "session_low": summary_values["low"],
                     "session_close": summary_values["close"],
                 },
+                evidence=evidence,
             )
         ]
 

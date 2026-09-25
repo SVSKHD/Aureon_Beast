@@ -69,6 +69,7 @@ An immutable observation. Never an instruction to trade.
 | `indicators` | `IndicatorSnapshot` | no | `IndicatorSnapshot()` |  |
 | `session` | `SessionContext` | yes | — |  |
 | `levels` | `dict[str, float]` | no | `dict()` | Numeric levels involved (swept level, broken level, ...). |
+| `evidence` | `AgentEvidence` | no | `AgentEvidence()` | Normalized same-candle facts emitted by the agent for research/training. Never contains outcome information. |
 | `sequence_today` | `int` | yes | — |  |
 | `sequence_session` | `int` | yes | — |  |
 | `volume_profile_ref` | `VolumeProfileRef \| null` | no | `None` | Asia's value area and nodes as they stood at this close (9B). |
@@ -541,6 +542,17 @@ What the engine hands an agent alongside the candle window (§79).
 | `session` | `SessionContext` | yes | — |  |
 | `sequence_today` | `int` | yes | — | Nth detection-eligible candle in the broker day. |
 | `sequence_session` | `int` | yes | — | Nth within the session. |
+
+### AgentEvidence
+
+Normalized facts an agent knew when it emitted a detection. This is an evidence contract, not a score and never contains outcome information.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `schema_version` | `int` | no | `1` | Evidence-contract version. |
+| `numeric` | `dict[str, float]` | no | `dict()` | Finite measurable facts from the same closed candle. |
+| `categorical` | `dict[str, str]` | no | `dict()` | Stable labels such as level type, transition or regime. |
+| `flags` | `dict[str, bool]` | no | `dict()` | Boolean conditions known at detection time. |
 
 ### IndicatorSnapshot
 
@@ -1557,6 +1569,7 @@ Unique: `uq_detection_evaluation`
 | `agent_params_snapshot` | `JSONB` | no |
 | `indicators` | `JSONB` | yes |
 | `levels` | `JSONB` | no |
+| `evidence` | `JSONB` | no |
 | `volume_profile_ref` | `JSONB` | yes |
 | `volatility` | `JSONB` | yes |
 | `mtf` | `JSONB` | yes |

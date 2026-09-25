@@ -60,6 +60,29 @@ def test_existing_local_database_gets_agent_confluence_column_additively(tmp_pat
     database.dispose()
 
 
+def test_existing_local_database_gets_detection_evidence_column_additively(
+    tmp_path,
+) -> None:
+    database = LocalDatabase(tmp_path / "aureon.db")
+    with database.transaction() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE detections "
+            "(detection_id VARCHAR PRIMARY KEY, schema_version INTEGER NOT NULL)"
+        )
+
+    database.ensure_schema()
+
+    with database.connect() as connection:
+        columns = {
+            row[1]
+            for row in connection.exec_driver_sql(
+                "PRAGMA table_info(detections)"
+            ).fetchall()
+        }
+    assert "evidence" in columns
+    database.dispose()
+
+
 def test_transaction_rolls_back_on_error(tmp_path) -> None:
     database = LocalDatabase(tmp_path / "aureon.db")
     with database.transaction() as connection:

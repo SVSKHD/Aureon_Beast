@@ -43,6 +43,7 @@ from aureon.models.broker import (
 )
 from aureon.models.control import ControlRequest
 from aureon.models.detection import (
+    AgentEvidence,
     CandleContext,
     Detection,
     IndicatorSnapshot,
@@ -212,6 +213,7 @@ __all__ = [
     "BrokerOrder",
     "BrokerPosition",
     "ControlRequest",
+    "AgentEvidence",
     "CandleContext",
     "Detection",
     "IndicatorSnapshot",

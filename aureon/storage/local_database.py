@@ -152,6 +152,19 @@ class LocalDatabase:
                 )
                 log.info("upgraded local schema: setups.agent_confluence")
 
+            detection_columns = {
+                row[1]
+                for row in connection.exec_driver_sql(
+                    "PRAGMA table_info(detections)"
+                ).fetchall()
+            }
+            if "evidence" not in detection_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE detections "
+                    "ADD COLUMN evidence JSON NOT NULL DEFAULT '{}'"
+                )
+                log.info("upgraded local schema: detections.evidence")
+
     def wait_until_ready(self, **_: Any) -> float:
         self.probe()
         return 0.0

@@ -16,7 +16,9 @@ Two invariants from CLAUDE.md are enforced in this file:
 
 from __future__ import annotations
 
-from pydantic import ConfigDict, Field
+import math
+
+from pydantic import ConfigDict, Field, model_validator
 
 from aureon.models.base import AureonDocument, AureonModel, MarketTime
 from aureon.models.enums import Direction, SessionName, Timeframe
@@ -39,6 +41,32 @@ class IndicatorSnapshot(AureonModel):
     extras: dict[str, float] = Field(
         default_factory=dict, description="Agent-specific numeric context."
     )
+
+
+class AgentEvidence(AureonModel):
+    """Normalized facts an agent knew when it emitted a detection.
+
+    This is intentionally NOT a score. It is a stable research/training contract: numeric
+    measurements, categorical state and boolean conditions from the same closed-candle moment.
+    Outcomes remain in detection_evaluations, so this record cannot acquire hindsight.
+    """
+
+    schema_version: int = 1
+    numeric: dict[str, float] = Field(default_factory=dict)
+    categorical: dict[str, str] = Field(default_factory=dict)
+    flags: dict[str, bool] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _training_values_are_clean(self) -> AgentEvidence:
+        groups = (self.numeric, self.categorical, self.flags)
+        if any(not key.strip() for group in groups for key in group):
+            raise ValueError("agent evidence keys must be non-empty")
+        bad = [key for key, value in self.numeric.items() if not math.isfinite(value)]
+        if bad:
+            raise ValueError(f"agent evidence contains non-finite numeric values: {bad}")
+        if any(not value.strip() for value in self.categorical.values()):
+            raise ValueError("agent evidence categorical values must be non-empty")
+        return self
 
 
 class SessionContext(AureonModel):
@@ -118,6 +146,13 @@ class Detection(AureonDocument):
     levels: dict[str, float] = Field(
         default_factory=dict,
         description="Numeric levels involved (swept level, broken level, ...).",
+    )
+    evidence: AgentEvidence = Field(
+        default_factory=AgentEvidence,
+        description=(
+            "Normalized same-candle facts emitted by the agent for research/training. "
+            "Never contains outcome information."
+        ),
     )
 
     sequence_today: int = Field(ge=1)

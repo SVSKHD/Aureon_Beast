@@ -49,6 +49,19 @@ REQUIRED_TABLES = {
     "ops_events",
 }
 
+REQUIRED_DETECTION_COLUMNS = {
+    "detection_id",
+    "symbol",
+    "timeframe",
+    "agent_name",
+    "agent_version",
+    "event_key",
+    "direction",
+    "indicators",
+    "levels",
+    "evidence",
+}
+
 REQUIRED_SETUP_COLUMNS = {
     "setup_id",
     "symbol",
@@ -88,6 +101,12 @@ def inspect_local_database(database: LocalDatabase) -> dict[str, Any]:
                 "PRAGMA table_info(setups)"
             ).fetchall()
         }
+        detection_columns = {
+            str(row[1])
+            for row in connection.exec_driver_sql(
+                "PRAGMA table_info(detections)"
+            ).fetchall()
+        }
         counts: dict[str, int] = {}
         for table in ("detections", "setups", "setup_events", "detection_evaluations"):
             if table in tables:
@@ -99,11 +118,13 @@ def inspect_local_database(database: LocalDatabase) -> dict[str, Any]:
 
     missing_tables = sorted(REQUIRED_TABLES - tables)
     missing_setup_columns = sorted(REQUIRED_SETUP_COLUMNS - setup_columns)
+    missing_detection_columns = sorted(REQUIRED_DETECTION_COLUMNS - detection_columns)
     ok = (
         journal_mode == "wal"
         and foreign_keys == 1
         and not missing_tables
         and not missing_setup_columns
+        and not missing_detection_columns
     )
     return {
         "ok": ok,
@@ -115,6 +136,7 @@ def inspect_local_database(database: LocalDatabase) -> dict[str, Any]:
         "table_count": len(tables),
         "missing_tables": missing_tables,
         "missing_setup_columns": missing_setup_columns,
+        "missing_detection_columns": missing_detection_columns,
         "counts": counts,
     }
 
@@ -137,6 +159,11 @@ def render(report: dict[str, Any]) -> str:
         lines.append(
             "  missing setup columns: "
             + ", ".join(report["missing_setup_columns"])
+        )
+    if report["missing_detection_columns"]:
+        lines.append(
+            "  missing detection columns: "
+            + ", ".join(report["missing_detection_columns"])
         )
     return "\n".join(lines)
 
@@ -188,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
             "error": f"{type(exc).__name__}: {exc}",
             "missing_tables": [],
             "missing_setup_columns": [],
+            "missing_detection_columns": [],
             "counts": {},
         }
     finally:
