@@ -165,6 +165,28 @@ class LocalDatabase:
                 )
                 log.info("upgraded local schema: detections.evidence")
 
+
+            training_columns = {
+                row[1]
+                for row in connection.exec_driver_sql(
+                    "PRAGMA table_info(training_examples)"
+                ).fetchall()
+            }
+            additions = {
+                "twenty_dollar_reached": "BOOLEAN",
+                "forty_dollar_reached": "BOOLEAN",
+                "time_to_twenty_seconds": "FLOAT",
+                "time_to_forty_seconds": "FLOAT",
+                "max_favourable_move_price": "FLOAT",
+                "extension_after_six_price": "FLOAT",
+            }
+            for name, sql_type in additions.items():
+                if name not in training_columns:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE training_examples ADD COLUMN {name} {sql_type}"
+                    )
+                    log.info("upgraded local schema: training_examples.%s", name)
+
     def wait_until_ready(self, **_: Any) -> float:
         self.probe()
         return 0.0
