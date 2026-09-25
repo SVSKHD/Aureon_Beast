@@ -26,7 +26,7 @@ class TrainingExample(AureonDocument):
     setup_version: str
 
     feature_schema_version: str = "EOD_SETUP_FEATURES_V1"
-    label_schema_version: str = "FAVOURABLE_MOVE_6_V1"
+    label_schema_version: str = "FAVOURABLE_MOVE_LADDER_V2"
 
     context: dict = Field(default_factory=dict)
     agent_read: dict = Field(default_factory=dict)
@@ -41,6 +41,12 @@ class TrainingExample(AureonDocument):
     six_dollar_threshold_price: float | None = None
     six_dollar_reached_at: UtcDatetime | None = None
     time_to_six_seconds: float | None = Field(default=None, ge=0)
+    twenty_dollar_reached: bool | None = None
+    forty_dollar_reached: bool | None = None
+    time_to_twenty_seconds: float | None = Field(default=None, ge=0)
+    time_to_forty_seconds: float | None = Field(default=None, ge=0)
+    max_favourable_move_price: float | None = Field(default=None, ge=0)
+    extension_after_six_price: float | None = Field(default=None, ge=0)
 
     mfe_points: float | None = None
     mae_points: float | None = None
@@ -76,7 +82,7 @@ class DailyTrainingStatus(AureonDocument):
     market_date: str
     symbol: str
     feature_schema_version: str = "EOD_SETUP_FEATURES_V1"
-    label_schema_version: str = "FAVOURABLE_MOVE_6_V1"
+    label_schema_version: str = "FAVOURABLE_MOVE_LADDER_V2"
 
     examples_written: int = Field(default=0, ge=0)
     reached_six: int = Field(default=0, ge=0)
