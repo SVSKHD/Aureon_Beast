@@ -1722,6 +1722,7 @@ class StatusScreen:
     updated_at: datetime | None = None
     age_seconds: float | None = None
     agent_highway: list[str] = field(default_factory=list)
+    symbol_registry: list[str] = field(default_factory=list)
 
     @property
     def asleep(self) -> bool:
@@ -2097,6 +2098,7 @@ def build_status(
 
     state_updated = getattr(system_state, "updated_at", None)
     highway_lines = _agent_highway_lines(system_state, symbol=symbol)
+    symbol_registry = _symbol_registry_lines(system_state, symbol=symbol)
 
     screen = StatusScreen(
         updated_at=to_utc(state_updated) if state_updated else None,
@@ -2118,6 +2120,7 @@ def build_status(
             else None
         ),
         agent_highway=highway_lines,
+        symbol_registry=symbol_registry,
     )
 
     # §59 vs §61-§63: the two modes are mutually exclusive, deliberately.
@@ -2147,6 +2150,36 @@ def build_status(
             for symbol_state in getattr(system_state, "symbols", ()) or ()
         ]
     return screen
+
+
+def _symbol_registry_lines(
+    system_state: Any | None, *, symbol: str | None = None
+) -> list[str]:
+    """Agent 18 summary: what this Windows server is configured to watch and what is active."""
+
+    report = getattr(system_state, "symbol_intelligence", None)
+    if report is None:
+        return ["symbol intelligence unavailable"]
+
+    profiles = list(getattr(report, "profiles", ()) or ())
+    if symbol is not None:
+        profiles = [p for p in profiles if p.symbol == symbol.upper()]
+
+    if not profiles:
+        return ["no matching configured symbols"]
+
+    active = [p.symbol for p in profiles if p.active]
+    lines = [
+        "active: " + (", ".join(active) if active else "none"),
+    ]
+    for profile in profiles:
+        icon = "🟢" if profile.active else "⚪"
+        lines.append(
+            f"{icon} {profile.symbol} · {profile.instrument_class.value} · "
+            f"{profile.state.value} · tuning "
+            f"{'approved' if profile.supported else 'unsupported'}"
+        )
+    return lines
 
 
 def _agent_highway_lines(
