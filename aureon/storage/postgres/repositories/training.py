@@ -69,6 +69,29 @@ class TrainingMemoryRepository(PostgresRepository):
             return None
         return DailyTrainingStatus.model_validate(self._status_dict(rows[0]))
 
+    def examples_between(
+        self,
+        symbol: str,
+        start_market_date: str,
+        end_market_date: str,
+    ) -> list[TrainingExample]:
+        """Examples in the half-open broker-date range [start, end)."""
+        statement = (
+            select(self.examples)
+            .where(self.examples.c.symbol == symbol.upper())
+            .where(self.examples.c.market_date >= start_market_date)
+            .where(self.examples.c.market_date < end_market_date)
+            .order_by(
+                self.examples.c.market_date,
+                self.examples.c.timeframe,
+                self.examples.c.setup_id,
+            )
+        )
+        return [
+            TrainingExample.model_validate(self._example_dict(row))
+            for row in self._rows(statement)
+        ]
+
     def examples_for(self, symbol: str, market_date: str) -> list[TrainingExample]:
         statement = (
             select(self.examples)
@@ -104,6 +127,12 @@ class TrainingMemoryRepository(PostgresRepository):
             "six_dollar_threshold_price": example.six_dollar_threshold_price,
             "six_dollar_reached_at": example.six_dollar_reached_at,
             "time_to_six_seconds": example.time_to_six_seconds,
+            "twenty_dollar_reached": example.twenty_dollar_reached,
+            "forty_dollar_reached": example.forty_dollar_reached,
+            "time_to_twenty_seconds": example.time_to_twenty_seconds,
+            "time_to_forty_seconds": example.time_to_forty_seconds,
+            "max_favourable_move_price": example.max_favourable_move_price,
+            "extension_after_six_price": example.extension_after_six_price,
             "mfe_points": example.mfe_points,
             "mae_points": example.mae_points,
             "mae_before_six_price": example.mae_before_six_price,
