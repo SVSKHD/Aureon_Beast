@@ -26,7 +26,7 @@ from aureon.models.training import (
 )
 
 FEATURE_SCHEMA_VERSION = "EOD_SETUP_FEATURES_V1"
-LABEL_SCHEMA_VERSION = "FAVOURABLE_MOVE_6_V1"
+LABEL_SCHEMA_VERSION = "FAVOURABLE_MOVE_LADDER_V2"
 
 
 class EodTrainingAgent:
@@ -101,6 +101,8 @@ class EodTrainingAgent:
         decision = self._decision_event(events)
         tracking = self._event(events, SetupEventType.FAVOURABLE_MOVE_6_TRACKING)
         reached = self._event(events, SetupEventType.FAVOURABLE_MOVE_6_REACHED)
+        reached_20 = self._event(events, SetupEventType.FAVOURABLE_MOVE_20_REACHED)
+        reached_40 = self._event(events, SetupEventType.FAVOURABLE_MOVE_40_REACHED)
 
         if reached is not None:
             six_status = "reached"
@@ -118,10 +120,9 @@ class EodTrainingAgent:
         threshold_price = self._float(tracking_snapshot.get("threshold_price"))
         reached_at = getattr(getattr(reached, "market_time", None), "utc", None)
 
-        time_to_six = None
-        if tracking is not None and reached is not None:
-            started = tracking.market_time.utc
-            time_to_six = max(0.0, (reached.market_time.utc - started).total_seconds())
+        time_to_six = self._time_to(tracking, reached)
+        time_to_twenty = self._time_to(tracking, reached_20)
+        time_to_forty = self._time_to(tracking, reached_40)
 
         horizon = self._training_horizon(evaluation)
         mfe = getattr(horizon, "mfe", None) if horizon is not None else None
@@ -132,6 +133,16 @@ class EodTrainingAgent:
             tracking=tracking,
             reached=reached,
             reference_price=reference_price,
+        )
+        max_favourable = self._max_favourable_move(
+            setup=setup,
+            tracking=tracking,
+            reference_price=reference_price,
+        )
+        extension_after_six = (
+            max(0.0, max_favourable - 6.0)
+            if max_favourable is not None and reached is not None
+            else None
         )
 
         snapshot = getattr(decision, "context_snapshot", {}) or {}
@@ -177,6 +188,16 @@ class EodTrainingAgent:
             six_dollar_threshold_price=threshold_price,
             six_dollar_reached_at=reached_at,
             time_to_six_seconds=time_to_six,
+            twenty_dollar_reached=(
+                True if reached_20 is not None else False if tracking is not None else None
+            ),
+            forty_dollar_reached=(
+                True if reached_40 is not None else False if tracking is not None else None
+            ),
+            time_to_twenty_seconds=time_to_twenty,
+            time_to_forty_seconds=time_to_forty,
+            max_favourable_move_price=max_favourable,
+            extension_after_six_price=extension_after_six,
             mfe_points=mfe,
             mae_points=mae,
             mae_before_six_price=mae_before_six,
@@ -229,6 +250,47 @@ class EodTrainingAgent:
             return None
         day_close = next((one for one in complete if one.horizon_id == "day_close"), None)
         return day_close or complete[-1]
+
+    @staticmethod
+    def _time_to(tracking: Any | None, reached: Any | None) -> float | None:
+        if tracking is None or reached is None:
+            return None
+        return max(
+            0.0,
+            (reached.market_time.utc - tracking.market_time.utc).total_seconds(),
+        )
+
+    def _max_favourable_move(
+        self,
+        *,
+        setup: Any,
+        tracking: Any | None,
+        reference_price: float | None,
+    ) -> float | None:
+        if tracking is None or reference_price is None:
+            return None
+        frame = self.market_days.get_frame(
+            setup.symbol,
+            setup.market_date,
+            setup.timeframe,
+        )
+        if frame is None or frame.truncated:
+            return None
+
+        start = tracking.market_time.utc
+        best = 0.0
+        seen = False
+        for bar in frame.bars:
+            if bar.at < start:
+                continue
+            seen = True
+            if setup.direction_context is DirectionContext.BULLISH:
+                best = max(best, bar.high - reference_price)
+            elif setup.direction_context is DirectionContext.BEARISH:
+                best = max(best, reference_price - bar.low)
+            else:
+                return None
+        return max(0.0, best) if seen else 0.0
 
     def _mae_before_six(
         self,
