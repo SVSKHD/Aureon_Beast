@@ -27,13 +27,28 @@ class TrainingMemoryRepository(PostgresRepository):
         self._upsert(self._status_row(status), table=self.statuses)
         return status
 
-    def status_for(self, symbol: str, market_date: str) -> DailyTrainingStatus | None:
+    def status_for(
+        self,
+        symbol: str,
+        market_date: str,
+        *,
+        feature_schema_version: str | None = None,
+        label_schema_version: str | None = None,
+    ) -> DailyTrainingStatus | None:
         statement = (
             select(self.statuses)
             .where(self.statuses.c.symbol == symbol.upper())
             .where(self.statuses.c.market_date == market_date)
-            .limit(1)
         )
+        if feature_schema_version is not None:
+            statement = statement.where(
+                self.statuses.c.feature_schema_version == feature_schema_version
+            )
+        if label_schema_version is not None:
+            statement = statement.where(
+                self.statuses.c.label_schema_version == label_schema_version
+            )
+        statement = statement.order_by(self.statuses.c.generated_at.desc()).limit(1)
         rows = self._rows(statement)
         if not rows:
             return None
@@ -43,7 +58,10 @@ class TrainingMemoryRepository(PostgresRepository):
         statement = (
             select(self.statuses)
             .where(self.statuses.c.symbol == symbol.upper())
-            .order_by(self.statuses.c.market_date.desc())
+            .order_by(
+                self.statuses.c.market_date.desc(),
+                self.statuses.c.generated_at.desc(),
+            )
             .limit(1)
         )
         rows = self._rows(statement)
