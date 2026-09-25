@@ -1721,6 +1721,7 @@ class StatusScreen:
     #: a STALE screen has drifted -- 46 seconds and six hours read identically.
     updated_at: datetime | None = None
     age_seconds: float | None = None
+    agent_highway: list[str] = field(default_factory=list)
 
     @property
     def asleep(self) -> bool:
@@ -2095,6 +2096,8 @@ def build_status(
         market_closed = True
 
     state_updated = getattr(system_state, "updated_at", None)
+    highway_lines = _agent_highway_lines(system_state, symbol=symbol)
+
     screen = StatusScreen(
         updated_at=to_utc(state_updated) if state_updated else None,
         age_seconds=(
@@ -2114,6 +2117,7 @@ def build_status(
             if getattr(system_state, "next_market_open", None)
             else None
         ),
+        agent_highway=highway_lines,
     )
 
     # §59 vs §61-§63: the two modes are mutually exclusive, deliberately.
@@ -2143,6 +2147,41 @@ def build_status(
             for symbol_state in getattr(system_state, "symbols", ()) or ()
         ]
     return screen
+
+
+def _agent_highway_lines(
+    system_state: Any | None, *, symbol: str | None = None
+) -> list[str]:
+    """Compact bridge-health view for /status.
+
+    Healthy bridges are counted; unhealthy bridges are named. A scoped status only shows
+    bridges whose id contains that symbol so XAUUSD does not inherit XAGUSD failures.
+    """
+
+    health = getattr(system_state, "agent_health", None) or {}
+    rows = []
+    for bridge_id, state in sorted(health.items()):
+        if symbol is not None and f":{symbol.upper()}:" not in bridge_id.upper():
+            continue
+        rows.append((bridge_id, state))
+    if not rows:
+        return ["no bridge health published yet"]
+
+    healthy = sum(1 for _name, state in rows if getattr(state, "state", None).value == "healthy")
+    lines = [f"{healthy}/{len(rows)} bridges healthy"]
+    for name, state in rows:
+        current = getattr(getattr(state, "state", None), "value", "unknown")
+        if current == "healthy":
+            continue
+        detail = f"{name} → {current}"
+        failures = getattr(state, "failures", 0)
+        if failures:
+            detail += f" · failures {failures}"
+        error = getattr(state, "last_error", None)
+        if error:
+            detail += f" · {error[:120]}"
+        lines.append(detail)
+    return lines
 
 
 def summarise_review(review: Any) -> str:

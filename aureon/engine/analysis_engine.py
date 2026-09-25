@@ -48,6 +48,7 @@ from aureon.config.sessions import SESSION_CONFIG_VERSION, session_for
 from aureon.models.detection import CandleContext, Detection, SessionContext
 from aureon.models.enums import Direction, SessionName, Timeframe
 from aureon.models.market import Candle
+from aureon.services.agent_highway import AgentHighway
 
 # Extra bars beyond the agents' stated minimum. Zero by default: any margin must be
 # identical in live and replay, so it is explicit rather than incidental.
@@ -198,12 +199,14 @@ class AnalysisEngine:
         gap_guard: Callable[[datetime, datetime], datetime | None] | None = None,
         mtf_bars: int = 0,
         mtf_periods: tuple[int, int] | None = None,
+        agent_highway: AgentHighway | None = None,
     ) -> None:
         if not agents:
             raise ValueError("AnalysisEngine needs at least one agent")
         self.agents = list(agents)
         self.account_scope = account_scope
         self.market_tz = market_tz
+        self.agent_highway = agent_highway or AgentHighway()
         #: Given a bar's start and end, returns the weekly close it straddles, or None
         #: (11B). Injected rather than imported: the engine stays free of the services
         #: package, and `WeeklySchedule.close_spanned_by` is what the observer passes.
@@ -301,11 +304,30 @@ class AnalysisEngine:
 
         detections: list[Detection] = []
         for agent in self.agents:
-            # Exactly this agent's stated requirement, so a hungrier sibling cannot
-            # change what this agent sees.
+            # Every agent travels through its own bridge. An exception is converted into
+            # health state and the siblings continue on this candle.
             needed = agent.min_window()
             view = frame if len(frame) <= needed else frame.iloc[-needed:]
-            detections.extend(agent.on_closed_candle(view, ctx))
+            bridge_id = (
+                f"{agent.agent_name}:{candle.symbol}:{candle.timeframe.value}"
+            )
+            bridge = self.agent_highway.bridge(bridge_id)
+            result, emitted = bridge.call(agent.on_closed_candle, view, ctx)
+            if not result.ok:
+                continue
+            batch = list(emitted or ())
+            detections.extend(batch)
+            self.agent_highway.publish(
+                topic=f"agent.output.{agent.agent_name}",
+                source_agent=agent.agent_name,
+                symbol=candle.symbol,
+                timeframe=candle.timeframe.value,
+                observed_at=candle.close_time,
+                payload={
+                    "detection_count": len(batch),
+                    "detection_ids": [one.detection_id for one in batch],
+                },
+            )
         mtf = self._mtf_context(key)
         return [
             self._with_context(self._number(detection, key), tracker, mtf)

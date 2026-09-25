@@ -12,6 +12,7 @@ from datetime import datetime
 
 from pydantic import Field, model_validator
 
+from aureon.models.agent_highway import AgentHealth
 from aureon.models.agent_decision import (
     DirectorDecision,
     ExpansionOpportunity,
@@ -271,6 +272,10 @@ class SystemState(AureonDocument):
     symbols: tuple[SymbolState, ...] = ()
     # Decision 10: embedded copies for a one-read status view.
     heartbeats: dict[str, UtcDatetime] = Field(default_factory=dict)
+    agent_health: dict[str, AgentHealth] = Field(
+        default_factory=dict,
+        description="Latest health of every Agent Highway bridge, scoped by symbol/timeframe.",
+    )
     trading_enabled: bool | None = Field(
         default=None, description="Mirror of settings/execution, for display only."
     )
