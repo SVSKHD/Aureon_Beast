@@ -1907,7 +1907,34 @@ def _decision_agent_lines(state: Any) -> list[str]:
         if director.trigger_required:
             director_line += f" · needs {director.trigger_required}"
 
-    return [htf_line, director_line]
+    expansion = getattr(state, "expansion_opportunity", None)
+    if expansion is None:
+        expansion_line = f"expansion opportunity {UNKNOWN}"
+    else:
+        side = expansion.direction.value if expansion.direction is not None else UNKNOWN
+        zone = (
+            f"{expansion.preferred_zone_low:.2f}–{expansion.preferred_zone_high:.2f}"
+            if expansion.preferred_zone_low is not None
+            and expansion.preferred_zone_high is not None
+            else UNKNOWN
+        )
+        entry_styles = [
+            name
+            for name, value in (
+                ("early", expansion.earliest_entry),
+                ("confirm", expansion.confirmation_entry),
+                ("pullback", expansion.pullback_entry),
+            )
+            if value is not None
+        ]
+        expansion_line = (
+            f"expansion opportunity {expansion.phase.value} · "
+            f"{expansion.family.value} {side} · "
+            f"strength {expansion.strength}/{expansion.strength_total} · "
+            f"zone {zone} · entries {','.join(entry_styles) or UNKNOWN}"
+        )
+
+    return [htf_line, director_line, expansion_line]
 
 
 def _mtf_lines(state: Any) -> list[str]:
