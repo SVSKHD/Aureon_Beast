@@ -38,6 +38,21 @@ class RiskVerdict(StrEnum):
     INCOMPLETE = "incomplete"
 
 
+class ExpansionPhase(StrEnum):
+    WATCH = "watch"
+    ARMED = "armed"
+    ENTRY_WINDOW = "entry_window"
+    EXPANDING = "expanding"
+    MISSED = "missed"
+
+
+class ExpansionFamily(StrEnum):
+    REVERSAL = "reversal_expansion"
+    CONTINUATION = "trend_continuation"
+    BREAKOUT = "breakout_expansion"
+    UNKNOWN = "unknown"
+
+
 class ManagementAction(StrEnum):
     HOLD = "hold"
     PROTECT = "protect"
@@ -118,3 +133,32 @@ class GuardianDecision(AureonModel):
     close_conditions: tuple[str, ...] = ()
     emergency: bool = False
     rule_version: str = "PROFIT_GUARDIAN_V1"
+
+
+class ExpansionEntryCandidate(AureonModel):
+    style: str
+    price: float
+    rationale: str
+    valid: bool = True
+
+
+class ExpansionOpportunity(AureonModel):
+    phase: ExpansionPhase = ExpansionPhase.WATCH
+    family: ExpansionFamily = ExpansionFamily.UNKNOWN
+    direction: Direction | None = None
+    strength: int = Field(default=0, ge=0)
+    strength_total: int = Field(default=0, ge=0)
+    move_from_anchor: float = 0.0
+    anchor_price: float | None = None
+    expansion_threshold: float = Field(default=10.0, gt=0)
+    earliest_entry: ExpansionEntryCandidate | None = None
+    confirmation_entry: ExpansionEntryCandidate | None = None
+    pullback_entry: ExpansionEntryCandidate | None = None
+    preferred_zone_low: float | None = None
+    preferred_zone_high: float | None = None
+    invalidation_reference: float | None = None
+    evidence: tuple[str, ...] = ()
+    blockers: tuple[str, ...] = ()
+    signature: str | None = None
+    as_of: UtcDatetime | None = None
+    rule_version: str = "EXPANSION_OPPORTUNITY_V1"

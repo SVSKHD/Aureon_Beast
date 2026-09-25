@@ -68,7 +68,8 @@ from aureon.engine.symbol_engines import SymbolEngines
 from aureon.evaluation.outcome_tracker import OutcomeTracker
 from aureon.evaluation.rules import get_rule
 from aureon.models.base import to_utc, utc_now
-from aureon.models.detection import Detection
+from aureon.models.detection import AgentEvidence, Detection, IndicatorSnapshot
+from aureon.models.agent_decision import ExpansionPhase
 from aureon.models.enums import (
     MarketState,
     MtfAlignment,
@@ -77,12 +78,17 @@ from aureon.models.enums import (
     Timeframe,
     TrendBias,
 )
+from aureon.models.identity import detection_id
 from aureon.models.market import Candle
 from aureon.models.system import SymbolState, SystemState
 from aureon.outbox.local_outbox import LocalOutbox
 from aureon.outbox.outbox_worker import OutboxWorker
 from aureon.services.alert_watcher import AlertWatcher, build_snapshot, minutes_since
 from aureon.services.heartbeat_service import HeartbeatService
+from aureon.services.expansion_opportunity_agent import (
+    ExpansionInputs,
+    ExpansionOpportunityAgent,
+)
 from aureon.services.higher_timeframe_agent import HigherTimeframeAgent
 from aureon.services.market_director import DirectorInputs, MarketDirector
 from aureon.services.market_snapshot import MarketSnapshot
@@ -254,8 +260,10 @@ class Observer:
         # candles and never place trades.
         self.higher_timeframe_agent = HigherTimeframeAgent()
         self.market_director = MarketDirector(primary_target_move=10.0)
+        self.expansion_agent = ExpansionOpportunityAgent(primary_move=10.0)
         self._higher_timeframe_reads: dict[tuple[str, Timeframe], object] = {}
         self._director_decisions: dict[tuple[str, Timeframe], object] = {}
+        self._expansion_reads: dict[tuple[str, Timeframe], object] = {}
 
     # ── Detection sink ────────────────────────────────────────────────────────
 
@@ -461,6 +469,37 @@ class Observer:
         read = analysis.indicator_read(candle.symbol, candle.timeframe)
         snapshot = self._snapshot(candle.symbol, candle.timeframe)
         current = snapshot.as_state()
+        opportunity = self.expansion_agent.assess(
+            ExpansionInputs(
+                frame=analysis.window(candle.symbol, candle.timeframe),
+                price=candle.close,
+                ema_fast=read.ema_fast,
+                ema_slow=read.ema_slow,
+                previous_ema_fast=read.previous_ema_fast,
+                previous_ema_slow=read.previous_ema_slow,
+                rsi=read.rsi,
+                atr=read.atr,
+                journey=current.get("market_journey"),
+                regime=current.get("market_regime"),
+                participation=current.get("volume_participation"),
+                htf=htf,
+                candle_signals=tuple(
+                    (d.agent_name, d.direction)
+                    for d in detections
+                    if d.direction is not None
+                ),
+                as_of=candle.close_time,
+            )
+        )
+        previous_opportunity = self._expansion_reads.get(key)
+        self._expansion_reads[key] = opportunity
+        self._freeze_expansion_entry(
+            candle,
+            detections,
+            opportunity,
+            previous_opportunity=previous_opportunity,
+        )
+
         decision = self.market_director.decide(
             DirectorInputs(
                 price=candle.close,
@@ -481,6 +520,132 @@ class Observer:
             )
         )
         self._director_decisions[key] = decision
+
+    def _freeze_expansion_entry(
+        self,
+        candle: Candle,
+        detections: list[Detection],
+        opportunity: object,
+        *,
+        previous_opportunity: object | None,
+    ) -> None:
+        """Freeze a new Agent 17 ENTRY_WINDOW into the normal detection/evaluation pipeline.
+
+        The source detection supplies same-candle session/profile/MTF context. We only freeze
+        the transition INTO an entry window for a signature, not every candle it remains open,
+        so one developing move does not become a stack of near-duplicate training rows.
+        """
+
+        if getattr(opportunity, "phase", None) is not ExpansionPhase.ENTRY_WINDOW:
+            return
+        if (
+            previous_opportunity is not None
+            and getattr(previous_opportunity, "phase", None)
+            is ExpansionPhase.ENTRY_WINDOW
+            and getattr(previous_opportunity, "signature", None)
+            == getattr(opportunity, "signature", None)
+            and getattr(previous_opportunity, "direction", None)
+            is getattr(opportunity, "direction", None)
+        ):
+            return
+
+        direction = getattr(opportunity, "direction", None)
+        source = next(
+            (
+                detection
+                for detection in detections
+                if detection.direction is direction
+                and detection.agent_name in {"breakout", "liquidity", "wick", "ema_cross"}
+            ),
+            None,
+        )
+        if source is None or direction is None:
+            return
+
+        candidate = (
+            getattr(opportunity, "pullback_entry", None)
+            or getattr(opportunity, "confirmation_entry", None)
+            or getattr(opportunity, "earliest_entry", None)
+        )
+        selected_entry_price = (
+            float(candidate.price) if candidate is not None else float(candle.close)
+        )
+        event_key = (
+            f"{opportunity.family.value}|{direction.value}|"
+            f"{opportunity.signature or 'unknown'}"
+        )
+        numeric = {
+            "strength": float(opportunity.strength),
+            "strength_total": float(opportunity.strength_total),
+            "move_from_anchor": float(opportunity.move_from_anchor),
+            "expansion_threshold": float(opportunity.expansion_threshold),
+            "selected_entry_price": selected_entry_price,
+        }
+        for name in (
+            "preferred_zone_low",
+            "preferred_zone_high",
+            "invalidation_reference",
+            "anchor_price",
+        ):
+            value = getattr(opportunity, name, None)
+            if value is not None:
+                numeric[name] = float(value)
+        for name in ("earliest_entry", "confirmation_entry", "pullback_entry"):
+            entry = getattr(opportunity, name, None)
+            if entry is not None:
+                numeric[f"{name}_price"] = float(entry.price)
+
+        frozen = source.model_copy(
+            update={
+                "detection_id": detection_id(
+                    account_scope=source.account_scope,
+                    symbol=source.symbol,
+                    timeframe=source.timeframe.value,
+                    candle_close=source.detected_at.utc,
+                    agent_name="expansion_opportunity",
+                    agent_version="1.0.0",
+                    event_key=event_key,
+                ),
+                "agent_name": "expansion_opportunity",
+                "agent_version": "1.0.0",
+                "agent_params_snapshot": {
+                    "primary_move": self.expansion_agent.primary_move,
+                    "atr_multiple": self.expansion_agent.atr_multiple,
+                    "lookback_bars": self.expansion_agent.lookback_bars,
+                    "entry_zone_atr": self.expansion_agent.entry_zone_atr,
+                    "min_strength_for_entry": self.expansion_agent.min_strength_for_entry,
+                },
+                "event_key": event_key,
+                "price": float(candle.close),
+                "indicators": IndicatorSnapshot(
+                    ema=source.indicators.ema,
+                    rsi=source.indicators.rsi,
+                    extras={
+                        **source.indicators.extras,
+                        **numeric,
+                    },
+                ),
+                "evidence": AgentEvidence(
+                    numeric=numeric,
+                    categorical={
+                        "family": opportunity.family.value,
+                        "phase": opportunity.phase.value,
+                        "signature": opportunity.signature or "unknown",
+                        "selected_entry_style": (
+                            candidate.style if candidate is not None else "close"
+                        ),
+                    },
+                    flags={
+                        "has_earliest_entry": opportunity.earliest_entry is not None,
+                        "has_confirmation_entry": (
+                            opportunity.confirmation_entry is not None
+                        ),
+                        "has_pullback_entry": opportunity.pullback_entry is not None,
+                    },
+                ),
+            }
+        )
+        self._on_detections([frozen])
 
     def _refresh_context_agents(self, candle: Candle, analysis: AnalysisEngine) -> None:
         """Refresh Agents 9-11 on every closed candle without creating event detections.
@@ -1213,6 +1378,9 @@ class Observer:
                             (symbol, timeframe)
                         ),
                         market_director=self._director_decisions.get((symbol, timeframe)),
+                        expansion_opportunity=self._expansion_reads.get(
+                            (symbol, timeframe)
+                        ),
                     )
                 )
         try:
