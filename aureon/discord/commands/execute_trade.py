@@ -26,6 +26,7 @@ from aureon.discord.embeds import confirmation_embed, notice_embed
 from aureon.discord.service import (
     DraftRequest,
     attach_assessment,
+    attach_risk_agent,
     build_confirmation,
     linkable_detections,
     market_state_of,
@@ -132,11 +133,17 @@ class ExecuteTradeCommands:
             return
 
         market_state = market_state_of(state, symbol)
-        request = await context.run(context.requests.create, draft.to_request())
         screen = build_confirmation(
             draft, quote, spec, settings, market_state=market_state, detection=detection
         )
+        risk = await attach_risk_agent(context, screen, draft, quote, state)
         await attach_assessment(context, screen, draft.symbol)
+        if risk.verdict.value == "veto":
+            await interaction.followup.send(
+                embed=confirmation_embed(screen), ephemeral=True
+            )
+            return
+        request = await context.run(context.requests.create, draft.to_request())
         view = ConfirmTradeView(context, request, draft)
         await interaction.followup.send(
             embed=confirmation_embed(screen), view=view, ephemeral=True
