@@ -189,6 +189,37 @@ def test_the_events_read_oldest_first_as_the_story_they_are() -> None:
     assert "confirmed" in lines[-1]
 
 
+def test_the_card_shows_six_dollar_move_tracking_and_reached_state() -> None:
+    tracking = an_event(
+        SetupEventType.FAVOURABLE_MOVE_6_TRACKING,
+        SetupState.CONFIRMED,
+        context_snapshot={
+            "reference_detection_id": "detection-1",
+            "reference_price": "2400.00000",
+            "threshold_price": "2406.00000",
+        },
+    )
+    fields = dict(build_setup_card(a_setup(), events=[tracking]).fields)
+    assert "tracking" in fields["$6 favourable move"]
+    assert "2400.00000" in fields["$6 favourable move"]
+    assert "2406.00000" in fields["$6 favourable move"]
+
+    reached = an_event(
+        SetupEventType.FAVOURABLE_MOVE_6_REACHED,
+        SetupState.CONFIRMED,
+        minutes=5,
+        context_snapshot={
+            "reference_detection_id": "detection-1",
+            "reference_price": "2400.00000",
+            "observed_extreme": "2406.25000",
+            "favourable_excursion": "6.25000",
+        },
+    )
+    fields = dict(build_setup_card(a_setup(), events=[tracking, reached]).fields)
+    assert "reached" in fields["$6 favourable move"]
+    assert "6.25000" in fields["$6 favourable move"]
+
+
 def test_the_card_shows_frozen_ema_cross_and_rsi_status() -> None:
     events = [
         an_event(
@@ -479,12 +510,12 @@ def test_a_card_without_a_chart_is_still_a_card() -> None:
 # ── the settings ──────────────────────────────────────────────────────────────
 
 
-def test_all_twenty_six_triggers_are_configurable() -> None:
+def test_all_twenty_eight_triggers_are_configurable() -> None:
     assert len(SETUP_STATE_ANNOUNCEMENTS) == 9
-    assert len(NOTABLE_SETUP_EVENTS) == 3
-    assert len(QUIET_SETUP_EVENTS) == 14
-    assert len(SETUP_ANNOUNCEMENTS) == 26
-    assert len(set(SETUP_ANNOUNCEMENTS)) == 26
+    assert len(NOTABLE_SETUP_EVENTS) == 4
+    assert len(QUIET_SETUP_EVENTS) == 15
+    assert len(SETUP_ANNOUNCEMENTS) == 28
+    assert len(set(SETUP_ANNOUNCEMENTS)) == 28
 
 
 def test_every_state_and_every_watch_event_is_nameable() -> None:
@@ -500,7 +531,7 @@ def test_every_state_and_every_watch_event_is_nameable() -> None:
 def test_the_noisy_fourteen_are_off_by_default() -> None:
     """"Price is near the previous day's high" is true on dozens of consecutive candles, so a
     card subscribed to it would be edited on every one of them."""
-    assert len(DEFAULT_SETUP_ANNOUNCEMENTS) == 12
+    assert len(DEFAULT_SETUP_ANNOUNCEMENTS) == 13
     for quiet in QUIET_SETUP_EVENTS:
         assert quiet not in DEFAULT_SETUP_ANNOUNCEMENTS
     settings = NotificationSettings()

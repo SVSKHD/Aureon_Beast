@@ -11,13 +11,14 @@ Three properties it must have, all enforced in ``service.check_confirm_press`` a
 * **a second press is harmless.** ``TradeRequestRepository.confirm`` is idempotent, and
   the view disables itself on success so the second press is unlikely in the first place.
 
-The view never reports an outcome. It confirms, and the result arrives later from a
-Firestore listener watching that request -- because what actually happened is the
-executor's and the broker's account, not this button's.
+The view never INVENTS an outcome. After confirmation it polls the stored TradeRequest,
+which is resolved only by the executor/reconciliation path, and edits the same Discord
+message with the stored success/failure result. Discord still never calls the broker.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import discord
@@ -31,7 +32,7 @@ from aureon.discord.service import (
     quote_of,
     trading_change_summary,
 )
-from aureon.models.enums import MarketState
+from aureon.models.enums import MarketState, TradeRequestStatus
 from aureon.models.trade import TradeRequest
 
 log = logging.getLogger(__name__)
@@ -101,10 +102,85 @@ class ConfirmTradeView(discord.ui.View):
             embed=notice_embed(
                 "Confirmed",
                 f"Request `{confirmed.request_id}` is confirmed and queued for execution. "
-                "The result will appear here.",
+                "Waiting for the executor result…",
             ),
             view=self,
         )
+        message = interaction.message
+        if message is not None:
+            asyncio.create_task(
+                self._watch_execution_result(message),
+                name=f"aureon-discord-result-{confirmed.request_id}",
+            )
+
+    async def _watch_execution_result(
+        self,
+        message: discord.Message,
+        *,
+        timeout_seconds: float = 120.0,
+        poll_seconds: float = 0.5,
+    ) -> None:
+        """Edit the confirmation message when the executor resolves this request.
+
+        The repository is the only source here. Discord never calls MT5 and never treats the
+        confirm callback itself as execution success.
+        """
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        terminal_or_accepted = {
+            TradeRequestStatus.FILLED,
+            TradeRequestStatus.PARTIALLY_FILLED,
+            TradeRequestStatus.PENDING,
+            TradeRequestStatus.FAILED,
+            TradeRequestStatus.FAILED_STALE,
+            TradeRequestStatus.FAILED_RECONCILIATION,
+            TradeRequestStatus.CANCELLED,
+            TradeRequestStatus.EXPIRED,
+        }
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                current = await self.context.run(
+                    self.context.requests.get,
+                    self.request.request_id,
+                )
+            except Exception:  # noqa: BLE001 - reporting must not affect execution
+                log.exception(
+                    "could not read execution result for %s",
+                    self.request.request_id,
+                )
+                return
+            if current is None:
+                return
+            if current.status in terminal_or_accepted:
+                try:
+                    await message.edit(
+                        embed=_execution_result_embed(current),
+                        view=self,
+                    )
+                except Exception:  # noqa: BLE001 - broker result is already persisted
+                    log.exception(
+                        "could not edit Discord execution result for %s",
+                        current.request_id,
+                    )
+                return
+            await asyncio.sleep(poll_seconds)
+
+        try:
+            await message.edit(
+                embed=notice_embed(
+                    "Execution still pending",
+                    (
+                        f"Request `{self.request.request_id}` has not reached a broker result "
+                        f"within {timeout_seconds:.0f}s. Use `/status` to inspect the executor; "
+                        "the stored request remains authoritative."
+                    ),
+                ),
+                view=self,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception(
+                "could not post pending execution status for %s",
+                self.request.request_id,
+            )
 
     async def _re_prompt(
         self, interaction: discord.Interaction, quote, settings
@@ -146,6 +222,60 @@ class ConfirmTradeView(discord.ui.View):
             embed=notice_embed("Cancelled", "The request was cancelled and never sent."),
             view=self,
         )
+
+
+def _execution_result_embed(request: TradeRequest) -> discord.Embed:
+    """Render the executor-owned result stored on a TradeRequest."""
+    status = request.status
+    request_id = request.request_id
+
+    if status is TradeRequestStatus.FILLED:
+        details = [
+            f"Request `{request_id}` was **FILLED** by the broker.",
+            f"Filled volume: `{request.filled_volume:g}`"
+            if request.filled_volume is not None
+            else "Filled volume: —",
+            f"Fill price: `{request.fill_price:g}`"
+            if request.fill_price is not None
+            else "Fill price: —",
+        ]
+        if request.position_id is not None:
+            details.append(f"Position: `{request.position_id}`")
+        if request.order_ticket is not None:
+            details.append(f"Order ticket: `{request.order_ticket}`")
+        return notice_embed("✅ Execution succeeded", "\n".join(details))
+
+    if status is TradeRequestStatus.PENDING:
+        details = [
+            f"Request `{request_id}` was accepted as a **PENDING** broker order.",
+        ]
+        if request.order_ticket is not None:
+            details.append(f"Order ticket: `{request.order_ticket}`")
+        return notice_embed("✅ Pending order accepted", "\n".join(details))
+
+    if status is TradeRequestStatus.PARTIALLY_FILLED:
+        details = [
+            f"Request `{request_id}` was **PARTIALLY FILLED**.",
+            f"Filled volume: `{request.filled_volume:g}`"
+            if request.filled_volume is not None
+            else "Filled volume: —",
+        ]
+        if request.fill_price is not None:
+            details.append(f"Fill price: `{request.fill_price:g}`")
+        return notice_embed("🟡 Partial execution", "\n".join(details))
+
+    failure_code = (
+        request.failure_code.value
+        if getattr(request.failure_code, "value", None) is not None
+        else request.failure_code
+    )
+    reason = request.failure_message or "No broker/executor failure message was stored."
+    details = [
+        f"Request `{request_id}` ended as **{status.value.upper()}**.",
+        f"Failure code: `{failure_code}`" if failure_code else "Failure code: —",
+        f"Reason: {reason}",
+    ]
+    return notice_embed("❌ Execution failed", "\n".join(details), bad=True)
 
 
 class EnableTradingView(discord.ui.View):

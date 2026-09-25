@@ -96,6 +96,19 @@ class SetupEventRepository(PostgresRepository):
         )
         with self._db.connect() as connection:
             return int(connection.execute(statement).scalar_one())
+    def has_event_type(self, setup_id: str, event_type: Any) -> bool:
+        """Whether this setup already recorded one event of ``event_type``."""
+        from sqlalchemy import exists
+
+        value = getattr(event_type, "value", str(event_type))
+        statement = select(
+            exists().where(
+                self.table.c.setup_id == setup_id,
+                self.table.c.event_type == value,
+            )
+        )
+        with self._db.connect() as connection:
+            return bool(connection.execute(statement).scalar_one())
 
     @staticmethod
     def _to_row(event: SetupEvent) -> dict[str, Any]:

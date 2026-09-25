@@ -867,6 +867,8 @@ class SetupEventType(StrEnum):
     PROFILE_RECLAIM = "profile_reclaim"
     PROFILE_REJECTION = "profile_rejection"
     BREAKOUT_PRESSURE = "breakout_pressure"
+    FAVOURABLE_MOVE_6_TRACKING = "favourable_move_6_tracking"
+    FAVOURABLE_MOVE_6_REACHED = "favourable_move_6_reached"
 
     @property
     def is_watch_event(self) -> bool:
@@ -897,6 +899,8 @@ WATCH_EVENT_TYPES: frozenset[SetupEventType] = frozenset(
         SetupEventType.PROFILE_RECLAIM,
         SetupEventType.PROFILE_REJECTION,
         SetupEventType.BREAKOUT_PRESSURE,
+        SetupEventType.FAVOURABLE_MOVE_6_TRACKING,
+        SetupEventType.FAVOURABLE_MOVE_6_REACHED,
     }
 )
 
