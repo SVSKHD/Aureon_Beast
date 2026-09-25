@@ -1417,6 +1417,132 @@ def assessment_info_line(assessment: Any, *, now: datetime | None = None) -> str
     )
 
 
+async def attach_risk_agent(
+    context: Any,
+    screen: ConfirmationScreen,
+    draft: DraftRequest,
+    quote: QuoteSnapshot,
+    system_state: Any | None,
+) -> Any:
+    """Attach Agent 13 using exposure, today's realised P&L and nearby obstacles."""
+
+    from datetime import UTC
+    from zoneinfo import ZoneInfo
+
+    from aureon.models.agent_decision import RiskVerdict
+    from aureon.risk.risk_agent import RiskAgent, RiskInputs
+
+    symbol_state = symbol_state_of(system_state, draft.symbol)
+    is_buy = draft.order_type.direction.value == "buy"
+    entry = draft.price if draft.price is not None else quote.price_for(is_buy=is_buy)
+
+    try:
+        open_trades = await context.run(context.trades.open_trades)
+    except Exception:  # noqa: BLE001
+        open_trades = []
+
+    local = to_utc(quote.captured_at).astimezone(ZoneInfo(context.config.market_tz))
+    start_local = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_local = start_local + timedelta(days=1)
+    start_utc = start_local.astimezone(UTC)
+    end_utc = end_local.astimezone(UTC)
+    try:
+        closed_today = await context.run(
+            context.trades.closed_in_period, start_utc, end_utc
+        )
+        daily_realized = sum(
+            float(trade.realized_pnl or 0.0)
+            + float(trade.commission or 0.0)
+            + float(trade.swap or 0.0)
+            for trade in closed_today
+        )
+    except Exception:  # noqa: BLE001
+        daily_realized = None
+
+    obstacle = _nearest_context_obstacle(
+        symbol_state,
+        entry=entry,
+        direction=draft.order_type.direction.value,
+    )
+    regime = None
+    if symbol_state is not None:
+        block = getattr(symbol_state, "market_regime", None) or {}
+        if isinstance(block, dict):
+            regime = block.get("regime")
+
+    result = RiskAgent().assess(
+        RiskInputs(
+            direction=draft.order_type.direction,
+            entry_price=entry,
+            primary_target_move=10.0,
+            stop_price=draft.sl,
+            nearest_obstacle_price=obstacle,
+            open_positions=len(open_trades),
+            max_open_positions=None,
+            daily_realized_pnl=daily_realized,
+            daily_loss_limit=None,
+            volatility_regime=str(regime) if regime is not None else None,
+        )
+    )
+
+    detail = [
+        result.verdict.value.upper(),
+        f"target +{result.primary_target_move:g}",
+        f"open {result.open_positions}" if result.open_positions is not None else "open ?",
+        (
+            f"day P&L {result.daily_realized_pnl:+.2f}"
+            if result.daily_realized_pnl is not None
+            else "day P&L ?"
+        ),
+    ]
+    if result.clear_room is not None:
+        detail.append(f"clear room {result.clear_room:g}")
+    screen.fields.append(("Risk agent", " · ".join(detail)))
+
+    if result.verdict is RiskVerdict.VETO:
+        screen.warnings.append(
+            "Risk Agent VETO — " + "; ".join(result.blockers or ("risk rule failed",))
+        )
+    elif result.verdict is RiskVerdict.ALLOW_REDUCED:
+        screen.warnings.append(
+            "Risk Agent suggests reduced exposure — "
+            + "; ".join(result.evidence[-1:] or ("wide risk",))
+        )
+    elif result.verdict is RiskVerdict.INCOMPLETE:
+        screen.info.append(
+            "Risk Agent incomplete — missing " + ", ".join(result.missing)
+        )
+    return result
+
+
+def _nearest_context_obstacle(
+    symbol_state: Any | None, *, entry: float, direction: str
+) -> float | None:
+    if symbol_state is None:
+        return None
+    journey = getattr(symbol_state, "market_journey", None) or {}
+    levels = journey.get("levels") if isinstance(journey, dict) else None
+    if not isinstance(levels, dict):
+        return None
+    candidates = [
+        float(value)
+        for key, value in levels.items()
+        if key in {
+            "asia_high",
+            "asia_low",
+            "previous_day_high",
+            "previous_day_low",
+            "recent_high",
+            "recent_low",
+        }
+        and isinstance(value, (int, float))
+        and ((direction == "buy" and value > entry) or (direction == "sell" and value < entry))
+    ]
+    if not candidates:
+        return None
+    return min(candidates) if direction == "buy" else max(candidates)
+
+
 async def attach_assessment(context, screen, symbol: str) -> None:
     """Add the "last assessment" info line, if there is one (9D-4, §64).
 
@@ -1703,6 +1829,7 @@ def build_live_panel(state: Any) -> LivePanel:
         f"last wick {_event(state.last_wick, 'classification')} at "
         f"{_fmt_at((state.last_wick or {}).get('at'))}",
         *_context_agent_lines(state),
+        *_decision_agent_lines(state),
         f"detections today {state.detections_today}",
         *_mtf_lines(state),
         *_context_lines(state, quote),
@@ -1753,6 +1880,34 @@ def _context_agent_lines(state: Any) -> list[str]:
     )
 
     return [journey_line, regime_line, participation_line]
+
+
+def _decision_agent_lines(state: Any) -> list[str]:
+    """Logical Agents 12/15, rendered from observer-published state."""
+
+    htf = getattr(state, "higher_timeframe_agent", None)
+    if htf is None:
+        htf_line = f"HTF agent {UNKNOWN}"
+    else:
+        cells = " ".join(
+            f"{name}:{bias[:4]}" for name, bias in htf.reads.items()
+        )
+        htf_line = f"HTF agent {htf.state.value} · {cells or UNKNOWN}"
+
+    director = getattr(state, "market_director", None)
+    if director is None:
+        director_line = f"director {UNKNOWN}"
+    else:
+        side = director.direction.value if director.direction is not None else UNKNOWN
+        total = director.supporting + director.opposing + director.neutral
+        director_line = (
+            f"director {director.state.value} {side} · "
+            f"support {director.supporting}/{total}"
+        )
+        if director.trigger_required:
+            director_line += f" · needs {director.trigger_required}"
+
+    return [htf_line, director_line]
 
 
 def _mtf_lines(state: Any) -> list[str]:

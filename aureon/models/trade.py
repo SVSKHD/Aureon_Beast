@@ -21,6 +21,7 @@ from datetime import datetime
 
 from pydantic import Field, model_validator
 
+from aureon.models.agent_decision import GuardianDecision, TradeManagementDecision
 from aureon.models.base import AureonDocument, AureonModel, MarketTime, UtcDatetime, to_utc, utc_now
 from aureon.models.enums import (
     Direction,
@@ -296,6 +297,11 @@ class Trade(AureonDocument):
     deal_ids: tuple[int, ...] = ()
 
     excursion: Excursion = Field(default_factory=Excursion)
+
+    # Agents 14/16 are observational state. They describe how Aureon would protect the
+    # position; broker truth still decides whether and where it actually closes.
+    management: TradeManagementDecision | None = None
+    guardian: GuardianDecision | None = None
 
     detection_id: str | None = None
     link_type: LinkType | None = None

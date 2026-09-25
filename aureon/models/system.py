@@ -12,6 +12,7 @@ from datetime import datetime
 
 from pydantic import Field, model_validator
 
+from aureon.models.agent_decision import DirectorDecision, HigherTimeframeAssessment, RiskAssessment
 from aureon.models.assessment import TrendRead
 from aureon.models.base import AureonDocument, AureonModel, UtcDatetime, to_utc, utc_now
 from aureon.models.enums import (
@@ -159,6 +160,18 @@ class SymbolState(AureonModel):
     mtf: MtfContext | None = Field(
         default=None,
         description="Higher-timeframe reads at the last closed candle (11D).",
+    )
+    higher_timeframe_agent: HigherTimeframeAssessment | None = Field(
+        default=None,
+        description="Agent 12 normalized M15/H1/H4 assessment.",
+    )
+    market_director: DirectorDecision | None = Field(
+        default=None,
+        description="Agent 15 WAIT/WATCH/FORMING/READY decision.",
+    )
+    risk_agent: RiskAssessment | None = Field(
+        default=None,
+        description="Agent 13 pre-trade risk read when account context is available.",
     )
 
     # ── Session context (§18) ─────────────────────────────────────────────────
