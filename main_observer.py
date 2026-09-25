@@ -46,6 +46,7 @@ from datetime import datetime, timedelta
 from aureon.agents.base_agent import BaseAgent
 from aureon.agents.breakout_agent import BreakoutAgent
 from aureon.agents.ema_cross_agent import EmaCrossAgent
+from aureon.agents.ema_rsi_eligibility_agent import EmaRsiEligibilityAgent
 from aureon.agents.liquidity_agent import LiquidityAgent
 from aureon.agents.market_journey_agent import MarketJourneyAgent, market_journey_snapshot
 from aureon.agents.market_regime_agent import MarketRegimeAgent, classify_market_regime
@@ -2118,6 +2119,12 @@ def default_agents(
         )
     return [
         EmaCrossAgent(fast_period=config.ema_fast, slow_period=config.ema_slow),
+        EmaRsiEligibilityAgent(
+            fast_period=config.ema_fast,
+            slow_period=config.ema_slow,
+            long_below=config.ema_rsi_long_below,
+            short_above=config.ema_rsi_short_above,
+        ),
         RsiAgent(),
         SessionTrendAgent(
             timeframe=timeframe, point=tuning.point, flat_points=tuning.flat_points
