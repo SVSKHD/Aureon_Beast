@@ -78,6 +78,9 @@ class TrainingMemoryReadAdapter:
     def status_for(self, symbol: str, market_date: str) -> Any:
         return self._repo.status_for(symbol, market_date)
 
+    def latest_status(self, symbol: str) -> Any:
+        return self._repo.latest_status(symbol)
+
     def examples_for(self, symbol: str, market_date: str) -> list[Any]:
         return self._repo.examples_for(symbol, market_date)
 
