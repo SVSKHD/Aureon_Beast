@@ -39,6 +39,18 @@ class TrainingMemoryRepository(PostgresRepository):
             return None
         return DailyTrainingStatus.model_validate(self._status_dict(rows[0]))
 
+    def latest_status(self, symbol: str) -> DailyTrainingStatus | None:
+        statement = (
+            select(self.statuses)
+            .where(self.statuses.c.symbol == symbol.upper())
+            .order_by(self.statuses.c.market_date.desc())
+            .limit(1)
+        )
+        rows = self._rows(statement)
+        if not rows:
+            return None
+        return DailyTrainingStatus.model_validate(self._status_dict(rows[0]))
+
     def examples_for(self, symbol: str, market_date: str) -> list[TrainingExample]:
         statement = (
             select(self.examples)
