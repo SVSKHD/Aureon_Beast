@@ -1451,7 +1451,10 @@ async def attach_risk_agent(
             context.trades.closed_in_period, start_utc, end_utc
         )
         daily_realized = sum(
-            float(trade.realized_pnl or 0.0) for trade in closed_today
+            float(trade.realized_pnl or 0.0)
+            + float(trade.commission or 0.0)
+            + float(trade.swap or 0.0)
+            for trade in closed_today
         )
     except Exception:  # noqa: BLE001
         daily_realized = None
@@ -1475,7 +1478,7 @@ async def attach_risk_agent(
             stop_price=draft.sl,
             nearest_obstacle_price=obstacle,
             open_positions=len(open_trades),
-            max_open_positions=1,
+            max_open_positions=None,
             daily_realized_pnl=daily_realized,
             daily_loss_limit=None,
             volatility_regime=str(regime) if regime is not None else None,
