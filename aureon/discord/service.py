@@ -1423,7 +1423,7 @@ async def attach_risk_agent(
     draft: DraftRequest,
     quote: QuoteSnapshot,
     system_state: Any | None,
-) -> None:
+) -> Any:
     """Attach Agent 13 using exposure, today's realised P&L and nearby obstacles."""
 
     from datetime import UTC
@@ -1509,6 +1509,7 @@ async def attach_risk_agent(
         screen.info.append(
             "Risk Agent incomplete — missing " + ", ".join(result.missing)
         )
+    return result
 
 
 def _nearest_context_obstacle(
