@@ -143,12 +143,15 @@ Run a chronological expanding-window backtest:
 python scripts/backtest_model.py --symbol XAUUSD
 ```
 
-After reviewing the walk-forward results, explicitly activate the next training run in
+Backtest that exact candidate artifact, then explicitly activate the same model id in
 shadow mode:
 
 ```bash
-python scripts/train_model.py --symbol XAUUSD --activate-shadow
+python scripts/backtest_model.py --symbol XAUUSD --model-id <MODEL_ID>
+python scripts/activate_shadow_model.py --model-id <MODEL_ID>
 ```
+
+Activation is refused unless that exact model id has a completed walk-forward backtest.
 
 A shadow model predicts only when a setup reaches CONFIRMED. It writes a
 `model_predictions` row and has no path to trade requests, the executor, MT5, SL/TP, or
