@@ -95,3 +95,30 @@ class DailyTrainingStatus(AureonDocument):
 
     by_timeframe: tuple[TrainingTimeframeStatus, ...] = ()
     generated_at: UtcDatetime
+
+class WeeklyAgentMovementRow(AureonModel):
+    """One detector/timeframe row in the weekly movement-ladder report."""
+
+    agent_name: str
+    timeframe: Timeframe
+    decisions: int = Field(default=0, ge=0)
+    aligned_decisions: int = Field(default=0, ge=0)
+    opposed_decisions: int = Field(default=0, ge=0)
+    reached_six: int = Field(default=0, ge=0)
+    reached_twenty: int = Field(default=0, ge=0)
+    reached_forty: int = Field(default=0, ge=0)
+    max_move_available: int = Field(default=0, ge=0)
+    median_max_move_price: float | None = Field(default=None, ge=0)
+    maximum_move_price: float | None = Field(default=None, ge=0)
+    median_extension_after_six_price: float | None = Field(default=None, ge=0)
+
+
+class WeeklyTrainingReport(AureonModel):
+    symbol: str
+    iso_year: int
+    iso_week: int
+    start_market_date: str
+    end_market_date: str
+    examples: int = Field(default=0, ge=0)
+    rows: tuple[WeeklyAgentMovementRow, ...] = ()
+
