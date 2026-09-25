@@ -1464,7 +1464,7 @@ def default_agents(
     symbol: str | None = None,
     point: float | None = None,
 ) -> list[BaseAgent]:
-    """The full Part A + Part B roster.
+    """The full production roster, including context agents 9-11.
 
     The liquidity and breakout agents are handed **the same** ``LevelTracker``
     instance (§15, §17). Two trackers would be two implementations of where a level
@@ -1528,6 +1528,9 @@ def default_agents(
             level_tracker=levels,
             min_close_beyond_points=tuning.min_close_beyond_points,
         ),
+        MarketJourneyAgent(point=tuning.point),
+        MarketRegimeAgent(point=tuning.point),
+        VolumeParticipationAgent(timeframe=timeframe, point=tuning.point),
     ]
 
 
