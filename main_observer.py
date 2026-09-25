@@ -682,6 +682,8 @@ class Observer:
             expected_delay_ms=self.config.ctrader_expected_delay_ms,
             max_valid_delay_ms=self.config.ctrader_max_valid_delay_ms,
             max_price_drift=self.config.ctrader_max_price_drift,
+            min_capture_gap=self.config.ctrader_min_capture_gap,
+            max_capture_gap=self.config.ctrader_max_capture_gap,
             source_detection_id=(
                 source_detection.detection_id if source_detection is not None else None
             ),
