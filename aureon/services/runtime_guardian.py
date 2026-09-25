@@ -107,6 +107,60 @@ class RuntimeGuardian:
             run_preflight=run_preflight,
         )
 
+    def diagnostics(self) -> dict[str, Any]:
+        """Return the effective guardian state without changing git or restarting anything."""
+        branch = ""
+        dirty = ""
+        local = ""
+        remote = ""
+        fetch_error = ""
+        if (self.repo_root / ".git").exists():
+            branch = self._git("branch", "--show-current", check=False).strip()
+            dirty = self._git("status", "--porcelain", check=False).strip()
+            local = self._git("rev-parse", "HEAD", check=False).strip()
+            remote = self._git("rev-parse", "origin/main", check=False).strip()
+            fetch = self._run_git("fetch", "--dry-run", "origin", "main", check=False)
+            if fetch.returncode != 0:
+                fetch_error = _one_line(fetch.stderr)
+
+        return {
+            "auto_update_main": self.auto_update_main,
+            "auto_restart_stale_feed": self.auto_restart_stale_feed,
+            "poll_seconds": self.poll_seconds,
+            "stale_restart_seconds": self.stale_restart_seconds,
+            "repo_root": str(self.repo_root),
+            "git_checkout": (self.repo_root / ".git").exists(),
+            "branch": branch,
+            "working_tree_clean": not bool(dirty),
+            "dirty_entries": dirty.splitlines()[:20] if dirty else [],
+            "local_sha": local,
+            "origin_main_sha": remote,
+            "update_pending": bool(local and remote and local != remote),
+            "fetch_error": fetch_error,
+        }
+
+    def log_startup_diagnostics(self) -> None:
+        """Log the conditions that decide whether automatic updates are allowed."""
+        status = self.diagnostics()
+        log.info(
+            "guardian status: auto_update_main=%s auto_restart_stale_feed=%s "
+            "branch=%s clean=%s local=%s origin_main=%s update_pending=%s",
+            status["auto_update_main"],
+            status["auto_restart_stale_feed"],
+            status["branch"] or "unknown",
+            status["working_tree_clean"],
+            str(status["local_sha"])[:12] or "unknown",
+            str(status["origin_main_sha"])[:12] or "unknown",
+            status["update_pending"],
+        )
+        if status["dirty_entries"]:
+            log.warning(
+                "guardian auto-update blocked by local changes: %s",
+                " | ".join(status["dirty_entries"]),
+            )
+        if status["fetch_error"]:
+            log.warning("guardian git fetch probe failed: %s", status["fetch_error"])
+
     def poll(self) -> RestartRequest | None:
         """Return a restart request at most once per configured poll interval."""
         now_mono = time.monotonic()
@@ -381,6 +435,7 @@ def build_runtime_guardian(
         guardian.poll_seconds,
         guardian.stale_restart_seconds / 3600.0,
     )
+    guardian.log_startup_diagnostics()
     return guardian
 
 
