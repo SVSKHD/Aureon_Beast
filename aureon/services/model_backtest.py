@@ -186,8 +186,8 @@ class WalkForwardBacktester:
             end_market_date=dates[-1],
             folds=tuple(folds),
             aggregate_metrics=aggregate,
-            out_of_sample_predictions=sum(
-                metric.samples for metric in aggregate.values()
+            out_of_sample_predictions=(
+                aggregate["six"].samples if "six" in aggregate else 0
             ),
             failure_message=(
                 None
