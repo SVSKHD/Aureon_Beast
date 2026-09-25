@@ -79,9 +79,14 @@ def upgrade() -> None:
         sa.Column("generated_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.create_index(
-        "ix_daily_training_status_symbol_date",
+        "ix_daily_training_status_contract",
         "daily_training_status",
-        ["symbol", "market_date"],
+        [
+            "symbol",
+            "market_date",
+            "feature_schema_version",
+            "label_schema_version",
+        ],
         unique=True,
     )
 
