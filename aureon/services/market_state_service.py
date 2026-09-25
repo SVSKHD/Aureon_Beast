@@ -135,6 +135,35 @@ class WeeklySchedule:
 
 
 @dataclass(frozen=True)
+class AlwaysOpenSchedule:
+    """Schedule for broker-traded instruments expected to quote through weekends.
+
+    Broker trade_mode and tick freshness still decide whether the symbol is actually usable.
+    This schedule only prevents a generic gold/FX calendar from closing crypto by itself.
+    """
+
+    preopen_minutes: float = 0.0
+
+    def is_open(self, moment: datetime) -> bool:
+        return True
+
+    def is_preopen(self, moment: datetime) -> bool:
+        return False
+
+    def next_open(self, moment: datetime) -> datetime:
+        return to_utc(moment)
+
+    def next_close(self, moment: datetime) -> datetime:
+        return to_utc(moment) + timedelta(days=3650)
+
+    def spans_a_close(self, start: datetime, end: datetime) -> bool:
+        return False
+
+    def close_spanned_by(self, start: datetime, end: datetime) -> datetime | None:
+        return None
+
+
+@dataclass(frozen=True)
 class MarketStateResult:
     """The classification plus why, so a status embed can explain itself."""
 
@@ -200,10 +229,12 @@ class MarketStateService:
         provider: object,
         *,
         schedule: WeeklySchedule | None = None,
+        schedule_resolver: object | None = None,
         stale_tick_seconds: float = DEFAULT_STALE_TICK_SECONDS,
     ) -> None:
         self.provider = provider
         self.schedule = schedule or WeeklySchedule()
+        self.schedule_resolver = schedule_resolver
         self.stale_tick_seconds = stale_tick_seconds
 
     def state_for(self, symbol: str, *, now: datetime | None = None) -> MarketStateResult:
@@ -234,10 +265,17 @@ class MarketStateService:
             except Exception:  # noqa: BLE001
                 last_tick = None
 
+        schedule = self.schedule
+        if callable(self.schedule_resolver):
+            try:
+                schedule = self.schedule_resolver(symbol)
+            except Exception:  # noqa: BLE001 - fall back to the configured default
+                schedule = self.schedule
+
         return classify_market_state(
             now=moment,
             symbol_info=info,
             last_tick_at=last_tick,
-            schedule=self.schedule,
+            schedule=schedule,
             stale_tick_seconds=self.stale_tick_seconds,
         )

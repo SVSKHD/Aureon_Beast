@@ -32,6 +32,7 @@ from aureon.models.enums import (
 from aureon.models.market import QuoteSnapshot
 from aureon.models.mtf import MtfContext
 from aureon.models.profile import ProfileSummary, VolatilityContext
+from aureon.models.symbol_intelligence import SymbolIntelligenceReport
 
 # §84 defaults; overridable via config. 46s old must read STALE at 45s.
 DEFAULT_STALE_AFTER_SECONDS = 45.0
@@ -275,6 +276,10 @@ class SystemState(AureonDocument):
     agent_health: dict[str, AgentHealth] = Field(
         default_factory=dict,
         description="Latest health of every Agent Highway bridge, scoped by symbol/timeframe.",
+    )
+    symbol_intelligence: SymbolIntelligenceReport | None = Field(
+        default=None,
+        description="Agent 18 symbol classes, approved tuning provenance and active server symbols.",
     )
     trading_enabled: bool | None = Field(
         default=None, description="Mirror of settings/execution, for display only."
