@@ -49,7 +49,9 @@ from datetime import datetime, timedelta
 from aureon.execution.broker_interface import BrokerInterface
 from aureon.models.base import MarketTime, to_utc, utc_now
 from aureon.models.broker import BrokerDeal, BrokerPosition
-from aureon.models.enums import TradeRequestStatus, TradeSource, TradeStatus
+from aureon.management.profit_guardian import ProfitGuardianAgent
+from aureon.management.trade_manager import TradeManagementAgent
+from aureon.models.enums import Direction, TradeRequestStatus, TradeSource, TradeStatus, TrendBias
 from aureon.models.trade import Trade
 from aureon.positions.deal_reconciler import PositionOutcome, summarise_position
 from aureon.positions.excursion_tracker import ExcursionTracker
@@ -110,6 +112,7 @@ class PositionMonitor:
         before_poll: object | None = None,
         parked: object | None = None,
         pace: object | None = None,
+        market_context_provider: object | None = None,
         deal_overlap_seconds: float = DEAL_OVERLAP_SECONDS,
     ) -> None:
         self.trades = trades
@@ -130,7 +133,13 @@ class PositionMonitor:
         self.parked = parked
         #: Given the awake cadence, the wait before the next iteration (11B).
         self.pace = pace
+        self.market_context_provider = market_context_provider
         self.deal_overlap_seconds = deal_overlap_seconds
+
+        # Agents 14 and 16 never call the broker themselves. The monitor supplies quotes
+        # and persists their proposed management state; execution remains a separate boundary.
+        self.trade_manager = TradeManagementAgent(primary_target_move=10.0)
+        self.profit_guardian = ProfitGuardianAgent(primary_target_move=10.0)
 
         #: symbol -> tick, from the broker's own spec. Cached: it does not change within a
         #: session, and one lookup per new symbol is cheaper than one per poll.
@@ -516,6 +525,113 @@ class PositionMonitor:
             if updated is not None:
                 self.trades.update_excursion(trade_id, updated)
                 result.excursions_updated += 1
+            self._update_management_state(trade_id, position, quote)
+
+    def _update_management_state(self, trade_id: str, position, quote) -> None:
+        """Run Agents 14/16 for an Aureon-owned position from broker truth + observer context."""
+
+        try:
+            trade = self.trades.get(trade_id)
+        except Exception:  # noqa: BLE001
+            log.exception("could not load %s for management", trade_id)
+            return
+        if trade is None or trade.source is not TradeSource.AUREON:
+            return
+
+        current_price = quote.bid if trade.direction is Direction.BUY else quote.ask
+        excursion = self.excursions.current(trade_id) or trade.excursion
+        peak_price = excursion.mfe_price if excursion.mfe_price is not None else current_price
+
+        management = self.trade_manager.assess(
+            direction=trade.direction,
+            entry_price=trade.open_price,
+            current_price=current_price,
+            peak_price=peak_price,
+        )
+
+        guardian = None
+        if management.target_reached:
+            guardian = self.profit_guardian.assess(
+                direction=trade.direction,
+                entry_price=trade.open_price,
+                current_price=current_price,
+                peak_price=peak_price,
+                market_health=self._market_health(trade.symbol, trade.direction),
+            )
+
+        try:
+            self.trades.update_management(
+                trade_id,
+                management=management,
+                guardian=guardian,
+            )
+        except Exception:  # noqa: BLE001 - management context must never stop reconciliation
+            log.exception("could not persist management state for %s", trade_id)
+
+    def _market_health(self, symbol: str, direction: Direction) -> dict[str, bool | None]:
+        """Translate observer state into the Guardian's named health checks.
+
+        Missing observer state stays None. It is not counted as healthy or unhealthy.
+        """
+
+        if self.market_context_provider is None:
+            return {}
+        try:
+            state = self.market_context_provider(symbol)  # type: ignore[operator]
+        except Exception:  # noqa: BLE001
+            log.debug("could not read market context for %s", symbol, exc_info=True)
+            return {}
+        if state is None:
+            return {}
+
+        ema = None
+        if getattr(state, "ema_fast", None) is not None and getattr(state, "ema_slow", None) is not None:
+            ema = (
+                state.ema_fast > state.ema_slow
+                if direction is Direction.BUY
+                else state.ema_fast < state.ema_slow
+            )
+
+        session = getattr(state, "session_live_trend", None)
+        session_ok = None
+        if session in {"up", "down"}:
+            session_ok = (
+                session == "up" if direction is Direction.BUY else session == "down"
+            )
+
+        htf = getattr(state, "higher_timeframe_agent", None)
+        htf_ok = None
+        if htf is not None and htf.dominant_bias is not TrendBias.SIDEWAYS:
+            htf_ok = (
+                htf.dominant_bias is TrendBias.BULLISH
+                if direction is Direction.BUY
+                else htf.dominant_bias is TrendBias.BEARISH
+            )
+
+        regime = getattr(state, "market_regime", None) or {}
+        regime_name = regime.get("regime") if isinstance(regime, dict) else None
+        regime_ok = None if regime_name is None else regime_name not in {
+            "volatile_chop",
+            "structurally_messy",
+        }
+
+        participation = getattr(state, "volume_participation", None) or {}
+        impulse = participation.get("price_impulse") if isinstance(participation, dict) else None
+        participation_ok = None
+        if impulse in {"bullish", "bearish"}:
+            participation_ok = (
+                impulse == "bullish"
+                if direction is Direction.BUY
+                else impulse == "bearish"
+            )
+
+        return {
+            "ema": ema,
+            "session": session_ok,
+            "htf": htf_ok,
+            "regime": regime_ok,
+            "participation": participation_ok,
+        }
 
     def reconstruct_excursions(
         self, trade: Trade, candles: list, *, until: datetime | None = None
