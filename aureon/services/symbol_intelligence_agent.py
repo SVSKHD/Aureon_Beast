@@ -65,6 +65,19 @@ class SymbolIntelligenceAgent:
             return InstrumentClass.FOREX
         return InstrumentClass.OTHER
 
+    def market_schedule(self, symbol: str):
+        """Choose the market calendar by instrument family.
+
+        Crypto is treated as broker/tick-driven 24x7. Metals, FX, indices and energy
+        retain Aureon's existing weekly schedule unless a future profile says otherwise.
+        """
+
+        from aureon.services.market_state_service import AlwaysOpenSchedule, WeeklySchedule
+
+        if self.classify(symbol) is InstrumentClass.CRYPTO:
+            return AlwaysOpenSchedule()
+        return WeeklySchedule()
+
     def resolve_tuning(self, symbol: str, *, point: float | None = None):
         """Return the approved tuning selected for this symbol.
 
