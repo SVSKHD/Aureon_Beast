@@ -41,6 +41,7 @@ spec cannot be read is left unmeasured rather than measured wrongly.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 from dataclasses import dataclass, field
@@ -52,7 +53,7 @@ from aureon.models.broker import BrokerDeal, BrokerPosition
 from aureon.management.profit_guardian import ProfitGuardianAgent
 from aureon.management.trade_manager import TradeManagementAgent
 from aureon.models.enums import Direction, TradeRequestStatus, TradeSource, TradeStatus, TrendBias
-from aureon.models.trade import Trade
+from aureon.models.trade import Trade, TradeManagementEvent
 from aureon.positions.deal_reconciler import PositionOutcome, summarise_position
 from aureon.positions.excursion_tracker import ExcursionTracker
 from aureon.positions.pending_order_monitor import PendingOrderMonitor
@@ -426,6 +427,11 @@ class PositionMonitor:
             updates=updates,
             reason=f"closed by {outcome.close_reason}",
         )
+        self._append_final_management_event(
+            trade,
+            outcome=outcome,
+            final_excursion=final,
+        )
         result.closed.append(trade.trade_id)
         log.info(
             "trade %s CLOSED at %s (%s), P&L %.2f",
@@ -560,13 +566,132 @@ class PositionMonitor:
             )
 
         try:
+            changed = self._management_changed(
+                trade,
+                management=management,
+                guardian=guardian,
+            )
             self.trades.update_management(
                 trade_id,
                 management=management,
                 guardian=guardian,
             )
+            if changed:
+                self._append_management_event(
+                    trade_id,
+                    observed_at=quote.captured_at,
+                    management=management,
+                    guardian=guardian,
+                )
         except Exception:  # noqa: BLE001 - management context must never stop reconciliation
             log.exception("could not persist management state for %s", trade_id)
+
+    @staticmethod
+    def _decision_signature(value: object | None) -> tuple:
+        if value is None:
+            return ()
+        action = getattr(getattr(value, "action", None), "value", getattr(value, "action", None))
+        return (
+            action,
+            round(float(getattr(value, "protected_move", 0.0) or 0.0), 2),
+            round(float(getattr(value, "trail_price", 0.0) or 0.0), 2),
+            bool(getattr(value, "active", False)),
+            bool(getattr(value, "emergency", False)),
+        )
+
+    def _management_changed(
+        self,
+        trade: Trade,
+        *,
+        management: object | None,
+        guardian: object | None,
+    ) -> bool:
+        """Record only meaningful action/protection changes, not every quote poll."""
+        return (
+            self._decision_signature(trade.management)
+            != self._decision_signature(management)
+            or self._decision_signature(trade.guardian)
+            != self._decision_signature(guardian)
+        )
+
+    def _append_management_event(
+        self,
+        trade_id: str,
+        *,
+        observed_at: datetime,
+        management: object | None,
+        guardian: object | None,
+    ) -> None:
+        writer = getattr(self.trades, "append_management_event", None)
+        if not callable(writer):
+            return
+        decision = guardian if guardian is not None and getattr(guardian, "active", False) else management
+        if decision is None:
+            return
+        action = getattr(getattr(decision, "action", None), "value", getattr(decision, "action", "unknown"))
+        source = "profit_guardian" if decision is guardian else "trade_manager"
+        protected = getattr(decision, "protected_move", None)
+        trail_price = getattr(decision, "trail_price", None)
+        fingerprint = (
+            f"{trade_id}|{source}|{action}|{observed_at.isoformat()}|"
+            f"{protected}|{trail_price}"
+        )
+        event = TradeManagementEvent(
+            event_id=hashlib.sha256(fingerprint.encode("utf-8")).hexdigest(),
+            trade_id=trade_id,
+            observed_at=observed_at,
+            source=source,
+            action=str(action),
+            current_move=getattr(decision, "current_move", None),
+            peak_move=getattr(decision, "peak_move", None),
+            giveback=getattr(decision, "giveback", None),
+            protected_move=protected,
+            trail_price=trail_price,
+            continuation_score=getattr(decision, "continuation_score", None),
+            continuation_total=getattr(decision, "continuation_total", None),
+        )
+        writer(event)
+
+    def _append_final_management_event(
+        self,
+        trade: Trade,
+        *,
+        outcome: PositionOutcome,
+        final_excursion: object,
+    ) -> None:
+        writer = getattr(self.trades, "append_management_event", None)
+        if not callable(writer) or outcome.close_price is None or not outcome.exit_deals:
+            return
+        observed_at = outcome.exit_deals[-1].executed_at
+        realized_move = (
+            float(outcome.close_price) - trade.open_price
+        ) * trade.direction.sign
+        mfe_price = getattr(final_excursion, "mfe_price", None)
+        peak_move = (
+            max(0.0, (float(mfe_price) - trade.open_price) * trade.direction.sign)
+            if mfe_price is not None
+            else max(0.0, realized_move)
+        )
+        giveback = max(0.0, peak_move - realized_move)
+        fingerprint = (
+            f"{trade.trade_id}|exit|{observed_at.isoformat()}|"
+            f"{outcome.close_price}|{outcome.close_reason}"
+        )
+        writer(
+            TradeManagementEvent(
+                event_id=hashlib.sha256(fingerprint.encode("utf-8")).hexdigest(),
+                trade_id=trade.trade_id,
+                observed_at=observed_at,
+                source="broker_reconciliation",
+                action="exit_observed",
+                current_move=realized_move,
+                peak_move=peak_move,
+                giveback=giveback,
+                exit_price=float(outcome.close_price),
+                realized_move=realized_move,
+                exit_reason=outcome.close_reason,
+            )
+        )
 
     def _market_health(self, symbol: str, direction: Direction) -> dict[str, bool | None]:
         """Translate observer state into the Guardian's named health checks.
