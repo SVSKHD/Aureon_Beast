@@ -16,6 +16,7 @@ def adaptive_profit_plan(
     peak_move: float,
     threshold: float = 0.50,
     minimum_secure_move: float = 5.0,
+    minimum_lock_move: float = 4.0,
 ) -> dict[str, Any]:
     """Return a transparent protection/runner plan from +5/+10/+20/+30/+40 outputs."""
     targets = (5, 10, 20, 30, 40)
@@ -26,7 +27,7 @@ def adaptive_profit_plan(
             recommended = target
 
     secure_ready = peak_move >= minimum_secure_move
-    protected_floor = minimum_secure_move if secure_ready else 0.0
+    protected_floor = minimum_lock_move if secure_ready else 0.0
 
     if recommended >= 40:
         mode = "LONG_HOLD_CANDIDATE"
@@ -41,7 +42,7 @@ def adaptive_profit_plan(
     else:
         mode = "NO_MODEL_EDGE"
 
-    # Once +5 has been available, the plan never recommends giving the whole
+    # Once +5 has been available, the plan recommends trailing rather than a fixed TP; it never recommends giving the whole
     # move back. The actual executable stop still belongs to Agent 16 and the
     # management execution safety gates.
     if secure_ready and current_move < minimum_secure_move:
@@ -56,8 +57,10 @@ def adaptive_profit_plan(
         "action": action,
         "recommended_target": recommended,
         "minimum_secure_move": minimum_secure_move,
+        "minimum_lock_move": minimum_lock_move,
         "secure_ready": secure_ready,
         "protected_floor_recommendation": protected_floor,
+        "trailing_active": secure_ready,
         "long_hold_candidate": recommended >= 40,
         "probabilities": {str(target): probabilities.get(str(target)) for target in targets},
         "note": (
