@@ -98,6 +98,7 @@ DEFAULT_SERVICES: tuple[ServiceSpec, ...] = (
     ServiceSpec("executor", ("main_executor.py",)),
     ServiceSpec("discord", ("main_discord.py",)),
     ServiceSpec("review", ("main_review.py", "watch")),
+    ServiceSpec("learning", ("main_learning.py",)),
 )
 
 SERVICE_NAMES: tuple[str, ...] = tuple(spec.name for spec in DEFAULT_SERVICES)
