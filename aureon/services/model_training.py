@@ -50,7 +50,7 @@ def target_value(example: TrainingExample, target: str) -> bool | None:
     return bool(mapping[target])
 
 
-def _metric_payload(labels: list[int], probabilities: list[float]) -> dict[str, Any]:
+def prediction_metrics(labels: list[int], probabilities: list[float]) -> dict[str, Any]:
     if not probabilities:
         return {
             "samples": len(labels),
@@ -175,7 +175,7 @@ def fit_bundle(
             models[target] = model
             probabilities = [float(model.probability(vector)) for vector in target_vectors]
         metrics[target] = TargetMetrics.model_validate(
-            _metric_payload(labels, probabilities)
+            prediction_metrics(labels, probabilities)
         )
 
     if "clean_10" not in models:
