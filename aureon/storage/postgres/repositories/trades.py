@@ -33,7 +33,7 @@ from aureon.models.enums import (
     TransitionError,
     assert_trade_transition,
 )
-from aureon.models.trade import Trade
+from aureon.models.trade import Trade, TradeManagementEvent
 from aureon.storage.postgres import tables
 from aureon.storage.postgres.repositories.audit import AuditRepository
 from aureon.storage.postgres.repositories.base import PostgresRepository
@@ -73,9 +73,10 @@ def trade_id_for(position_id: int, *, account_scope: str) -> str:
 
 
 class TradeRepository(PostgresRepository):
-    """Reads and writes ``trades``."""
+    """Reads and writes ``trades`` plus append-only management history."""
 
     table = tables.Trade.__table__
+    management_events_table = tables.TradeManagementEvent.__table__
 
     def __init__(self, database: Any, *, account_scope: str = "primary") -> None:
         super().__init__(database)
@@ -192,6 +193,73 @@ class TradeRepository(PostgresRepository):
             updated = current.model_copy(update={"excursion": excursion})
             self._upsert(self._to_row(updated), connection=connection)
             return updated
+
+    def update_management(
+        self,
+        trade_id: str,
+        *,
+        management: object | None = None,
+        guardian: object | None = None,
+    ) -> Trade | None:
+        """Persist current Agent14/16 state without changing broker truth."""
+        with self._db.transaction() as connection:
+            row = self._locked(trade_id, connection)
+            if row is None:
+                return None
+            current = Trade.model_validate(self._to_model_dict(row))
+            if current.status is TradeStatus.CLOSED:
+                return current
+            updates: dict[str, Any] = {}
+            if management is not None:
+                updates["management"] = management
+            if guardian is not None:
+                updates["guardian"] = guardian
+            if not updates:
+                return current
+            updated = current.model_copy(update=updates)
+            self._upsert(self._to_row(updated), connection=connection)
+            return updated
+
+    def append_management_event(
+        self,
+        event: TradeManagementEvent,
+    ) -> TradeManagementEvent:
+        """Persist one idempotent, append-only management observation."""
+        payload = event.model_dump(mode="json")
+        self._upsert(
+            {
+                "event_id": event.event_id,
+                "schema_version": event.schema_version,
+                "trade_id": event.trade_id,
+                "observed_at": event.observed_at,
+                "source": event.source,
+                "action": event.action,
+                "current_move": event.current_move,
+                "peak_move": event.peak_move,
+                "giveback": event.giveback,
+                "protected_move": event.protected_move,
+                "trail_price": event.trail_price,
+                "continuation_score": event.continuation_score,
+                "continuation_total": event.continuation_total,
+                "exit_price": event.exit_price,
+                "realized_move": event.realized_move,
+                "exit_reason": event.exit_reason,
+            },
+            table=self.management_events_table,
+        )
+        _ = payload
+        return event
+
+    def management_events(self, trade_id: str) -> list[TradeManagementEvent]:
+        statement = (
+            select(self.management_events_table)
+            .where(self.management_events_table.c.trade_id == trade_id)
+            .order_by(self.management_events_table.c.observed_at)
+        )
+        return [
+            TradeManagementEvent.model_validate(dict(row))
+            for row in self._rows(statement)
+        ]
 
     # ── Reading ───────────────────────────────────────────────────────────────
 
@@ -316,6 +384,8 @@ class TradeRepository(PostgresRepository):
             "link_type": trade.link_type.value if trade.link_type else None,
             "deal_ids": {"items": list(trade.deal_ids)},
             "excursion": payload["excursion"],
+            "management": payload.get("management"),
+            "guardian": payload.get("guardian"),
             "last_reconciled_at": trade.last_reconciled_at,
             "last_synced_at": trade.last_synced_at,
         }
