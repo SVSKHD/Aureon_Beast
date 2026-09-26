@@ -373,3 +373,120 @@ def predict_v1_artifact(
 # backtester and trainer use exactly the same target-model semantics.
 fit_v1_target = _fit_target
 predict_v1_target = _predict_target
+
+
+def score_v1_model(
+    model: ModelRegistryEntry,
+    examples: list[CanonicalTrainingExample],
+    *,
+    decision_threshold: float = 0.55,
+) -> dict[str, Any]:
+    """Score a frozen registry model on an already-resolved chronological range.
+
+    No fitting occurs here. This is the direct Champion/Challenger holdout path used
+    by main_backtest.py.
+    """
+    if not 0.0 <= decision_threshold <= 1.0:
+        raise ValueError("decision_threshold must be between 0 and 1")
+    usable = [
+        example
+        for example in examples
+        if example.feature_schema == FEATURE_SCHEMA_V1
+        and example.label_schema == LABEL_SCHEMA_V1
+        and example.symbol.upper() == model.symbol.upper()
+    ]
+    usable.sort(key=lambda one: (one.features.timestamp, one.setup_id))
+    if not usable:
+        return {
+            "status": "no_examples",
+            "model_id": model.model_id,
+            "samples": 0,
+            "metrics": {},
+            "scored_rows": [],
+        }
+
+    probabilities_by_target: dict[str, list[float]] = {
+        target: [] for target in V1_TARGETS
+    }
+    labels_by_target: dict[str, list[int]] = {
+        target: [] for target in V1_TARGETS
+    }
+    scored_rows: list[dict[str, Any]] = []
+
+    for example in usable:
+        probabilities = predict_v1_artifact(model, example.features)
+        row = {
+            "setup_id": example.setup_id,
+            "at": example.features.timestamp.isoformat(),
+            "direction": example.features.direction.value,
+            "probabilities": probabilities,
+            "actual": {
+                target: target_value(example, target)
+                for target in V1_TARGETS
+            },
+            "mae_before_10": example.outcome.mae_before_10,
+            "max_favourable_move": example.outcome.max_favourable_move,
+            "max_adverse_move": example.outcome.max_adverse_move,
+        }
+        clean = probabilities.get("clean_10")
+        row["selected_clean"] = (
+            clean is not None and clean >= decision_threshold
+        )
+        scored_rows.append(row)
+        for target in V1_TARGETS:
+            probability = probabilities.get(target)
+            if probability is None:
+                continue
+            probabilities_by_target[target].append(float(probability))
+            labels_by_target[target].append(
+                1 if target_value(example, target) else 0
+            )
+
+    metrics: dict[str, Any] = {}
+    for target in V1_TARGETS:
+        labels = labels_by_target[target]
+        probs = probabilities_by_target[target]
+        if not labels:
+            continue
+        target_examples = [
+            example
+            for example in usable
+            if target_value(example, target)
+        ]
+        data = binary_metrics(labels, probs)
+        data["average_mae"] = (
+            sum(example.outcome.max_adverse_move for example in target_examples)
+            / len(target_examples)
+            if target_examples
+            else None
+        )
+        data["average_mfe"] = (
+            sum(example.outcome.max_favourable_move for example in target_examples)
+            / len(target_examples)
+            if target_examples
+            else None
+        )
+        metrics[target] = data
+
+    selected = [row for row in scored_rows if row["selected_clean"]]
+    selected_clean = sum(
+        bool(row["actual"]["clean_10"]) for row in selected
+    )
+    return {
+        "status": "tested_registry_model",
+        "historical_reference_only": True,
+        "model_id": model.model_id,
+        "model_status": model.status,
+        "algorithm": model.algorithm,
+        "feature_schema": model.feature_schema_version,
+        "label_schema": model.label_schema_version,
+        "samples": len(usable),
+        "decision_threshold": decision_threshold,
+        "metrics": metrics,
+        "selected_clean_setups": len(selected),
+        "selected_clean_wins": selected_clean,
+        "selected_clean_precision": (
+            selected_clean / len(selected) if selected else None
+        ),
+        "scored_rows": scored_rows,
+    }
