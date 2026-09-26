@@ -160,8 +160,13 @@ class Observer:
         self.alerts = (
             AlertWatcher(alert_repository) if alert_repository is not None else None
         )
-        # Research-only predictor. Wired by build_observer; tests may leave it absent.
+        # ML intelligence is downstream of deterministic setup analysis. Champion and
+        # Shadow predictors never execute; tests may leave either absent.
+        self.champion_model: object | None = None
         self.shadow_model: object | None = None
+        # V1 local learning/prediction services are optional and fail closed.
+        self.learning_memory: object | None = None
+        self.v1_predictions: object | None = None
 
         #: 11B. The schedule comes from the market-state service when there is one, so the
         #: two cannot disagree about when the open is -- a second WeeklySchedule would be a
@@ -428,6 +433,11 @@ class Observer:
                 log.exception("could not archive %s", candle.open_time.utc)
         self._cache_market_day(candle)
         self._advance_evaluations(candle)
+        if self.learning_memory is not None:
+            try:
+                self.learning_memory.on_closed_candle(candle)
+            except Exception:  # noqa: BLE001 - learning must never stop observation
+                log.exception("V1 learning memory failed at %s", candle.open_time.utc)
         # Saved per candle, not per poll: a crash between two candles must not
         # re-process the earlier one.
         self.state.set_and_save(candle.symbol, candle.timeframe, candle.open_time.utc)
@@ -981,11 +991,158 @@ class Observer:
                 evaluator.on_confirmed(setup, candle)
             except Exception:  # noqa: BLE001
                 log.exception("could not begin evaluating setup %s", event.setup_id)
+            full_context = self._learning_context(
+                candle.symbol, candle.timeframe, setup=setup
+            )
+            if self.learning_memory is not None:
+                try:
+                    self.learning_memory.freeze_setup(
+                        setup, event, full_context=full_context
+                    )
+                except Exception:  # noqa: BLE001 - learning must never stop observation
+                    log.exception("could not freeze V1 setup %s", event.setup_id)
+            if self.champion_model is not None:
+                try:
+                    intelligence = self.champion_model.predict_champion(
+                        setup, event, extra_context=full_context
+                    )
+                    if intelligence is not None:
+                        self.agent_highway.publish(
+                            topic="decision.ml.champion",
+                            source_agent="champion_prediction",
+                            symbol=setup.symbol,
+                            timeframe=setup.timeframe.value,
+                            observed_at=event.market_time.utc,
+                            payload=intelligence.model_dump(mode="json"),
+                        )
+                except Exception:  # noqa: BLE001 - ML must never stop observation
+                    log.exception("champion prediction failed for setup %s", event.setup_id)
             if self.shadow_model is not None:
                 try:
-                    self.shadow_model.predict_setup(setup, event)
+                    self.shadow_model.predict_setup(
+                        setup, event, extra_context=full_context
+                    )
                 except Exception:  # noqa: BLE001 - shadow inference must never stop observation
                     log.exception("shadow prediction failed for setup %s", event.setup_id)
+
+    def _learning_context(
+        self, symbol: str, timeframe: Timeframe, *, setup: object | None = None
+    ) -> dict[str, object]:
+        """Flatten the observer-owned current state for an immutable V1 feature snapshot."""
+        key = (symbol, timeframe)
+        state = self._snapshot(symbol, timeframe).as_state()
+        result: dict[str, object] = {}
+
+        analysis = self.engines.for_symbol(symbol)
+        read = analysis.indicator_read(symbol, timeframe)
+        if read.ema_fast is not None and read.ema_slow is not None:
+            result["ema_gap"] = read.ema_fast - read.ema_slow
+        if (
+            read.previous_ema_fast is not None
+            and read.previous_ema_slow is not None
+            and read.ema_fast is not None
+            and read.ema_slow is not None
+        ):
+            previous_gap = read.previous_ema_fast - read.previous_ema_slow
+            result["ema_gap_change"] = (read.ema_fast - read.ema_slow) - previous_gap
+            result["ema_slope"] = read.ema_fast - read.previous_ema_fast
+        if read.rsi is not None and read.previous_rsi is not None:
+            result["rsi_change"] = read.rsi - read.previous_rsi
+        result["atr"] = read.atr
+        result["rsi_zone"] = state.get("rsi_zone")
+        result["session"] = getattr(state.get("session"), "value", state.get("session"))
+        last_cross = state.get("last_cross")
+        if isinstance(last_cross, dict):
+            result["cross_direction"] = last_cross.get("direction")
+        last_wick = state.get("last_wick")
+        if isinstance(last_wick, dict):
+            result["wick_state"] = last_wick.get("classification")
+        last_sweep = state.get("last_sweep")
+        if isinstance(last_sweep, dict):
+            result["liquidity_state"] = last_sweep.get("level_type")
+            result["liquidity_sweep"] = True
+            result["liquidity_detail"] = str(last_sweep)
+        last_breakout = state.get("last_breakout")
+        if isinstance(last_breakout, dict):
+            result["breakout_state"] = last_breakout.get("level_type")
+            result["breakout_direction"] = last_breakout.get("direction")
+        agent_states: dict[str, object] = {}
+        confluence = getattr(setup, "agent_confluence", None)
+        for vote in getattr(confluence, "votes", ()) or ():
+            agent_states[str(vote.agent_name)] = {
+                "stance": getattr(getattr(vote, "stance", None), "value", None),
+                "alignment": getattr(vote, "alignment", None),
+                "observation": getattr(vote, "observation", None),
+            }
+        result["agent_states"] = agent_states
+
+        regime = state.get("market_regime") or {}
+        if isinstance(regime, dict):
+            result["market_regime"] = regime.get("regime") or regime.get("state")
+        participation = state.get("volume_participation") or {}
+        if isinstance(participation, dict):
+            result["participation_state"] = (
+                participation.get("state")
+                or participation.get("participation")
+                or participation.get("volume_state")
+            )
+        journey = state.get("market_journey")
+        if journey is not None:
+            result["market_journey"] = journey
+
+        htf = self._higher_timeframe_reads.get(key)
+        if htf is not None:
+            result["htf_trend"] = str(
+                getattr(getattr(htf, "dominant_bias", None), "value", None)
+                or getattr(htf, "state", None)
+                or "unknown"
+            )
+            result["htf_alignment"] = str(
+                getattr(getattr(htf, "state", None), "value", None)
+                or getattr(htf, "alignment", None)
+                or "unknown"
+            )
+
+        director = self._director_decisions.get(key)
+        if director is not None:
+            result["supporting_agents"] = int(getattr(director, "supporting", 0) or 0)
+            result["opposing_agents"] = int(getattr(director, "opposing", 0) or 0)
+            result["director_state"] = str(
+                getattr(getattr(director, "state", None), "value", None)
+                or getattr(director, "state", None)
+                or "unknown"
+            )
+
+        expansion = self._expansion_reads.get(key)
+        if expansion is not None:
+            result["expansion_state"] = str(
+                getattr(getattr(expansion, "phase", None), "value", None)
+                or getattr(expansion, "phase", None)
+                or "unknown"
+            )
+        agent_states = result.get("agent_states")
+        if isinstance(agent_states, dict):
+            if isinstance(regime, dict):
+                agent_states["market_regime"] = {
+                    "state": str(regime.get("regime") or regime.get("state") or "unknown")
+                }
+            if isinstance(participation, dict):
+                agent_states["volume_participation"] = {
+                    "state": str(result.get("participation_state") or "unknown")
+                }
+            if htf is not None:
+                agent_states["higher_timeframe"] = {
+                    "state": str(result.get("htf_alignment") or "unknown")
+                }
+            if director is not None:
+                agent_states["market_director"] = {
+                    "state": str(result.get("director_state") or "unknown")
+                }
+            if expansion is not None:
+                agent_states["expansion_opportunity"] = {
+                    "state": str(result.get("expansion_state") or "unknown")
+                }
+        return result
 
     def _setup_inputs(self, candle: Candle, detections: list[Detection]):
         """Assemble what the setup engine needs from what this candle already computed.
@@ -2214,9 +2371,20 @@ def build_observer(config: AureonConfig) -> Observer:
     # 11D, and assigned the same way for the same reason: a test of observation should not
     # have to stand up a day cache to watch a candle close.
     observer.market_days = storage.market_days
+    from aureon.services.prediction_service import PredictionService
     from aureon.services.shadow_model import ShadowModelService
 
+    from aureon.services.learning_memory import LearningMemoryService
+
+    observer.champion_model = PredictionService(storage.models)
     observer.shadow_model = ShadowModelService(storage.models)
+    observer.learning_memory = LearningMemoryService(
+        storage.training_memory,
+        models=storage.models,
+        horizon_bars=864,
+        clean_target=10.0,
+        clean_max_mae=7.0,
+    )
     _wire_setups(observer, config, storage)
     return observer
 

@@ -254,6 +254,26 @@ class Excursion(AureonModel):
     source: ExcursionSource = ExcursionSource.LIVE_TICKS
 
 
+class TradeManagementEvent(AureonDocument):
+    """One durable Agent14/16 protection adjustment or final managed-exit observation."""
+
+    event_id: str
+    trade_id: str
+    observed_at: UtcDatetime
+    source: str
+    action: str
+    current_move: float | None = None
+    peak_move: float | None = None
+    giveback: float | None = None
+    protected_move: float | None = None
+    trail_price: float | None = None
+    continuation_score: int | None = None
+    continuation_total: int | None = None
+    exit_price: float | None = None
+    realized_move: float | None = None
+    exit_reason: str | None = None
+
+
 class Trade(AureonDocument):
     """A real position. MT5 is the truth (§49-§53).
 

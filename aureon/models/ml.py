@@ -18,22 +18,32 @@ class TargetMetrics(AureonModel):
     brier: float | None = Field(default=None, ge=0)
     log_loss: float | None = Field(default=None, ge=0)
     roc_auc: float | None = Field(default=None, ge=0, le=1)
+    false_positive_rate: float | None = Field(default=None, ge=0, le=1)
+    average_mae: float | None = Field(default=None, ge=0)
+    average_mfe: float | None = Field(default=None, ge=0)
 
 
 class ModelRegistryEntry(AureonDocument):
     model_id: str
     symbol: str
     algorithm: str = "logistic_regression_v1"
-    status: str = Field(description="candidate, shadow, or retired")
+    status: str = Field(
+        description="candidate, challenger, shadow, champion, retired, or rejected"
+    )
     feature_schema_version: str
     label_schema_version: str
     model_schema_version: str = "AUREON_MOVE_MODEL_V1"
+    parent_model_id: str | None = None
+    hyperparameters: dict = Field(default_factory=dict)
 
     trained_from: str
     trained_through: str
     training_samples: int = Field(ge=0)
     target_metrics: dict[str, TargetMetrics] = Field(default_factory=dict)
+    validation_metrics: dict = Field(default_factory=dict)
+    shadow_metrics: dict = Field(default_factory=dict)
     artifact: dict = Field(default_factory=dict)
+    promotion_reason: str | None = None
 
     created_at: UtcDatetime
     activated_at: UtcDatetime | None = None
@@ -107,3 +117,4 @@ class ShadowPredictionSummary(AureonModel):
     six_brier: float | None = Field(default=None, ge=0)
     twenty_brier: float | None = Field(default=None, ge=0)
     forty_brier: float | None = Field(default=None, ge=0)
+    clean_10_brier: float | None = Field(default=None, ge=0)

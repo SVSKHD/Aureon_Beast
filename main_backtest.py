@@ -30,12 +30,15 @@ from aureon.models.base import to_utc
 from aureon.models.enums import Timeframe
 from aureon.services.adaptive_learning import (
     TARGETS,
+    select_loss_control_times,
     test_adaptive_reference,
     train_adaptive_reference,
 )
+from aureon.services.learning_contract import canonical_examples_from_replay
 from aureon.services.decision_backtest import (
     run_decision_replay,
     simulate_money_outcomes,
+    simulate_trailing_outcomes,
     test_reference_model,
     train_reference,
 )
@@ -197,15 +200,26 @@ def main() -> int:
         help="load a prior main_backtest JSON artifact and score this date range without retraining",
     )
     parser.add_argument("--target-move", type=float, default=10.0)
+    parser.add_argument("--clean-target", type=float, default=10.0)
+    parser.add_argument("--clean-max-mae", type=float, default=7.0)
     parser.add_argument("--stop-move", type=float, default=None)
     parser.add_argument("--lot-size", type=float, default=None)
     parser.add_argument("--hold-bars", type=int, default=12)
+    parser.add_argument("--trail-activation-move", type=float, default=5.0)
+    parser.add_argument("--trail-min-lock", type=float, default=4.0)
+    parser.add_argument("--trail-fraction", type=float, default=0.55)
+    parser.add_argument("--trail-hold-bars", type=int, default=864)
     parser.add_argument("--contract-size", type=float, default=None)
     parser.add_argument("--model-threshold", type=float, default=0.50)
+    parser.add_argument("--min-clean-probability", type=float, default=0.55)
+    parser.add_argument("--max-stop-probability", type=float, default=0.35)
+    parser.add_argument("--max-adaptive-trades", type=int, default=10)
     parser.add_argument(
         "--learning-hold-bars", type=int, default=864,
         help="future M5 bars used by adaptive +5/+10/+20/+30/+40 learning (864 = 72 market hours)",
     )
+    parser.add_argument("--persist-training", action="store_true", help="write canonical V1 examples to local training memory")
+    parser.add_argument("--walk-forward", action="store_true", help="run V1 chronological walk-forward validation after replay")
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
     if args.train and args.test_model:
@@ -214,8 +228,28 @@ def main() -> int:
         parser.error("--lot-size and --stop-move must be supplied together")
     if not 0.0 <= args.model_threshold <= 1.0:
         parser.error("--model-threshold must be between 0 and 1")
+    if not 0.0 <= args.min_clean_probability <= 1.0:
+        parser.error("--min-clean-probability must be between 0 and 1")
+    if not 0.0 <= args.max_stop_probability <= 1.0:
+        parser.error("--max-stop-probability must be between 0 and 1")
+    if args.max_adaptive_trades < 0:
+        parser.error("--max-adaptive-trades must be >= 0")
+    if args.clean_target <= 0:
+        parser.error("--clean-target must be > 0")
+    if args.clean_max_mae < 0:
+        parser.error("--clean-max-mae must be >= 0")
+    if args.walk_forward and not args.persist_training:
+        parser.error("--walk-forward requires --persist-training")
     if args.learning_hold_bars < 12:
         parser.error("--learning-hold-bars must be at least 12")
+    if args.trail_activation_move <= 0:
+        parser.error("--trail-activation-move must be > 0")
+    if args.trail_min_lock < 0 or args.trail_min_lock >= args.trail_activation_move:
+        parser.error("--trail-min-lock must be >= 0 and < --trail-activation-move")
+    if not 0.0 < args.trail_fraction < 1.0:
+        parser.error("--trail-fraction must be between 0 and 1")
+    if args.trail_hold_bars < 1:
+        parser.error("--trail-hold-bars must be >= 1")
 
     started = perf_counter()
     print("[1/6] Loading configuration...", flush=True)
@@ -228,7 +262,8 @@ def main() -> int:
     start = _bound(args.start, config.market_tz)
     end = _bound(args.end, config.market_tz, inclusive_end=("T" not in args.end))
 
-    outcome_tail_days = max(2, ((args.learning_hold_bars * 5 + 1439) // 1440) + 4)
+    outcome_horizon_bars = max(args.learning_hold_bars, args.trail_hold_bars)
+    outcome_tail_days = max(2, ((outcome_horizon_bars * 5 + 1439) // 1440) + 4)
     archive_files: list[Path] = []
     source_label = ""
     broker_economics = None
@@ -358,6 +393,40 @@ def main() -> int:
     eligible = [row for row in rows if row.eligible]
     reached = [row for row in eligible if row.reached_10]
 
+    canonical_examples = canonical_examples_from_replay(
+        rows,
+        replay_candles,
+        horizon_bars=args.learning_hold_bars,
+        clean_target=args.clean_target,
+        clean_max_mae=args.clean_max_mae,
+    )
+    clean_examples = [example for example in canonical_examples if example.outcome.clean_10]
+    canonical_target_counts = {
+        "5": sum(example.outcome.reached_5 for example in canonical_examples),
+        "10": sum(example.outcome.reached_10 for example in canonical_examples),
+        "20": sum(example.outcome.reached_20 for example in canonical_examples),
+        "30": sum(example.outcome.reached_30 for example in canonical_examples),
+        "40": sum(example.outcome.reached_40 for example in canonical_examples),
+    }
+
+    walk_forward_result = None
+    if args.persist_training:
+        from aureon.storage.runtime import build_storage
+
+        storage = build_storage(
+            account_scope=config.account_scope,
+            state_heartbeat_seconds=config.state_heartbeat_seconds,
+        )
+        for example in canonical_examples:
+            storage.training_memory.write_canonical(example)
+        if args.walk_forward:
+            from aureon.services.model_backtest import V1WalkForwardBacktester
+
+            walk_forward_result = V1WalkForwardBacktester(
+                training_memory=storage.training_memory,
+                models=storage.models,
+            ).run(symbol)
+
     model_test = None
     adaptive_model = None
     adaptive_test = None
@@ -405,6 +474,10 @@ def main() -> int:
 
     agent20_money = None
     model_money = None
+    adaptive_loss_money = None
+    adaptive_trailing_money = None
+    all_trailing_money = None
+    adaptive_loss_selected_times: set[str] = set()
     money_contract_size = None
     if args.lot_size is not None and args.stop_move is not None:
         money_contract_size = args.contract_size
@@ -423,6 +496,17 @@ def main() -> int:
             hold_bars=args.hold_bars, lot_size=args.lot_size,
             contract_size=float(money_contract_size),
         )
+        all_trailing_money = simulate_trailing_outcomes(
+            rows,
+            replay_candles,
+            stop_move=args.stop_move,
+            activation_move=args.trail_activation_move,
+            minimum_lock_move=args.trail_min_lock,
+            trail_fraction_of_peak=args.trail_fraction,
+            hold_bars=args.trail_hold_bars,
+            lot_size=args.lot_size,
+            contract_size=float(money_contract_size),
+        )
         if model_test is not None:
             selected_times = {
                 item["at"] for item in model_test.get("scored_rows", [])
@@ -432,6 +516,31 @@ def main() -> int:
                 rows, replay_candles, target_move=args.target_move, stop_move=args.stop_move,
                 hold_bars=args.hold_bars, lot_size=args.lot_size,
                 contract_size=float(money_contract_size), selected_times=selected_times,
+            )
+        if adaptive_test is not None:
+            adaptive_loss_selected_times = select_loss_control_times(
+                adaptive_test,
+                min_clean_probability=args.min_clean_probability,
+                max_stop_probability=args.max_stop_probability,
+                max_trades=args.max_adaptive_trades,
+            )
+            adaptive_loss_money = simulate_money_outcomes(
+                rows, replay_candles, target_move=args.target_move, stop_move=args.stop_move,
+                hold_bars=args.hold_bars, lot_size=args.lot_size,
+                contract_size=float(money_contract_size),
+                selected_times=adaptive_loss_selected_times,
+            )
+            adaptive_trailing_money = simulate_trailing_outcomes(
+                rows,
+                replay_candles,
+                stop_move=args.stop_move,
+                activation_move=args.trail_activation_move,
+                minimum_lock_move=args.trail_min_lock,
+                trail_fraction_of_peak=args.trail_fraction,
+                hold_bars=args.trail_hold_bars,
+                lot_size=args.lot_size,
+                contract_size=float(money_contract_size),
+                selected_times=adaptive_loss_selected_times,
             )
     target_misses = len(eligible) - len(reached)
     position_summary = {
@@ -449,7 +558,7 @@ def main() -> int:
     }
 
     artifact = {
-        "schema": "AUREON_DECISION_BACKTEST_V1",
+        "schema": "AUREON_DECISION_BACKTEST_V2",
         "historical_reference_only": True,
         "symbol": symbol,
         "timeframe": "M5",
@@ -463,12 +572,50 @@ def main() -> int:
         "eligible_crosses": len(eligible),
         "eligible_reached_target": len(reached),
         "target_move": args.target_move,
+        "canonical_learning": {
+            "feature_schema": "AUREON_FEATURES_V1",
+            "label_schema": "AUREON_CLEAN_MOVE_V1",
+            "clean_target": args.clean_target,
+            "clean_max_mae": args.clean_max_mae,
+            "horizon_bars": args.learning_hold_bars,
+            "examples": len(canonical_examples),
+            "clean_wins": len(clean_examples),
+            "clean_win_rate": (
+                len(clean_examples) / len(canonical_examples)
+                if canonical_examples else None
+            ),
+            "target_counts": canonical_target_counts,
+            "persisted_local": bool(args.persist_training),
+            "walk_forward_backtest_id": (
+                getattr(walk_forward_result, "backtest_id", None)
+            ),
+            "records": [
+                example.model_dump(mode="json")
+                for example in canonical_examples
+            ],
+        },
         "position_summary": position_summary,
         "money_simulation": {
             "currency": "USD" if agent20_money is not None else None,
             "agent20_eligible": agent20_money,
             "saved_model_selected": model_money,
+            "adaptive_loss_control_selected": adaptive_loss_money,
+            "all_eligible_trailing": all_trailing_money,
+            "adaptive_loss_control_trailing": adaptive_trailing_money,
             "model_threshold": args.model_threshold if model_test is not None else None,
+            "loss_control": {
+                "min_clean_probability": args.min_clean_probability,
+                "max_stop_probability": args.max_stop_probability,
+                "max_adaptive_trades": args.max_adaptive_trades,
+                "selected_times": sorted(adaptive_loss_selected_times),
+            },
+            "trailing": {
+                "activation_move": args.trail_activation_move,
+                "minimum_lock_move": args.trail_min_lock,
+                "trail_fraction_of_peak": args.trail_fraction,
+                "hold_bars": args.trail_hold_bars,
+                "fixed_take_profit": None,
+            },
             "broker_economics": broker_economics,
             "account_currency": account_currency,
         },
@@ -509,6 +656,39 @@ def main() -> int:
     print(f"  eligible             {len(eligible)}")
     print(f"  reached +{args.target_move:g}       {len(reached)}")
     print(f"  historical hit rate  {'—' if rate is None else f'{rate:.1%}'}")
+    print("  --- CANONICAL V1 LEARNING ---")
+    print(
+        f"  clean contract       +{args.clean_target:g} with "
+        f"MAE <= ${args.clean_max_mae:g}"
+    )
+    print(f"  canonical examples   {len(canonical_examples)}")
+    clean_rate = (
+        len(clean_examples) / len(canonical_examples)
+        if canonical_examples else None
+    )
+    print(
+        f"  clean wins           {len(clean_examples)}"
+    )
+    print(
+        "  clean win rate       "
+        + ("—" if clean_rate is None else format(clean_rate, ".1%"))
+    )
+    print(
+        "  target ladder        "
+        + " | ".join(
+            f"+{target}={count}"
+            for target, count in canonical_target_counts.items()
+        )
+    )
+    if args.persist_training:
+        print("  training memory      persisted locally")
+    if walk_forward_result is not None:
+        clean_metric = walk_forward_result.aggregate_metrics.get("clean_10")
+        print(
+            f"  walk-forward         {walk_forward_result.status} | "
+            f"oos={walk_forward_result.out_of_sample_predictions} | "
+            f"clean precision={None if clean_metric is None else clean_metric.precision}"
+        )
     print("  --- position summary ---")
     print(f"  positions            {position_summary['positions']}")
     print(f"  target wins          {position_summary['target_wins']}")
@@ -542,10 +722,45 @@ def main() -> int:
             sign = "+" if summary["net_usd"] >= 0 else ""
             print(f"  NET P&L              {sign}${summary['net_usd']:.2f}")
             print(f"  worst drawdown move  ${summary['max_mae_before_exit']:.2f}")
+        def _trail_money_block(title: str, summary: dict | None) -> None:
+            print(f"  --- {title} ---")
+            if summary is None:
+                print("  trades               0")
+                print("  NET P&L              $0.00")
+                return
+            print(f"  trades               {summary['trades']}")
+            print(f"  trail activated      {summary['trail_activated']}")
+            print(f"  trailed exits        {summary['trailed_exits']}")
+            print(f"  initial SL losses    {summary['initial_sl_losses']}")
+            print(f"  profitable exits     {summary['profitable_exits']}")
+            print(f"  losing exits         {summary['losing_exits']}")
+            print(f"  USD made             +${summary['usd_made']:.2f}")
+            print(f"  USD lost             -${summary['usd_lost']:.2f}")
+            sign = "+" if summary["net_usd"] >= 0 else ""
+            print(f"  NET P&L              {sign}${summary['net_usd']:.2f}")
+            print(f"  biggest peak move    ${summary['max_peak_move']:.2f}")
+            print(f"  worst adverse move   ${summary['max_mae_before_exit']:.2f}")
+
         print(f"  money assumptions    {args.lot_size:g} lot | TP +${args.target_move:g} | SL -${args.stop_move:g} | max {args.hold_bars} M5 bars")
         _money_block("MONEY RESULTS - ALL AGENT20 ELIGIBLE", agent20_money)
+        _trail_money_block(
+            f"TRAILING - ALL AGENT20 (+{args.trail_activation_move:g} activates, no fixed TP)",
+            all_trailing_money,
+        )
         if args.test_model:
             _money_block(f"MONEY RESULTS - SAVED MODEL >= {args.model_threshold:.2f}", model_money)
+        if adaptive_test is not None:
+            _money_block(
+                "MONEY RESULTS - ADAPTIVE LOSS CONTROL "
+                f"(clean>={args.min_clean_probability:.2f}, stop<={args.max_stop_probability:.2f}, "
+                f"max {args.max_adaptive_trades})",
+                adaptive_loss_money,
+            )
+            _trail_money_block(
+                "TRAILING - LOSS-CONTROLLED ENTRIES "
+                f"(+{args.trail_activation_move:g} activates, no fixed TP)",
+                adaptive_trailing_money,
+            )
     if args.train and adaptive_model is not None:
         print("  --- ADAPTIVE FIVE-OUTPUT MODEL ---")
         print(f"  adaptive status      {adaptive_model.get('status')}")
@@ -569,6 +784,24 @@ def main() -> int:
         print(f"  selected >= +5       {adaptive_test.get('selected_for_5')}")
         print(f"  selected >= +10      {adaptive_test.get('selected_for_10')}")
         print(f"  runner >= +20        {adaptive_test.get('runner_candidates_20_plus')}")
+        print(f"  loss gate selected   {len(adaptive_loss_selected_times)}")
+        print(
+            f"  loss gate            clean>={args.min_clean_probability:.2f} | "
+            f"stop<={args.max_stop_probability:.2f} | max {args.max_adaptive_trades}"
+        )
+        loss_metrics = adaptive_test.get("loss_control_metrics") or {}
+        clean_metrics = loss_metrics.get("clean_10_before_stop_15") or {}
+        stop_metrics = loss_metrics.get("stop_15_before_clean_10") or {}
+        if clean_metrics:
+            print(
+                f"  clean +10<-15 test   brier={clean_metrics.get('brier')} | "
+                f"auc={clean_metrics.get('roc_auc')}"
+            )
+        if stop_metrics:
+            print(
+                f"  stop -15<+10 test    brier={stop_metrics.get('brier')} | "
+                f"auc={stop_metrics.get('roc_auc')}"
+            )
         for target in TARGETS:
             key = str(int(target))
             metrics = (adaptive_test.get("metrics_by_target") or {}).get(key)

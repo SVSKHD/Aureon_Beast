@@ -10,6 +10,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from aureon.models.learning_v1 import CanonicalTrainingExample, PendingLearningSetup
 from aureon.models.training import DailyTrainingStatus, TrainingExample
 from aureon.storage.postgres import tables
 from aureon.storage.postgres.repositories.base import PostgresRepository
@@ -18,6 +19,8 @@ from aureon.storage.postgres.repositories.base import PostgresRepository
 class TrainingMemoryRepository(PostgresRepository):
     examples = tables.TrainingExample.__table__
     statuses = tables.DailyTrainingStatus.__table__
+    canonical = tables.CanonicalTrainingExample.__table__
+    pending = tables.PendingLearningSetup.__table__
 
     def write_example(self, example: TrainingExample) -> TrainingExample:
         self._upsert(self._example_row(example), table=self.examples)
@@ -26,6 +29,115 @@ class TrainingMemoryRepository(PostgresRepository):
     def write_status(self, status: DailyTrainingStatus) -> DailyTrainingStatus:
         self._upsert(self._status_row(status), table=self.statuses)
         return status
+
+    def write_pending(self, pending: PendingLearningSetup) -> PendingLearningSetup:
+        payload = pending.model_dump(mode="json")
+        state = {
+            "reached_5": pending.reached_5,
+            "reached_10": pending.reached_10,
+            "reached_20": pending.reached_20,
+            "reached_30": pending.reached_30,
+            "reached_40": pending.reached_40,
+            "bars_to_5": pending.bars_to_5,
+            "bars_to_10": pending.bars_to_10,
+            "bars_to_20": pending.bars_to_20,
+            "bars_to_30": pending.bars_to_30,
+            "bars_to_40": pending.bars_to_40,
+            "max_favourable_move": pending.max_favourable_move,
+            "max_adverse_move": pending.max_adverse_move,
+            "mae_before_10": pending.mae_before_10,
+            "path_ambiguous": pending.path_ambiguous,
+        }
+        self._upsert(
+            {
+                "learning_id": pending.learning_id,
+                "schema_version": pending.schema_version,
+                "setup_id": pending.setup_id,
+                "symbol": pending.symbol,
+                "timeframe": pending.timeframe.value,
+                "market_date": pending.market_date,
+                "feature_schema": pending.feature_schema,
+                "label_schema": pending.label_schema,
+                "features": payload["features"],
+                "horizon_bars": pending.horizon_bars,
+                "bars_seen": pending.bars_seen,
+                "status": pending.status,
+                "outcome_state": state,
+                "created_at": pending.created_at,
+                "updated_at": pending.updated_at,
+            },
+            table=self.pending,
+        )
+        return pending
+
+    def pending_for_stream(
+        self, symbol: str, timeframe: str
+    ) -> list[PendingLearningSetup]:
+        statement = (
+            select(self.pending)
+            .where(self.pending.c.symbol == symbol.upper())
+            .where(self.pending.c.timeframe == timeframe)
+            .where(self.pending.c.status == "pending")
+            .order_by(self.pending.c.created_at)
+        )
+        return [self._pending_model(row) for row in self._rows(statement)]
+
+    def pending_for_setup(self, setup_id: str) -> PendingLearningSetup | None:
+        statement = (
+            select(self.pending)
+            .where(self.pending.c.setup_id == setup_id)
+            .where(self.pending.c.status == "pending")
+            .limit(1)
+        )
+        rows = self._rows(statement)
+        return None if not rows else self._pending_model(rows[0])
+
+    @staticmethod
+    def _pending_model(row: Any) -> PendingLearningSetup:
+        data = dict(row)
+        state = data.pop("outcome_state") or {}
+        data.update(state)
+        return PendingLearningSetup.model_validate(data)
+
+    def write_canonical(
+        self, example: CanonicalTrainingExample
+    ) -> CanonicalTrainingExample:
+        self._upsert(self._canonical_row(example), table=self.canonical)
+        return example
+
+    def canonical_between(
+        self,
+        symbol: str,
+        start_market_date: str,
+        end_market_date: str,
+    ) -> list[CanonicalTrainingExample]:
+        statement = (
+            select(self.canonical)
+            .where(self.canonical.c.symbol == symbol.upper())
+            .where(self.canonical.c.market_date >= start_market_date)
+            .where(self.canonical.c.market_date < end_market_date)
+            .order_by(
+                self.canonical.c.market_date,
+                self.canonical.c.timeframe,
+                self.canonical.c.setup_id,
+            )
+        )
+        return [
+            CanonicalTrainingExample.model_validate(dict(row))
+            for row in self._rows(statement)
+        ]
+
+    def canonical_for(
+        self, symbol: str, market_date: str
+    ) -> list[CanonicalTrainingExample]:
+        return [
+            example
+            for example in self.canonical_between(
+                symbol,
+                market_date,
+                _next_iso_date(market_date),
+            )
+        ]
 
     def status_for(
         self,
@@ -105,6 +217,23 @@ class TrainingMemoryRepository(PostgresRepository):
         ]
 
     @staticmethod
+    def _canonical_row(example: CanonicalTrainingExample) -> dict[str, Any]:
+        payload = example.model_dump(mode="json")
+        return {
+            "example_id": example.example_id,
+            "schema_version": example.schema_version,
+            "market_date": example.market_date,
+            "setup_id": example.setup_id,
+            "symbol": example.symbol,
+            "timeframe": example.timeframe.value,
+            "feature_schema": example.feature_schema,
+            "label_schema": example.label_schema,
+            "features": payload["features"],
+            "outcome": payload["outcome"],
+            "generated_at": example.generated_at,
+        }
+
+    @staticmethod
     def _example_row(example: TrainingExample) -> dict[str, Any]:
         payload = example.model_dump(mode="json")
         return {
@@ -172,3 +301,9 @@ class TrainingMemoryRepository(PostgresRepository):
         data = dict(row)
         data["by_timeframe"] = (data.get("by_timeframe") or {}).get("items", [])
         return data
+
+
+def _next_iso_date(value: str) -> str:
+    from datetime import date, timedelta
+
+    return (date.fromisoformat(value) + timedelta(days=1)).isoformat()

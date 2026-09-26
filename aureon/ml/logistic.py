@@ -81,6 +81,7 @@ def binary_metrics(labels: list[int], probabilities: list[float]) -> dict[str, f
             "brier": None,
             "log_loss": None,
             "roc_auc": None,
+            "false_positive_rate": None,
         }
 
     predictions = [1 if probability >= 0.5 else 0 for probability in probabilities]
@@ -106,6 +107,7 @@ def binary_metrics(labels: list[int], probabilities: list[float]) -> dict[str, f
         "brier": brier,
         "log_loss": log_loss,
         "roc_auc": _roc_auc(labels, probabilities),
+        "false_positive_rate": fp / (fp + tn) if fp + tn else None,
     }
 
 

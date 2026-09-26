@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from aureon.management.adaptive_profit_plan import adaptive_profit_plan
 from aureon.ml.boosted_stumps import BoostedStumpModel, fit_boosted_stumps
-from aureon.services.adaptive_learning import build_adaptive_examples
+from aureon.services.adaptive_learning import build_adaptive_examples, select_loss_control_times
 from aureon.services.decision_backtest import DecisionReplayRow
 
 
@@ -93,3 +93,35 @@ def test_boosted_stump_round_trips_and_separates_simple_data() -> None:
     model = fit_boosted_stumps(vectors, labels, rounds=20, min_leaf=2)
     restored = BoostedStumpModel.from_dict(model.to_dict())
     assert restored.probability([2.0]) < restored.probability([18.0])
+
+
+def test_loss_control_selection_filters_risk_and_caps_count() -> None:
+    adaptive_test = {
+        "scored_rows": [
+            {
+                "at": f"2026-03-{i + 1:02d}T00:00:00+00:00",
+                "probability_clean_10_before_15": clean,
+                "probability_stop_15_before_10": stop,
+            }
+            for i, (clean, stop) in enumerate([
+                (0.90, 0.10),
+                (0.80, 0.20),
+                (0.70, 0.30),
+                (0.60, 0.34),
+                (0.54, 0.10),
+                (0.90, 0.50),
+            ])
+        ]
+    }
+    selected = select_loss_control_times(
+        adaptive_test,
+        min_clean_probability=0.55,
+        max_stop_probability=0.35,
+        max_trades=3,
+    )
+    assert len(selected) == 3
+    assert "2026-03-01T00:00:00+00:00" in selected
+    assert "2026-03-02T00:00:00+00:00" in selected
+    assert "2026-03-03T00:00:00+00:00" in selected
+    assert "2026-03-05T00:00:00+00:00" not in selected
+    assert "2026-03-06T00:00:00+00:00" not in selected

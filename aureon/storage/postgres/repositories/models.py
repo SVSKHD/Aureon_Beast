@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy import select, update
 
+from aureon.models.learning_v1 import EvolutionDecision, ModelLifecycleStatus
 from aureon.models.ml import (
     ModelBacktest,
     ModelPrediction,
@@ -23,6 +24,7 @@ class ModelRepository(PostgresRepository):
     runs = tables.ModelTrainingRun.__table__
     backtests = tables.ModelBacktest.__table__
     predictions = tables.ModelPrediction.__table__
+    evolution = tables.ModelEvolutionLog.__table__
 
     def write_model(self, model: ModelRegistryEntry) -> ModelRegistryEntry:
         self._upsert(self._model_row(model), table=self.models)
@@ -53,6 +55,37 @@ class ModelRepository(PostgresRepository):
         )
         rows = self._rows(statement)
         return None if not rows else ModelRegistryEntry.model_validate(self._model_dict(rows[0]))
+
+    def champion(self, symbol: str) -> ModelRegistryEntry | None:
+        statement = (
+            select(self.models)
+            .where(self.models.c.symbol == symbol.upper())
+            .where(self.models.c.status == ModelLifecycleStatus.CHAMPION.value)
+            .order_by(self.models.c.activated_at.desc(), self.models.c.created_at.desc())
+            .limit(1)
+        )
+        rows = self._rows(statement)
+        return None if not rows else ModelRegistryEntry.model_validate(self._model_dict(rows[0]))
+
+    def challengers(self, symbol: str) -> list[ModelRegistryEntry]:
+        statement = (
+            select(self.models)
+            .where(self.models.c.symbol == symbol.upper())
+            .where(
+                self.models.c.status.in_(
+                    [
+                        ModelLifecycleStatus.CANDIDATE.value,
+                        ModelLifecycleStatus.CHALLENGER.value,
+                        ModelLifecycleStatus.SHADOW.value,
+                    ]
+                )
+            )
+            .order_by(self.models.c.created_at.desc())
+        )
+        return [
+            ModelRegistryEntry.model_validate(self._model_dict(row))
+            for row in self._rows(statement)
+        ]
 
     def active_shadow(self, symbol: str) -> ModelRegistryEntry | None:
         statement = (
@@ -86,6 +119,109 @@ class ModelRepository(PostgresRepository):
         if refreshed is None:
             raise LookupError(f"model {model_id} disappeared after activation")
         return refreshed
+
+    def set_status(
+        self,
+        model_id: str,
+        status: ModelLifecycleStatus | str,
+        *,
+        at: Any | None = None,
+        promotion_reason: str | None = None,
+    ) -> ModelRegistryEntry:
+        value = status.value if isinstance(status, ModelLifecycleStatus) else str(status)
+        allowed = {one.value for one in ModelLifecycleStatus}
+        if value not in allowed:
+            raise ValueError(f"unsupported model lifecycle status {value!r}")
+        with self._db.transaction() as connection:
+            row = self._row(model_id, table=self.models, connection=connection)
+            if row is None:
+                raise LookupError(f"no model {model_id}")
+            if value == ModelLifecycleStatus.CHAMPION.value:
+                raise ValueError("use promote_champion() so Champion replacement is atomic")
+            values: dict[str, Any] = {"status": value}
+            if at is not None and value == ModelLifecycleStatus.SHADOW.value:
+                values["activated_at"] = at
+            if promotion_reason is not None:
+                values["promotion_reason"] = promotion_reason
+            connection.execute(
+                update(self.models)
+                .where(self.models.c.model_id == model_id)
+                .values(**values)
+            )
+        refreshed = self.get_model(model_id)
+        if refreshed is None:
+            raise LookupError(f"model {model_id} disappeared after status update")
+        return refreshed
+
+    def promote_champion(
+        self,
+        model_id: str,
+        *,
+        at: Any,
+        reason: str,
+    ) -> ModelRegistryEntry:
+        """Atomically promote a SHADOW model and retire the prior Champion.
+
+        A candidate/challenger cannot skip shadow evaluation. This is the hard guard
+        against silently overwriting production intelligence.
+        """
+        with self._db.transaction() as connection:
+            row = self._row(model_id, table=self.models, connection=connection)
+            if row is None:
+                raise LookupError(f"no model {model_id}")
+            if str(row["status"]) != ModelLifecycleStatus.SHADOW.value:
+                raise ValueError(
+                    f"model {model_id} is {row['status']}; only shadow may become champion"
+                )
+            symbol = str(row["symbol"])
+            connection.execute(
+                update(self.models)
+                .where(self.models.c.symbol == symbol)
+                .where(self.models.c.status == ModelLifecycleStatus.CHAMPION.value)
+                .values(status=ModelLifecycleStatus.RETIRED.value)
+            )
+            connection.execute(
+                update(self.models)
+                .where(self.models.c.model_id == model_id)
+                .values(
+                    status=ModelLifecycleStatus.CHAMPION.value,
+                    activated_at=at,
+                    promotion_reason=reason,
+                )
+            )
+        refreshed = self.get_model(model_id)
+        if refreshed is None:
+            raise LookupError(f"model {model_id} disappeared after promotion")
+        return refreshed
+
+    def write_evolution_decision(self, decision: EvolutionDecision) -> EvolutionDecision:
+        payload = decision.model_dump(mode="json")
+        self._upsert(
+            {
+                "decision_id": decision.decision_id,
+                "schema_version": decision.schema_version,
+                "symbol": decision.symbol,
+                "model_id": decision.model_id,
+                "champion_model_id": decision.champion_model_id,
+                "action": decision.action,
+                "reason": decision.reason,
+                "metrics": payload["metrics"],
+                "created_at": decision.created_at,
+            },
+            table=self.evolution,
+        )
+        return decision
+
+    def evolution_for(self, model_id: str) -> list[EvolutionDecision]:
+        statement = (
+            select(self.evolution)
+            .where(self.evolution.c.model_id == model_id)
+            .order_by(self.evolution.c.created_at)
+        )
+        return [
+            EvolutionDecision.model_validate(dict(row))
+            for row in self._rows(statement)
+        ]
 
     def latest_training_run(self, symbol: str) -> ModelTrainingRun | None:
         statement = (
@@ -126,6 +262,45 @@ class ModelRepository(PostgresRepository):
         )
         rows = self._rows(statement)
         return None if not rows else ModelPrediction.model_validate(self._prediction_dict(rows[0]))
+
+    def predictions_for_model(
+        self,
+        model_id: str,
+        *,
+        reconciled_only: bool = False,
+        limit: int | None = None,
+    ) -> list[ModelPrediction]:
+        statement = select(self.predictions).where(
+            self.predictions.c.model_id == model_id
+        )
+        if reconciled_only:
+            statement = statement.where(self.predictions.c.reconciled_at.is_not(None))
+        statement = statement.order_by(self.predictions.c.predicted_at)
+        if limit is not None:
+            statement = statement.limit(limit)
+        return [
+            ModelPrediction.model_validate(self._prediction_dict(row))
+            for row in self._rows(statement)
+        ]
+
+    def update_shadow_metrics(
+        self,
+        model_id: str,
+        metrics: dict[str, Any],
+    ) -> ModelRegistryEntry:
+        with self._db.transaction() as connection:
+            row = self._row(model_id, table=self.models, connection=connection)
+            if row is None:
+                raise LookupError(f"no model {model_id}")
+            connection.execute(
+                update(self.models)
+                .where(self.models.c.model_id == model_id)
+                .values(shadow_metrics=metrics)
+            )
+        refreshed = self.get_model(model_id)
+        if refreshed is None:
+            raise LookupError(f"model {model_id} disappeared after metrics update")
+        return refreshed
 
     def predictions_for_setup(
         self,
@@ -191,6 +366,7 @@ class ModelRepository(PostgresRepository):
             six_brier=brier("six"),
             twenty_brier=brier("twenty"),
             forty_brier=brier("forty"),
+            clean_10_brier=brier("clean_10"),
         )
 
     @staticmethod
@@ -211,11 +387,16 @@ class ModelRepository(PostgresRepository):
             "feature_schema_version": model.feature_schema_version,
             "label_schema_version": model.label_schema_version,
             "model_schema_version": model.model_schema_version,
+            "parent_model_id": model.parent_model_id,
+            "hyperparameters": model.hyperparameters,
             "trained_from": model.trained_from,
             "trained_through": model.trained_through,
             "training_samples": model.training_samples,
             "target_metrics": cls._metrics_json(model.target_metrics),
+            "validation_metrics": model.validation_metrics,
+            "shadow_metrics": model.shadow_metrics,
             "artifact": model.artifact,
+            "promotion_reason": model.promotion_reason,
             "created_at": model.created_at,
             "activated_at": model.activated_at,
         }

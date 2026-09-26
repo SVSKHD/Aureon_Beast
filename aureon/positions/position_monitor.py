@@ -138,8 +138,8 @@ class PositionMonitor:
 
         # Agents 14 and 16 never call the broker themselves. The monitor supplies quotes
         # and persists their proposed management state; execution remains a separate boundary.
-        self.trade_manager = TradeManagementAgent(primary_target_move=10.0)
-        self.profit_guardian = ProfitGuardianAgent(primary_target_move=10.0)
+        self.trade_manager = TradeManagementAgent(primary_target_move=5.0, protect_after_move=5.0, protect_fraction=0.80)
+        self.profit_guardian = ProfitGuardianAgent(primary_target_move=5.0, minimum_lock=4.0)
 
         #: symbol -> tick, from the broker's own spec. Cached: it does not change within a
         #: session, and one lookup per new symbol is cheaper than one per poll.

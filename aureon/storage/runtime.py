@@ -97,6 +97,18 @@ class TrainingMemoryReadAdapter:
             end_market_date,
         )
 
+    def canonical_between(
+        self,
+        symbol: str,
+        start_market_date: str,
+        end_market_date: str,
+    ) -> list[Any]:
+        return self._repo.canonical_between(
+            symbol,
+            start_market_date,
+            end_market_date,
+        )
+
 
 class ModelReadAdapter:
     """Read-only model status surface for Discord."""
@@ -109,6 +121,12 @@ class ModelReadAdapter:
 
     def active_shadow(self, symbol: str) -> Any:
         return self._repo.active_shadow(symbol)
+
+    def champion(self, symbol: str) -> Any:
+        return self._repo.champion(symbol)
+
+    def challengers(self, symbol: str) -> list[Any]:
+        return self._repo.challengers(symbol)
 
     def latest_training_run(self, symbol: str) -> Any:
         return self._repo.latest_training_run(symbol)

@@ -418,6 +418,8 @@ class Trade(Base):
 
     deal_ids: Mapped[dict[str, Any]] = mapped_column(Json)
     excursion: Mapped[dict[str, Any]] = mapped_column(Json)
+    management: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    guardian: Mapped[dict[str, Any] | None] = mapped_column(Json)
     last_reconciled_at: Mapped[datetime | None] = mapped_column()
     last_synced_at: Mapped[datetime | None] = mapped_column()
 
@@ -427,6 +429,33 @@ class Trade(Base):
         Index("ix_trades_symbol_status", "symbol", "status"),
         Index("ix_trades_open_time", "open_time_utc"),
         Index("ix_trades_request", "trade_request_id"),
+    )
+
+
+class TradeManagementEvent(Base):
+    """Append-only Agent14/16 trail/protection history for exit-learning later."""
+
+    __tablename__ = "trade_management_events"
+
+    event_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    trade_id: Mapped[str] = mapped_column(String)
+    observed_at: Mapped[datetime] = mapped_column()
+    source: Mapped[str] = mapped_column(String)
+    action: Mapped[str] = mapped_column(String)
+    current_move: Mapped[float | None] = mapped_column(Float)
+    peak_move: Mapped[float | None] = mapped_column(Float)
+    giveback: Mapped[float | None] = mapped_column(Float)
+    protected_move: Mapped[float | None] = mapped_column(Float)
+    trail_price: Mapped[float | None] = mapped_column(Float)
+    continuation_score: Mapped[int | None] = mapped_column(Integer)
+    continuation_total: Mapped[int | None] = mapped_column(Integer)
+    exit_price: Mapped[float | None] = mapped_column(Float)
+    realized_move: Mapped[float | None] = mapped_column(Float)
+    exit_reason: Mapped[str | None] = mapped_column(String)
+
+    __table_args__ = (
+        Index("ix_trade_management_trade_time", "trade_id", "observed_at"),
     )
 
 
@@ -790,6 +819,72 @@ class TrainingExample(Base):
     )
 
 
+class PendingLearningSetup(Base):
+    """Durable cross-session V1 outcome accumulator."""
+
+    __tablename__ = "pending_learning_setups"
+
+    learning_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    setup_id: Mapped[str] = mapped_column(String)
+    symbol: Mapped[str] = mapped_column(String)
+    timeframe: Mapped[str] = mapped_column(String)
+    market_date: Mapped[str] = mapped_column(String)
+    feature_schema: Mapped[str] = mapped_column(String)
+    label_schema: Mapped[str] = mapped_column(String)
+    features: Mapped[dict[str, Any]] = mapped_column(Json)
+    horizon_bars: Mapped[int] = mapped_column(Integer)
+    bars_seen: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String)
+    outcome_state: Mapped[dict[str, Any]] = mapped_column(Json)
+    created_at: Mapped[datetime] = mapped_column()
+    updated_at: Mapped[datetime] = mapped_column()
+
+    __table_args__ = (
+        Index(
+            "ix_pending_learning_stream",
+            "symbol",
+            "timeframe",
+            "status",
+            "created_at",
+        ),
+        UniqueConstraint(
+            "setup_id",
+            "feature_schema",
+            "label_schema",
+            name="uq_pending_learning_contract",
+        ),
+    )
+
+
+class CanonicalTrainingExample(Base):
+    """Immutable V1 learning example; legacy EOD rows remain in training_examples."""
+
+    __tablename__ = "canonical_training_examples"
+
+    example_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    market_date: Mapped[str] = mapped_column(String)
+    setup_id: Mapped[str] = mapped_column(String)
+    symbol: Mapped[str] = mapped_column(String)
+    timeframe: Mapped[str] = mapped_column(String)
+    feature_schema: Mapped[str] = mapped_column(String)
+    label_schema: Mapped[str] = mapped_column(String)
+    features: Mapped[dict[str, Any]] = mapped_column(Json)
+    outcome: Mapped[dict[str, Any]] = mapped_column(Json)
+    generated_at: Mapped[datetime] = mapped_column()
+
+    __table_args__ = (
+        Index("ix_canonical_training_symbol_date", "symbol", "market_date"),
+        UniqueConstraint(
+            "setup_id",
+            "feature_schema",
+            "label_schema",
+            name="uq_canonical_training_contract",
+        ),
+    )
+
+
 class DailyTrainingStatus(Base):
     """Durable EOD training checkpoint and data-readiness summary."""
 
@@ -840,11 +935,16 @@ class ModelRegistry(Base):
     feature_schema_version: Mapped[str] = mapped_column(String)
     label_schema_version: Mapped[str] = mapped_column(String)
     model_schema_version: Mapped[str] = mapped_column(String)
+    parent_model_id: Mapped[str | None] = mapped_column(String)
+    hyperparameters: Mapped[dict[str, Any]] = mapped_column(Json)
     trained_from: Mapped[str] = mapped_column(String)
     trained_through: Mapped[str] = mapped_column(String)
     training_samples: Mapped[int] = mapped_column(Integer)
     target_metrics: Mapped[dict[str, Any]] = mapped_column(Json)
+    validation_metrics: Mapped[dict[str, Any]] = mapped_column(Json)
+    shadow_metrics: Mapped[dict[str, Any]] = mapped_column(Json)
     artifact: Mapped[dict[str, Any]] = mapped_column(Json)
+    promotion_reason: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column()
     activated_at: Mapped[datetime | None] = mapped_column()
 
@@ -921,6 +1021,27 @@ class ModelPrediction(Base):
         Index("ix_model_predictions_symbol_time", "symbol", "predicted_at"),
         Index("ix_model_predictions_model", "model_id", "predicted_at"),
         UniqueConstraint("model_id", "setup_id", name="uq_model_prediction_setup"),
+    )
+
+
+class ModelEvolutionLog(Base):
+    """Every model-governance transition is an append-only/auditable row."""
+
+    __tablename__ = "model_evolution_log"
+
+    decision_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    symbol: Mapped[str] = mapped_column(String)
+    model_id: Mapped[str] = mapped_column(String)
+    champion_model_id: Mapped[str | None] = mapped_column(String)
+    action: Mapped[str] = mapped_column(String)
+    reason: Mapped[str] = mapped_column(String)
+    metrics: Mapped[dict[str, Any]] = mapped_column(Json)
+    created_at: Mapped[datetime] = mapped_column()
+
+    __table_args__ = (
+        Index("ix_model_evolution_symbol_time", "symbol", "created_at"),
+        Index("ix_model_evolution_model_time", "model_id", "created_at"),
     )
 
 

@@ -20,6 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--test-days", type=int, default=2)
     parser.add_argument("--min-train-samples", type=int, default=30)
     parser.add_argument("--min-class-samples", type=int, default=5)
+    parser.add_argument("--v1", action="store_true", help="run canonical clean_10 V1 walk-forward")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -40,17 +41,31 @@ def main(argv: list[str] | None = None) -> int:
         latest = storage.models.latest_model(symbol)
         model_id = latest.model_id if latest is not None else None
 
-    result = WalkForwardBacktester(
-        training_memory=storage.training_memory,
-        models=storage.models,
-    ).run(
-        symbol,
-        model_id=model_id,
-        min_train_days=args.min_train_days,
-        test_days=args.test_days,
-        min_train_samples=args.min_train_samples,
-        min_class_samples=args.min_class_samples,
-    )
+    if args.v1:
+        from aureon.services.model_backtest import V1WalkForwardBacktester
+
+        result = V1WalkForwardBacktester(
+            training_memory=storage.training_memory,
+            models=storage.models,
+        ).run(
+            symbol,
+            model_id=model_id,
+            min_train_days=args.min_train_days,
+            test_days=args.test_days,
+            min_train_samples=args.min_train_samples,
+        )
+    else:
+        result = WalkForwardBacktester(
+            training_memory=storage.training_memory,
+            models=storage.models,
+        ).run(
+            symbol,
+            model_id=model_id,
+            min_train_days=args.min_train_days,
+            test_days=args.test_days,
+            min_train_samples=args.min_train_samples,
+            min_class_samples=args.min_class_samples,
+        )
 
     print(
         f"backtest {result.backtest_id} [{result.symbol}] status={result.status} "

@@ -204,3 +204,228 @@ class WalkForwardBacktester:
             f"walk_forward|{symbol}|{at.isoformat()}".encode("utf-8")
         ).hexdigest()[:20]
         return f"backtest_{symbol.lower()}_{digest}"
+
+
+
+class V1WalkForwardBacktester:
+    """Expanding-window V1 backtest over canonical frozen examples.
+
+    Training dates are always strictly earlier than test dates. The encoder is fit only
+    on each fold's training slice, so categorical vocabularies and normalization cannot
+    leak from the future.
+    """
+
+    def __init__(
+        self,
+        *,
+        training_memory: Any,
+        models: Any,
+        now: Any = utc_now,
+    ) -> None:
+        self.training_memory = training_memory
+        self.models = models
+        self._now = now
+
+    def run(
+        self,
+        symbol: str,
+        *,
+        model_id: str | None = None,
+        min_train_days: int = 20,
+        test_days: int = 5,
+        min_train_samples: int = 30,
+    ) -> ModelBacktest:
+        from aureon.ml.v1_features import V1FeatureEncoder, raw_v1_features
+        from aureon.models.learning_v1 import FEATURE_SCHEMA_V1, LABEL_SCHEMA_V1
+        from aureon.services.v1_model_training import (
+            V1_TARGETS,
+            fit_v1_target,
+            predict_v1_target,
+            target_value as v1_target_value,
+        )
+
+        symbol = symbol.upper()
+        started = to_utc(self._now())
+        backtest_id = self._id(symbol, started) + "_v1"
+
+        model = self.models.get_model(model_id) if model_id else None
+        algorithm = model.algorithm if model is not None else "logistic_regression_v1"
+        if algorithm not in {"logistic_regression_v1", "boosted_stumps_v1"}:
+            raise ValueError(f"V1 walk-forward does not support {algorithm!r}")
+
+        examples = [
+            example
+            for example in self.training_memory.canonical_between(
+                symbol,
+                "0001-01-01",
+                "9999-12-31",
+            )
+            if example.feature_schema == FEATURE_SCHEMA_V1
+            and example.label_schema == LABEL_SCHEMA_V1
+        ]
+        examples.sort(key=lambda one: (one.market_date, one.features.timestamp, one.setup_id))
+        dates = sorted({example.market_date for example in examples})
+
+        if len(dates) < min_train_days + test_days:
+            failed = ModelBacktest(
+                backtest_id=backtest_id,
+                model_id=model_id,
+                symbol=symbol,
+                status="insufficient_data",
+                algorithm=algorithm,
+                feature_schema_version=FEATURE_SCHEMA_V1,
+                label_schema_version=LABEL_SCHEMA_V1,
+                started_at=started,
+                completed_at=to_utc(self._now()),
+                start_market_date=dates[0] if dates else None,
+                end_market_date=dates[-1] if dates else None,
+                failure_message=(
+                    f"need at least {min_train_days + test_days} market dates; "
+                    f"have {len(dates)}"
+                ),
+            )
+            self.models.write_backtest(failed)
+            return failed
+
+        folds: list[BacktestFold] = []
+        aggregate_labels: dict[str, list[int]] = defaultdict(list)
+        aggregate_probabilities: dict[str, list[float]] = defaultdict(list)
+        fold_number = 0
+        test_start_index = min_train_days
+
+        while test_start_index < len(dates):
+            test_end_index = min(test_start_index + test_days, len(dates))
+            train_dates = dates[:test_start_index]
+            test_dates = dates[test_start_index:test_end_index]
+            if not test_dates:
+                break
+
+            test = [one for one in examples if one.market_date in test_dates]
+            test_start_at = min(
+                (one.features.timestamp for one in test),
+                default=None,
+            )
+            train = [
+                one
+                for one in examples
+                if one.market_date in train_dates
+                and one.outcome.resolved_at is not None
+                and (
+                    test_start_at is None
+                    or one.outcome.resolved_at <= test_start_at
+                )
+            ]
+            fold_number += 1
+            metrics: dict[str, TargetMetrics] = {}
+
+            if len(train) >= min_train_samples and test:
+                raw_train = [raw_v1_features(one.features) for one in train]
+                encoder = V1FeatureEncoder.fit(raw_train)
+                train_vectors = [encoder.transform(*raw) for raw in raw_train]
+                test_vectors = [
+                    encoder.transform(*raw_v1_features(one.features))
+                    for one in test
+                ]
+                for target in V1_TARGETS:
+                    train_labels = [
+                        1 if v1_target_value(one, target) else 0 for one in train
+                    ]
+                    payload = fit_v1_target(
+                        algorithm=algorithm,
+                        train_vectors=train_vectors,
+                        train_labels=train_labels,
+                    )
+                    test_labels = [
+                        1 if v1_target_value(one, target) else 0 for one in test
+                    ]
+                    probabilities = [
+                        predict_v1_target(payload, vector)
+                        for vector in test_vectors
+                    ]
+                    metric_data = binary_metrics(test_labels, probabilities)
+                    positives = [
+                        one
+                        for one, label in zip(test, test_labels, strict=True)
+                        if label == 1
+                    ]
+                    metric_data["average_mae"] = (
+                        sum(one.outcome.max_adverse_move for one in positives)
+                        / len(positives)
+                        if positives
+                        else None
+                    )
+                    metric_data["average_mfe"] = (
+                        sum(one.outcome.max_favourable_move for one in positives)
+                        / len(positives)
+                        if positives
+                        else None
+                    )
+                    metrics[target] = TargetMetrics.model_validate(metric_data)
+                    aggregate_labels[target].extend(test_labels)
+                    aggregate_probabilities[target].extend(probabilities)
+
+            folds.append(
+                BacktestFold(
+                    fold=fold_number,
+                    train_from=train_dates[0],
+                    train_through=train_dates[-1],
+                    test_from=test_dates[0],
+                    test_through=test_dates[-1],
+                    train_samples=len(train),
+                    test_samples=len(test),
+                    target_metrics=metrics,
+                )
+            )
+            test_start_index = test_end_index
+
+        aggregate: dict[str, TargetMetrics] = {}
+        for target in V1_TARGETS:
+            if not aggregate_labels[target]:
+                continue
+            metric_data = binary_metrics(
+                aggregate_labels[target],
+                aggregate_probabilities[target],
+            )
+            target_examples = [
+                one
+                for one in examples
+                if v1_target_value(one, target)
+            ]
+            metric_data["average_mae"] = (
+                sum(one.outcome.max_adverse_move for one in target_examples)
+                / len(target_examples)
+                if target_examples
+                else None
+            )
+            metric_data["average_mfe"] = (
+                sum(one.outcome.max_favourable_move for one in target_examples)
+                / len(target_examples)
+                if target_examples
+                else None
+            )
+            aggregate[target] = TargetMetrics.model_validate(metric_data)
+        result = ModelBacktest(
+            backtest_id=backtest_id,
+            model_id=model_id,
+            symbol=symbol,
+            status="complete" if aggregate.get("clean_10") is not None else "insufficient_data",
+            algorithm=algorithm,
+            feature_schema_version=FEATURE_SCHEMA_V1,
+            label_schema_version=LABEL_SCHEMA_V1,
+            started_at=started,
+            completed_at=to_utc(self._now()),
+            start_market_date=dates[0],
+            end_market_date=dates[-1],
+            folds=tuple(folds),
+            aggregate_metrics=aggregate,
+            out_of_sample_predictions=(
+                aggregate["clean_10"].samples if "clean_10" in aggregate else 0
+            ),
+            failure_message=(
+                None
+                if aggregate.get("clean_10") is not None
+                else "no V1 fold could score clean_10"
+            ),
+        )
+        self.models.write_backtest(result)
+        return result
