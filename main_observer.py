@@ -983,9 +983,12 @@ class Observer:
                 log.exception("could not begin evaluating setup %s", event.setup_id)
             if self.shadow_model is not None:
                 try:
+                    # Champion and Challenger/Shadow receive the exact same frozen setup
+                    # event. Neither path has execution authority.
+                    self.shadow_model.predict_champion(setup, event)
                     self.shadow_model.predict_setup(setup, event)
-                except Exception:  # noqa: BLE001 - shadow inference must never stop observation
-                    log.exception("shadow prediction failed for setup %s", event.setup_id)
+                except Exception:  # noqa: BLE001 - ML inference must never stop observation
+                    log.exception("model prediction failed for setup %s", event.setup_id)
 
     def _setup_inputs(self, candle: Candle, detections: list[Detection]):
         """Assemble what the setup engine needs from what this candle already computed.
