@@ -79,7 +79,7 @@ def _feature_vector(row: DecisionReplayRow, atr14: float) -> list[float]:
         1.0 if row.htf_state == "bullish" else 0.0,
         1.0 if row.htf_state == "bearish" else 0.0,
         1.0 if row.director_state == "ready" else 0.0,
-        1.0 if regime == "expanding" else 0.0,
+        1.0 if ("expanding" in regime or "expansion" in regime) else 0.0,
         1.0 if regime == "ranging" else 0.0,
         1.0 if "compression" in regime else 0.0,
         1.0 if ("chop" in regime or "messy" in regime) else 0.0,
@@ -222,9 +222,11 @@ def train_adaptive_reference(
         labels = [1 if item["target_hits"][key] else 0 for item in train]
         if not any(labels) or all(labels):
             target_models[key] = {
-                "status": "insufficient_classes",
+                "status": "constant",
+                "constant_probability": (sum(labels) + 1.0) / (len(labels) + 2.0),
                 "positives": sum(labels),
                 "samples": len(labels),
+                "note": "Single-class training sample; using Laplace-smoothed historical rate.",
             }
             continue
 
@@ -236,8 +238,10 @@ def train_adaptive_reference(
         boosted_probs = [boosted.probability(vector) for vector in test_vectors]
         logistic_metrics = binary_metrics(test_labels, logistic_probs)
         boosted_metrics = binary_metrics(test_labels, boosted_probs)
-        logistic_brier = float(logistic_metrics.get("brier") or 1.0)
-        boosted_brier = float(boosted_metrics.get("brier") or 1.0)
+        logistic_raw = logistic_metrics.get("brier")
+        boosted_raw = boosted_metrics.get("brier")
+        logistic_brier = float(logistic_raw) if logistic_raw is not None else 1.0
+        boosted_brier = float(boosted_raw) if boosted_raw is not None else 1.0
         chosen = "boosted_stumps" if boosted_brier < logistic_brier else "logistic"
         target_models[key] = {
             "status": "trained",
@@ -306,6 +310,8 @@ def train_adaptive_reference(
 
 
 def _load_probability(model_block: dict[str, Any], vector: list[float]) -> float | None:
+    if model_block.get("status") == "constant":
+        return float(model_block["constant_probability"])
     if model_block.get("status") != "trained":
         return None
     chosen = model_block.get("chosen_model")
