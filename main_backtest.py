@@ -393,6 +393,40 @@ def main() -> int:
     eligible = [row for row in rows if row.eligible]
     reached = [row for row in eligible if row.reached_10]
 
+    canonical_examples = canonical_examples_from_replay(
+        rows,
+        replay_candles,
+        horizon_bars=args.learning_hold_bars,
+        clean_target=args.clean_target,
+        clean_max_mae=args.clean_max_mae,
+    )
+    clean_examples = [example for example in canonical_examples if example.outcome.clean_10]
+    canonical_target_counts = {
+        "5": sum(example.outcome.reached_5 for example in canonical_examples),
+        "10": sum(example.outcome.reached_10 for example in canonical_examples),
+        "20": sum(example.outcome.reached_20 for example in canonical_examples),
+        "30": sum(example.outcome.reached_30 for example in canonical_examples),
+        "40": sum(example.outcome.reached_40 for example in canonical_examples),
+    }
+
+    walk_forward_result = None
+    if args.persist_training:
+        from aureon.storage.runtime import build_storage
+
+        storage = build_storage(
+            account_scope=config.account_scope,
+            state_heartbeat_seconds=config.state_heartbeat_seconds,
+        )
+        for example in canonical_examples:
+            storage.training_memory.write_canonical(example)
+        if args.walk_forward:
+            from aureon.services.model_backtest import V1WalkForwardBacktester
+
+            walk_forward_result = V1WalkForwardBacktester(
+                training_memory=storage.training_memory,
+                models=storage.models,
+            ).run(symbol)
+
     model_test = None
     adaptive_model = None
     adaptive_test = None
