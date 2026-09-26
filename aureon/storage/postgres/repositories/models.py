@@ -374,6 +374,44 @@ class ModelRepository(PostgresRepository):
             forty_brier=brier("forty"),
         )
 
+    def prediction_summary_for_model(
+        self,
+        model_id: str,
+        *,
+        limit: int = 500,
+    ) -> ShadowPredictionSummary:
+        statement = (
+            select(self.predictions)
+            .where(self.predictions.c.model_id == model_id)
+            .order_by(self.predictions.c.predicted_at.desc())
+            .limit(limit)
+        )
+        rows = [self._prediction_dict(row) for row in self._rows(statement)]
+        reconciled = [row for row in rows if row.get("actual_outcomes") is not None]
+
+        def brier(target: str) -> float | None:
+            pairs: list[tuple[float, float]] = []
+            for row in reconciled:
+                actual = (row.get("actual_outcomes") or {}).get(target)
+                probability = (row.get("probabilities") or {}).get(target)
+                if actual is None or probability is None:
+                    continue
+                pairs.append((float(probability), 1.0 if bool(actual) else 0.0))
+            if not pairs:
+                return None
+            return sum((probability - actual) ** 2 for probability, actual in pairs) / len(pairs)
+
+        targets = ("clean_10", "reach_5", "reach_10", "reach_20", "reach_30", "reach_40")
+        return ShadowPredictionSummary(
+            predictions=len(rows),
+            reconciled=len(reconciled),
+            clean_10_brier=brier("clean_10"),
+            target_brier={target: brier(target) for target in targets},
+            six_brier=brier("six"),
+            twenty_brier=brier("twenty"),
+            forty_brier=brier("forty"),
+        )
+
     @staticmethod
     def _metrics_json(metrics: dict[str, TargetMetrics]) -> dict[str, Any]:
         return {
