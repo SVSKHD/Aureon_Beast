@@ -115,13 +115,14 @@ class SetupEvaluator:
         point: float,
         repository: Any,
         tracker: Any | None = None,
+        gap_guard: object | None = None,
     ) -> None:
         from aureon.evaluation.outcome_tracker import OutcomeTracker
 
         self.rule = rule
         self.repository = repository
         self.tracker = tracker or OutcomeTracker(
-            rule, market_tz=market_tz, point=point
+            rule, market_tz=market_tz, point=point, gap_guard=gap_guard
         )
         #: setup_id -> the setup, so a completed evaluation can carry its family and context
         #: without a read.
