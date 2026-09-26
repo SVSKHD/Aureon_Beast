@@ -5,6 +5,7 @@ Examples:
   python main_backtest.py --data data/xau_m5.csv --from 2026-01-01 --to 2026-06-30
   python main_backtest.py --data data/xau_m5.parquet --from 2026-01-01 --to 2026-06-30 --train
   python main_backtest.py --data-dir data/live_candles --symbol XAUUSD --from 2026-07-01 --to 2026-07-31 --train
+  python main_backtest.py --mt5 --symbol XAUUSD --from 2026-07-01 --to 2026-07-31 --train
 
 Date-only bounds are interpreted in AUREON_MARKET_TZ. --to is inclusive for a date-only value.
 The output is historical reference evidence only and is never auto-promoted into live trading.
@@ -22,6 +23,7 @@ from zoneinfo import ZoneInfo
 from aureon.config import AureonConfig
 from aureon.data.historical_provider import HistoricalDataProvider
 from aureon.data.live_candle_archive import read_archive
+from aureon.data.mt5_provider import MT5DataProvider
 from aureon.engine.analysis_engine import AnalysisEngine
 from aureon.models.base import to_utc
 from aureon.models.enums import Timeframe
@@ -124,6 +126,11 @@ def main() -> int:
         "--data-dir",
         help="directory of daily live archives, e.g. data/live_candles",
     )
+    source.add_argument(
+        "--mt5",
+        action="store_true",
+        help="fetch closed M5 candles directly from the configured MT5 terminal",
+    )
     parser.add_argument("--from", dest="start", required=True, help="YYYY-MM-DD or ISO datetime")
     parser.add_argument("--to", dest="end", required=True, help="YYYY-MM-DD or ISO datetime")
     parser.add_argument("--symbol", default=None)
@@ -142,6 +149,7 @@ def main() -> int:
     end = _bound(args.end, config.market_tz, inclusive_end=("T" not in args.end))
 
     archive_files: list[Path] = []
+    source_label = ""
     if args.data_dir:
         all_candles, archive_files = _archive_candles(
             Path(args.data_dir),
@@ -151,13 +159,45 @@ def main() -> int:
             start=start,
             end=end,
         )
-        # Replay includes pre-range warmup and a short post-range outcome tail.
         replay_candles = all_candles
         requested_candles = [
             candle for candle in all_candles
             if start <= candle.open_time.utc < end
         ]
         point = SymbolIntelligenceAgent().resolve_tuning(symbol).point
+        source_label = f"archive:{args.data_dir}"
+    elif args.mt5:
+        provider = MT5DataProvider(
+            market_tz=config.market_tz,
+            login=config.mt5_login,
+            password=config.mt5_password,
+            server=config.mt5_server,
+            terminal_path=config.mt5_terminal_path,
+        )
+        provider.connect()
+        try:
+            warmup_start = start - timedelta(days=14)
+            outcome_end = end + timedelta(days=2)
+            replay_candles = provider.get_closed_candles(
+                symbol,
+                Timeframe.M5,
+                warmup_start,
+                outcome_end,
+            )
+            requested_candles = [
+                candle for candle in replay_candles
+                if start <= candle.open_time.utc < end
+            ]
+            point = provider.symbol_info(symbol).point
+            terminal = provider.terminal_info()
+            account = provider.account_info()
+            source_label = (
+                f"mt5:{account.get('server') or 'unknown'}"
+                f"/{account.get('login') or 'unknown'}"
+                f" build={terminal.get('build') or 'unknown'}"
+            )
+        finally:
+            provider.close()
     else:
         provider = HistoricalDataProvider(
             args.data,
@@ -171,9 +211,10 @@ def main() -> int:
         )
         requested_candles = replay_candles
         point = provider.symbol_info(symbol).point
+        source_label = f"file:{args.data}"
 
     if not requested_candles:
-        source_name = args.data_dir or args.data
+        source_name = source_label or args.data_dir or args.data or "MT5"
         print(
             f"No {symbol} M5 candles in requested range from {source_name}.",
             file=sys.stderr,
@@ -210,6 +251,7 @@ def main() -> int:
         "candles": len(requested_candles),
         "replay_candles_with_warmup": len(replay_candles),
         "archive_files_loaded": [str(path) for path in archive_files],
+        "data_source": source_label,
         "agent20_crosses": len(rows),
         "eligible_crosses": len(eligible),
         "eligible_reached_target": len(reached),
@@ -236,9 +278,10 @@ def main() -> int:
 
     rate = (len(reached) / len(eligible)) if eligible else None
     print(f"Aureon decision backtest — {symbol} M5")
+    print(f"  source               {source_label}")
     if args.data_dir:
-        print(f"  archive              {args.data_dir}")
         print(f"  parquet files loaded {len(archive_files)}")
+    if args.data_dir or args.mt5:
         print(f"  replay candles       {len(replay_candles)} (includes warmup/outcome tail)")
     print(f"  candles in range     {len(requested_candles)}")
     print(f"  EMA/RSI cross rows   {len(rows)}")
