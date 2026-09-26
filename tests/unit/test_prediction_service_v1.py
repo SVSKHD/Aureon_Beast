@@ -130,3 +130,34 @@ def test_schema_mismatch_returns_no_prediction() -> None:
 
     assert service.predict_shadow(setup, event) is None
     assert models.writes == []
+
+
+def test_extra_context_is_frozen_into_persisted_prediction() -> None:
+    models = FakeModels(_model("shadow"))
+    service = PredictionService(models)
+    setup, event = _setup_event()
+
+    intelligence = service.predict_shadow(
+        setup,
+        event,
+        extra_context={
+            "market_regime": "trend_expansion",
+            "supporting_agents": 7,
+            "agent_states": {
+                "wick": {
+                    "stance": "buy",
+                    "confidence": 0.8,
+                    "alignment": "aligned",
+                    "observation": "lower rejection",
+                    "state": "confirmed",
+                }
+            },
+        },
+    )
+
+    assert intelligence is not None
+    assert len(models.writes) == 1
+    frozen = models.writes[0].feature_snapshot
+    assert frozen["market_regime"] == "trend_expansion"
+    assert frozen["supporting_agents"] == 7
+    assert frozen["agents"]["wick"]["confidence"] == 0.8
