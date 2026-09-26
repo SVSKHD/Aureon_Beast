@@ -14,11 +14,14 @@ from aureon.storage.runtime import build_storage
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model-id", required=True)
+    parser.add_argument("--model-id")
+    parser.add_argument("--symbol", default="XAUUSD")
+    parser.add_argument("--min-new-examples", type=int, default=30)
+    parser.add_argument("--min-samples", type=int, default=30)
     parser.add_argument(
         "action",
-        choices=("qualify", "shadow", "evaluate-shadow"),
-        help="candidate->challenger, challenger->shadow, or shadow->champion/reject/hold",
+        choices=("qualify", "shadow", "evaluate-shadow", "cycle"),
+        help="one lifecycle transition, shadow evaluation, or a conservative V1 cycle",
     )
     args = parser.parse_args(argv)
 
@@ -33,6 +36,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     evolution = EvolutionAgent(storage.models)
 
+    if args.action == "cycle":
+        report = evolution.run_cycle(
+            args.symbol,
+            training_memory=storage.training_memory,
+            min_new_examples=args.min_new_examples,
+            min_samples=args.min_samples,
+        )
+        import json
+
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+
+    if not args.model_id:
+        parser.error("--model-id is required for qualify/shadow/evaluate-shadow")
     if args.action == "qualify":
         model = evolution.qualify_candidate(args.model_id)
     elif args.action == "shadow":
