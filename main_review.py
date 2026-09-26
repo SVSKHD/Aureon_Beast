@@ -396,7 +396,6 @@ class ReviewWatcher:
         """
         if self._last_evolution_market_date.get(symbol) == market_date:
             return
-        self._last_evolution_market_date[symbol] = market_date
         try:
             from aureon.services.evolution_agent import EvolutionAgent
 
@@ -406,6 +405,7 @@ class ReviewWatcher:
                 symbol,
                 training_memory=training_agent.memory,  # type: ignore[attr-defined]
             )
+            self._last_evolution_market_date[symbol] = market_date
             log.info(
                 "V1 evolution %s %s: champion=%s shadow=%s trained=%s reason=%s",
                 symbol,
