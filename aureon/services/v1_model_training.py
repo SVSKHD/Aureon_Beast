@@ -260,6 +260,62 @@ def refit_v1_artifact(
         "refit_on_all_past_examples": True,
     }
 
+
+def evaluate_v1_artifact(
+    model: ModelRegistryEntry,
+    examples: list[CanonicalTrainingExample],
+) -> dict[str, Any]:
+    """Score an exact saved V1 model on frozen examples without refitting."""
+    usable = [
+        example
+        for example in examples
+        if example.feature_schema == FEATURE_SCHEMA_V1
+        and example.label_schema == LABEL_SCHEMA_V1
+    ]
+    usable.sort(key=lambda one: (one.features.timestamp, one.setup_id))
+    scored = []
+    labels_by_target: dict[str, list[int]] = {target: [] for target in V1_TARGETS}
+    probs_by_target: dict[str, list[float]] = {target: [] for target in V1_TARGETS}
+
+    for example in usable:
+        probabilities = predict_v1_artifact(model, example.features)
+        scored.append(
+            {
+                "setup_id": example.setup_id,
+                "timestamp": example.features.timestamp.isoformat(),
+                "direction": example.features.direction.value,
+                "probabilities": probabilities,
+                "actual": {
+                    target: bool(target_value(example, target))
+                    for target in V1_TARGETS
+                },
+                "mae_before_10": example.outcome.mae_before_10,
+                "max_favourable_move": example.outcome.max_favourable_move,
+                "max_adverse_move": example.outcome.max_adverse_move,
+            }
+        )
+        for target in V1_TARGETS:
+            labels_by_target[target].append(1 if target_value(example, target) else 0)
+            probs_by_target[target].append(float(probabilities[target]))
+
+    metrics: dict[str, Any] = {}
+    for target in V1_TARGETS:
+        if not labels_by_target[target]:
+            continue
+        metrics[target] = binary_metrics(
+            labels_by_target[target],
+            probs_by_target[target],
+        )
+    return {
+        "model_id": model.model_id,
+        "algorithm": model.algorithm,
+        "status": model.status,
+        "samples": len(usable),
+        "metrics": metrics,
+        "scored_rows": scored,
+    }
+
+
 class V1ModelTrainer:
     """Train new candidates; never changes Champion/Shadow state."""
 
