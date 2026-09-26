@@ -2248,7 +2248,7 @@ def _wire_setups(observer: Observer, config: AureonConfig, storage: object) -> N
     research block and for nothing else.
     """
     from aureon.config.symbol_tuning import tuning_for
-    from aureon.evaluation.rules import get_rule
+    from aureon.evaluation.rules import XAU_CLEAN_MOVE_V1, get_rule
     from aureon.services.session_evidence import verified_market_dates
     from aureon.services.setup_engine import SetupEngine
     from aureon.services.setup_evaluation import SetupEvaluator
@@ -2285,11 +2285,20 @@ def _wire_setups(observer: Observer, config: AureonConfig, storage: object) -> N
                 outcome_agents=(move_agent,),
                 now=lambda: observer._setup_clock,
             )
+            learning_rules = (
+                (XAU_CLEAN_MOVE_V1,)
+                if symbol.upper() == "XAUUSD" and rule.rule_id != XAU_CLEAN_MOVE_V1.rule_id
+                else ()
+            )
             observer.setup_evaluators[key] = SetupEvaluator(
                 rule=rule,
                 market_tz=config.market_tz,
                 point=point,
                 repository=evaluations,
+                gap_guard=observer.symbol_intelligence_agent.market_schedule(
+                    symbol
+                ).close_spanned_by,
+                additional_rules=learning_rules,
             )
 
 
