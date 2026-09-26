@@ -233,6 +233,200 @@ class EvolutionAgent:
         )
         return promoted
 
+    def run_cycle(
+        self,
+        symbol: str,
+        *,
+        training_memory: Any,
+        min_new_examples: int = 30,
+        min_samples: int = 30,
+        min_train_days: int = 20,
+        test_days: int = 5,
+    ) -> dict[str, Any]:
+        """Run one conservative, resumable governance cycle.
+
+        The cycle may trigger training, but every candidate still passes the normal
+        candidate -> challenger -> walk-forward -> shadow gates. It never auto-promotes
+        a fresh model; Champion promotion still requires later reconciled shadow evidence.
+        """
+        from aureon.services.model_backtest import V1WalkForwardBacktester
+        from aureon.services.v1_model_training import V1ModelTrainer
+
+        symbol = symbol.upper()
+        report: dict[str, Any] = {
+            "symbol": symbol,
+            "trained": [],
+            "qualified": [],
+            "backtested": [],
+            "shadow": None,
+            "champion": None,
+            "reason": None,
+        }
+
+        active_shadow = self.models.active_shadow(symbol)
+        if active_shadow is not None:
+            evaluated = self.evaluate_shadow(active_shadow.model_id)
+            if evaluated.status == ModelLifecycleStatus.SHADOW.value:
+                report["shadow"] = evaluated.model_id
+                report["reason"] = "active shadow still collecting evidence"
+                champion = self.models.champion(symbol)
+                report["champion"] = None if champion is None else champion.model_id
+                return report
+            if evaluated.status == ModelLifecycleStatus.CHAMPION.value:
+                report["champion"] = evaluated.model_id
+
+        all_examples = self._canonical_examples(training_memory, symbol)
+        if len(all_examples) < min_samples:
+            report["reason"] = (
+                f"insufficient canonical examples: {len(all_examples)} < {min_samples}"
+            )
+            champion = self.models.champion(symbol)
+            report["champion"] = None if champion is None else champion.model_id
+            return report
+
+        pending = [
+            model
+            for model in self.models.challengers(symbol)
+            if model.status in {
+                ModelLifecycleStatus.CANDIDATE.value,
+                ModelLifecycleStatus.CHALLENGER.value,
+            }
+        ]
+
+        if not pending:
+            latest = self.models.latest_model(symbol)
+            new_examples = self._new_example_count(all_examples, latest)
+            degradation = self.degradation_signal(symbol)
+            should_train = (
+                latest is None
+                or bool(degradation.get("degraded"))
+                or new_examples >= min_new_examples
+            )
+            if not should_train:
+                report["reason"] = (
+                    f"no retrain trigger: new_examples={new_examples}, "
+                    f"degraded={degradation.get('degraded')}"
+                )
+                champion = self.models.champion(symbol)
+                report["champion"] = None if champion is None else champion.model_id
+                return report
+
+            candidates = V1ModelTrainer(
+                training_memory=training_memory,
+                models=self.models,
+                now=self._now,
+            ).train_candidates(
+                symbol,
+                min_samples=min_samples,
+            )
+            pending = list(candidates)
+            report["trained"] = [model.model_id for model in candidates]
+            for model in candidates:
+                self._record(
+                    model,
+                    action="candidate_created",
+                    reason=(
+                        f"cycle trigger: new_examples={new_examples}; "
+                        f"degraded={degradation.get('degraded')}"
+                    ),
+                    metrics={
+                        "training_samples": model.training_samples,
+                        "algorithm": model.algorithm,
+                    },
+                )
+
+        backtester = V1WalkForwardBacktester(
+            training_memory=training_memory,
+            models=self.models,
+            now=self._now,
+        )
+        eligible: list[tuple[ModelRegistryEntry, Any]] = []
+        for model in pending:
+            current = self.models.get_model(model.model_id)
+            if current is None:
+                continue
+            if current.status == ModelLifecycleStatus.CANDIDATE.value:
+                current = self.qualify_candidate(current.model_id)
+            if current.status != ModelLifecycleStatus.CHALLENGER.value:
+                continue
+            report["qualified"].append(current.model_id)
+
+            backtest = self.models.latest_backtest_for_model(current.model_id)
+            if backtest is None or backtest.status != "complete":
+                backtest = backtester.run(
+                    symbol,
+                    model_id=current.model_id,
+                    min_train_days=min_train_days,
+                    test_days=test_days,
+                    min_train_samples=min_samples,
+                )
+            report["backtested"].append(
+                {
+                    "model_id": current.model_id,
+                    "backtest_id": backtest.backtest_id,
+                    "status": backtest.status,
+                }
+            )
+            if backtest.status != "complete":
+                continue
+            clean = backtest.aggregate_metrics.get("clean_10")
+            if clean is None or self._validation_failures(clean):
+                # admit_shadow performs the persistent rejection + reason.
+                rejected = self.admit_shadow(current.model_id)
+                _ = rejected
+                continue
+            eligible.append((current, clean))
+
+        if eligible:
+            # Choose among validated challengers using the metric that matters most for
+            # V1: clean-win precision, then calibration (Brier), then false-positive rate.
+            eligible.sort(
+                key=lambda pair: (
+                    -(pair[1].precision if pair[1].precision is not None else -1.0),
+                    pair[1].brier if pair[1].brier is not None else 1e9,
+                    pair[1].false_positive_rate
+                    if pair[1].false_positive_rate is not None
+                    else 1e9,
+                    pair[0].model_id,
+                )
+            )
+            selected = eligible[0][0]
+            shadow = self.admit_shadow(selected.model_id)
+            if shadow.status == ModelLifecycleStatus.SHADOW.value:
+                report["shadow"] = shadow.model_id
+                report["reason"] = "validated challenger entered shadow; promotion deferred"
+            # Other validated challengers remain challengers for audit/comparison.
+
+        champion = self.models.champion(symbol)
+        report["champion"] = None if champion is None else champion.model_id
+        if report["reason"] is None:
+            report["reason"] = "cycle completed; no challenger entered shadow"
+        return report
+
+    @staticmethod
+    def _canonical_examples(training_memory: Any, symbol: str) -> list[Any]:
+        examples = training_memory.canonical_between(
+            symbol,
+            "0001-01-01",
+            "9999-12-31",
+        )
+        return sorted(
+            examples,
+            key=lambda one: (one.features.timestamp, one.setup_id),
+        )
+
+    @staticmethod
+    def _new_example_count(
+        examples: list[Any],
+        latest_model: ModelRegistryEntry | None,
+    ) -> int:
+        if latest_model is None:
+            return len(examples)
+        return sum(
+            example.market_date > latest_model.trained_through
+            for example in examples
+        )
+
     def degradation_signal(self, symbol: str) -> dict[str, Any]:
         champion = self.models.champion(symbol)
         if champion is None:
