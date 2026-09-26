@@ -87,6 +87,14 @@ def _direction(value: Any) -> Direction:
 
 
 def _agent_states(snapshot: dict[str, Any]) -> dict[str, AgentFeatureState]:
+    result: dict[str, AgentFeatureState] = {}
+    explicit = snapshot.get("agent_states")
+    if isinstance(explicit, dict):
+        for name, payload in explicit.items():
+            if isinstance(payload, AgentFeatureState):
+                result[str(name)] = payload
+            elif isinstance(payload, dict):
+                result[str(name)] = AgentFeatureState.model_validate(payload)
     names = set(KNOWN_AGENTS)
     for key in snapshot:
         if not key.startswith("agent_"):
@@ -96,7 +104,6 @@ def _agent_states(snapshot: dict[str, Any]) -> dict[str, AgentFeatureState]:
             if tail.endswith(suffix):
                 names.add(tail[: -len(suffix)])
                 break
-    result: dict[str, AgentFeatureState] = {}
     for name in sorted(names):
         prefix = f"agent_{name}"
         values = {
