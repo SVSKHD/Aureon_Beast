@@ -259,10 +259,11 @@ def main() -> int:
         parser.error("--max-stop-probability must be between 0 and 1")
     if args.max_adaptive_trades < 0:
         parser.error("--max-adaptive-trades must be >= 0")
-    if args.clean_target <= 0:
-        parser.error("--clean-target must be > 0")
-    if args.clean_max_mae < 0:
-        parser.error("--clean-max-mae must be >= 0")
+    if args.clean_target != 10.0 or args.clean_max_mae != 7.0:
+        parser.error(
+            "AUREON_CLEAN_MOVE_V1 is fixed at --clean-target 10 "
+            "and --clean-max-mae 7; use a new label schema for another experiment"
+        )
     if args.walk_forward and not args.persist_training:
         parser.error("--walk-forward requires --persist-training")
     if args.learning_hold_bars < 12:
