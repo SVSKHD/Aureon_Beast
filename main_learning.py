@@ -14,6 +14,7 @@ Trading does not wait for this process to finish a training or backup cycle.
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import threading
@@ -75,7 +76,15 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="run exactly one local learning/governance/backup cycle and exit",
+    )
+    args = parser.parse_args(argv)
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
@@ -128,6 +137,16 @@ def main() -> int:
         backup_assets=tuple(assets),
         backup_config=safe_config,
     )
+    if args.once:
+        results = service.run_once()
+        for result in results:
+            print(
+                f"{result.symbol}: action={result.action} "
+                f"examples={result.canonical_examples} "
+                f"model={result.model_id or '—'} detail={result.detail}"
+            )
+        return 0 if all(result.action != "error" for result in results) else 2
+
     runner = LearningRunner(
         service,
         interval_seconds=_float_env("AUREON_V1_LEARNING_INTERVAL_SECONDS", 3600.0),
