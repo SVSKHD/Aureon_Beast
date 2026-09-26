@@ -25,6 +25,7 @@ class LearningMemoryService:
         self,
         repository: Any,
         *,
+        models: Any | None = None,
         horizon_bars: int = 864,
         clean_target: float = 10.0,
         clean_max_mae: float = 7.0,
@@ -33,6 +34,7 @@ class LearningMemoryService:
         if horizon_bars < 1:
             raise ValueError("horizon_bars must be >= 1")
         self.repository = repository
+        self.models = models
         self.horizon_bars = horizon_bars
         self.clean_target = clean_target
         self.clean_max_mae = clean_max_mae
@@ -100,6 +102,7 @@ class LearningMemoryService:
                     generated_at=to_utc(candle.close_time),
                 )
                 self.repository.write_canonical(example)
+                self._reconcile_predictions(example)
                 resolved += 1
         return resolved
 
@@ -175,3 +178,29 @@ class LearningMemoryService:
             max_adverse_move=pending.max_adverse_move,
             mae_before_10=pending.mae_before_10,
         )
+
+
+    def _reconcile_predictions(self, example: Any) -> None:
+        if self.models is None:
+            return
+        outcomes = {
+            "clean_10": example.outcome.clean_10,
+            "reach_5": example.outcome.reached_5,
+            "reach_10": example.outcome.reached_10,
+            "reach_20": example.outcome.reached_20,
+            "reach_30": example.outcome.reached_30,
+            "reach_40": example.outcome.reached_40,
+            "mae_before_10": example.outcome.mae_before_10,
+            "max_favourable_move": example.outcome.max_favourable_move,
+            "max_adverse_move": example.outcome.max_adverse_move,
+        }
+        for prediction in self.models.predictions_for_setup(
+            example.setup_id,
+            unreconciled_only=True,
+        ):
+            self.models.reconcile_prediction(
+                prediction.model_id,
+                example.setup_id,
+                outcomes=outcomes,
+                at=example.generated_at,
+            )
