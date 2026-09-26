@@ -1,4 +1,4 @@
-"""Logical Agent 16: profit guardian after the primary +10 move.
+"""Logical Agent 16: profit guardian after the minimum +5 move.
 
 Tracks the runner and makes every trail/exit reason explicit. It never sends the close
 itself; a future management executor can consume EXIT after applying the existing live
@@ -18,7 +18,7 @@ class ProfitGuardianAgent:
     def __init__(
         self,
         *,
-        primary_target_move: float = 10.0,
+        primary_target_move: float = 5.0,
         minimum_lock: float = 4.0,
         trail_fraction_of_peak: float = 0.55,
         tighten_fraction_of_peak: float = 0.70,
@@ -66,7 +66,7 @@ class ProfitGuardianAgent:
                 continuation_score=score,
                 continuation_total=total,
                 evidence=tuple(f"{name}: healthy" for name in positives),
-                warnings=("primary target not reached; guardian on standby",),
+                warnings=("minimum +5 trailing trigger not reached; guardian on standby",),
             )
 
         emergency = (
