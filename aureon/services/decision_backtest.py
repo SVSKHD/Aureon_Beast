@@ -329,6 +329,7 @@ def test_reference_model(
         "metrics": metrics,
         "predicted_positive_50": len(selected),
         "predicted_positive_hits": selected_hits,
+        "predicted_positive_misses": len(selected) - selected_hits,
         "predicted_positive_hit_rate": (
             selected_hits / len(selected) if selected else None
         ),
