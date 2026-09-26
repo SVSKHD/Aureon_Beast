@@ -33,6 +33,10 @@ class LearningMemoryService:
     ) -> None:
         if horizon_bars < 1:
             raise ValueError("horizon_bars must be >= 1")
+        if clean_target != 10.0 or clean_max_mae != 7.0:
+            raise ValueError(
+                "AUREON_CLEAN_MOVE_V1 is fixed at +10 with MAE <= 7"
+            )
         self.repository = repository
         self.models = models
         self.horizon_bars = horizon_bars
