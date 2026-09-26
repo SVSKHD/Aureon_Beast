@@ -50,6 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-executor", action="store_true")
     parser.add_argument("--no-discord", action="store_true")
     parser.add_argument("--no-review", action="store_true")
+    parser.add_argument("--no-learning", action="store_true")
     parser.add_argument(
         "--no-preflight",
         action="store_true",
@@ -118,6 +119,7 @@ def _selected(args: argparse.Namespace, parser: argparse.ArgumentParser) -> tupl
         "executor": args.no_executor,
         "discord": args.no_discord,
         "review": args.no_review,
+        "learning": args.no_learning,
     }
     services = tuple(spec for spec in DEFAULT_SERVICES if not disabled[spec.name])
     if not services:
