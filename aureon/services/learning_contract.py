@@ -284,8 +284,14 @@ def outcome_from_future_candles(
     """Resolve the canonical clean-move and target-ladder outcome.
 
     The input list must already contain ONLY candles after the frozen setup timestamp.
-    No feature computation occurs here.
+    No feature computation occurs here. V1's label meaning is immutable: +10 with
+    MAE before first +10 <= 7. A different experiment requires a new label schema.
     """
+    if clean_target != 10.0 or clean_max_mae != 7.0:
+        raise ValueError(
+            "AUREON_CLEAN_MOVE_V1 is fixed at clean_target=10 and clean_max_mae=7; "
+            "create a new label schema for different thresholds"
+        )
     future = candles[:horizon_bars]
     reached = {target: False for target in TARGETS}
     bars_to: dict[float, int | None] = {target: None for target in TARGETS}
