@@ -17,6 +17,7 @@ from aureon.ml.boosted_stumps import BoostedStumpModel, fit_boosted_stumps
 from aureon.ml.logistic import LogisticModel, binary_metrics, fit_logistic
 from aureon.models.enums import Direction
 from aureon.services.decision_backtest import DecisionReplayRow
+from aureon.services.learning_contract import outcome_from_future_candles
 
 TARGETS: tuple[float, ...] = (5.0, 10.0, 20.0, 30.0, 40.0)
 QUALITY_STOPS: tuple[float, ...] = (5.0, 8.0, 10.0, 15.0)
@@ -122,24 +123,37 @@ def build_adaptive_examples(
 
         direction = Direction.BUY if row.direction == "buy" else Direction.SELL
         atr14 = _atr14(candles, start)
-        target_hits = {str(int(target)): False for target in TARGETS}
-        bars_to_target: dict[str, int | None] = {str(int(target)): None for target in TARGETS}
-        mae_before_target: dict[str, float | None] = {str(int(target)): None for target in TARGETS}
-        running_mae = 0.0
-        max_favourable = 0.0
-        max_adverse = 0.0
-
-        for offset, bar in enumerate(future, start=1):
-            favourable, adverse = _favourable_adverse(bar, row.entry_price, direction)
-            running_mae = max(running_mae, adverse)
-            max_favourable = max(max_favourable, favourable)
-            max_adverse = max(max_adverse, adverse)
-            for target in TARGETS:
-                key = str(int(target))
-                if not target_hits[key] and favourable >= target:
-                    target_hits[key] = True
-                    bars_to_target[key] = offset
-                    mae_before_target[key] = running_mae
+        canonical = outcome_from_future_candles(
+            candles=future,
+            entry_price=row.entry_price,
+            direction=direction,
+            horizon_bars=horizon_bars,
+            clean_target=10.0,
+            clean_max_mae=7.0,
+        )
+        target_hits = {
+            "5": canonical.reached_5,
+            "10": canonical.reached_10,
+            "20": canonical.reached_20,
+            "30": canonical.reached_30,
+            "40": canonical.reached_40,
+        }
+        bars_to_target = {
+            "5": canonical.bars_to_5,
+            "10": canonical.bars_to_10,
+            "20": canonical.bars_to_20,
+            "30": canonical.bars_to_30,
+            "40": canonical.bars_to_40,
+        }
+        mae_before_target: dict[str, float | None] = {
+            "5": None,
+            "10": canonical.mae_before_10,
+            "20": None,
+            "30": None,
+            "40": None,
+        }
+        max_favourable = canonical.max_favourable_move
+        max_adverse = canonical.max_adverse_move
 
         first_touch_quality: dict[str, str] = {}
         for stop in QUALITY_STOPS:
@@ -166,6 +180,8 @@ def build_adaptive_examples(
                 "direction": row.direction,
                 "atr14": atr14,
                 "features": _feature_vector(row, atr14),
+                "clean_10": canonical.clean_10,
+                "path_ambiguous": canonical.path_ambiguous,
                 "target_hits": target_hits,
                 "bars_to_target": bars_to_target,
                 "mae_before_target": mae_before_target,
@@ -330,11 +346,23 @@ def train_adaptive_reference(
         ),
     }
 
+    clean10_labels = [1 if item["clean_10"] else 0 for item in train]
+    clean10_test_labels = [1 if item["clean_10"] else 0 for item in test]
+    quality_models = {
+        "clean_10": _fit_binary_challengers(
+            train_vectors=train_vectors,
+            train_labels=clean10_labels,
+            test_vectors=test_vectors,
+            test_labels=clean10_test_labels,
+        )
+    }
+
     return {
         "status": "adaptive_reference_only",
         "schema": "AUREON_ADAPTIVE_MULTI_TARGET_V2",
         "historical_reference_only": True,
         "five_outputs": [5, 10, 20, 30, 40],
+        "primary_output": "clean_10",
         "horizon_bars": horizon_bars,
         "horizon_hours": horizon_bars * 5 / 60,
         "samples": len(examples),
@@ -350,6 +378,7 @@ def train_adaptive_reference(
         "target_models": target_models,
         "quality_10_first_touch": quality,
         "loss_control_models": loss_control_models,
+        "quality_models": quality_models,
         "winner_mae_before_10": {
             "samples": len(winner_mae10),
             "median": median(winner_mae10) if winner_mae10 else None,
@@ -417,6 +446,7 @@ def test_adaptive_reference(
     scales = [float(value) for value in artifact["scales"]]
     models = artifact["target_models"]
     loss_models = artifact.get("loss_control_models") or {}
+    quality_models = artifact.get("quality_models") or {}
 
     scored: list[dict[str, Any]] = []
     labels_by_target: dict[str, list[int]] = {str(int(t)): [] for t in TARGETS}
@@ -436,6 +466,10 @@ def test_adaptive_reference(
                 probs_by_target[key].append(probability)
             raw[key] = probability
 
+        clean_quality_probability = _load_probability(
+            quality_models.get("clean_10", {}),
+            vector,
+        )
         clean10_probability = _load_probability(
             loss_models.get("clean_10_before_stop_15", {}),
             vector,
@@ -467,6 +501,7 @@ def test_adaptive_reference(
             {
                 "at": item["at"],
                 "direction": item["direction"],
+                "probability_clean_10": clean_quality_probability,
                 "probabilities": raw,
                 "probability_clean_10_before_15": clean10_probability,
                 "probability_stop_15_before_10": stop15_probability,
@@ -493,6 +528,12 @@ def test_adaptive_reference(
         else:
             metrics[key] = None
 
+    clean_quality_labels = [1 if item["clean_10"] else 0 for item in examples]
+    clean_quality_probs = [
+        float(item["probability_clean_10"])
+        for item in scored
+        if item.get("probability_clean_10") is not None
+    ]
     clean_labels = [
         1 if item["first_touch_10_vs_stop"]["15"] == "target_first" else 0
         for item in examples
@@ -511,6 +552,12 @@ def test_adaptive_reference(
         for item in scored
         if item["probability_stop_15_before_10"] is not None
     ]
+    quality_metrics = {
+        "clean_10": (
+            binary_metrics(clean_quality_labels[: len(clean_quality_probs)], clean_quality_probs)
+            if clean_quality_probs else None
+        )
+    }
     loss_control_metrics = {
         "clean_10_before_stop_15": (
             binary_metrics(clean_labels[: len(clean_probs)], clean_probs) if clean_probs else None
@@ -535,6 +582,7 @@ def test_adaptive_reference(
         "selected_for_5": len(selected_5),
         "selected_for_10": len(selected_10),
         "runner_candidates_20_plus": len(runner_candidates),
+        "quality_metrics": quality_metrics,
         "loss_control_metrics": loss_control_metrics,
         "scored_rows": scored,
     }
