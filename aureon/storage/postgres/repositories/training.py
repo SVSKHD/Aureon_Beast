@@ -10,6 +10,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from aureon.models.learning_v1 import CanonicalTrainingExample
 from aureon.models.training import DailyTrainingStatus, TrainingExample
 from aureon.storage.postgres import tables
 from aureon.storage.postgres.repositories.base import PostgresRepository
@@ -18,6 +19,7 @@ from aureon.storage.postgres.repositories.base import PostgresRepository
 class TrainingMemoryRepository(PostgresRepository):
     examples = tables.TrainingExample.__table__
     statuses = tables.DailyTrainingStatus.__table__
+    canonical = tables.CanonicalTrainingExample.__table__
 
     def write_example(self, example: TrainingExample) -> TrainingExample:
         self._upsert(self._example_row(example), table=self.examples)
@@ -26,6 +28,46 @@ class TrainingMemoryRepository(PostgresRepository):
     def write_status(self, status: DailyTrainingStatus) -> DailyTrainingStatus:
         self._upsert(self._status_row(status), table=self.statuses)
         return status
+
+    def write_canonical(
+        self, example: CanonicalTrainingExample
+    ) -> CanonicalTrainingExample:
+        self._upsert(self._canonical_row(example), table=self.canonical)
+        return example
+
+    def canonical_between(
+        self,
+        symbol: str,
+        start_market_date: str,
+        end_market_date: str,
+    ) -> list[CanonicalTrainingExample]:
+        statement = (
+            select(self.canonical)
+            .where(self.canonical.c.symbol == symbol.upper())
+            .where(self.canonical.c.market_date >= start_market_date)
+            .where(self.canonical.c.market_date < end_market_date)
+            .order_by(
+                self.canonical.c.market_date,
+                self.canonical.c.timeframe,
+                self.canonical.c.setup_id,
+            )
+        )
+        return [
+            CanonicalTrainingExample.model_validate(dict(row))
+            for row in self._rows(statement)
+        ]
+
+    def canonical_for(
+        self, symbol: str, market_date: str
+    ) -> list[CanonicalTrainingExample]:
+        return [
+            example
+            for example in self.canonical_between(
+                symbol,
+                market_date,
+                _next_iso_date(market_date),
+            )
+        ]
 
     def status_for(
         self,
@@ -105,6 +147,23 @@ class TrainingMemoryRepository(PostgresRepository):
         ]
 
     @staticmethod
+    def _canonical_row(example: CanonicalTrainingExample) -> dict[str, Any]:
+        payload = example.model_dump(mode="json")
+        return {
+            "example_id": example.example_id,
+            "schema_version": example.schema_version,
+            "market_date": example.market_date,
+            "setup_id": example.setup_id,
+            "symbol": example.symbol,
+            "timeframe": example.timeframe.value,
+            "feature_schema": example.feature_schema,
+            "label_schema": example.label_schema,
+            "features": payload["features"],
+            "outcome": payload["outcome"],
+            "generated_at": example.generated_at,
+        }
+
+    @staticmethod
     def _example_row(example: TrainingExample) -> dict[str, Any]:
         payload = example.model_dump(mode="json")
         return {
@@ -172,3 +231,9 @@ class TrainingMemoryRepository(PostgresRepository):
         data = dict(row)
         data["by_timeframe"] = (data.get("by_timeframe") or {}).get("items", [])
         return data
+
+
+def _next_iso_date(value: str) -> str:
+    from datetime import date, timedelta
+
+    return (date.fromisoformat(value) + timedelta(days=1)).isoformat()
