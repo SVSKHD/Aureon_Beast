@@ -43,6 +43,7 @@ from aureon.services.decision_backtest import (
     train_reference,
 )
 from aureon.services.symbol_intelligence_agent import SymbolIntelligenceAgent
+from aureon.services.v1_model_training import score_v1_model
 from main_observer import default_agents
 
 
@@ -197,8 +198,18 @@ def main() -> int:
     parser.add_argument("--train", action="store_true", help="fit chronological reference model")
     parser.add_argument(
         "--test-model",
-        help="load a prior main_backtest JSON artifact and score this date range without retraining",
+        help="load a prior legacy main_backtest JSON artifact and score this date range without retraining",
     )
+    parser.add_argument(
+        "--test-registry-model",
+        help="score one frozen V1 registry model_id on this date range without retraining",
+    )
+    parser.add_argument(
+        "--test-champion",
+        action="store_true",
+        help="score the current V1 Champion on this date range without retraining",
+    )
+    parser.add_argument("--v1-decision-threshold", type=float, default=0.55)
     parser.add_argument("--target-move", type=float, default=10.0)
     parser.add_argument("--clean-target", type=float, default=10.0)
     parser.add_argument("--clean-max-mae", type=float, default=7.0)
@@ -222,12 +233,26 @@ def main() -> int:
     parser.add_argument("--walk-forward", action="store_true", help="run V1 chronological walk-forward validation after replay")
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
-    if args.train and args.test_model:
-        parser.error("--train and --test-model are mutually exclusive")
+    model_modes = sum(
+        bool(value)
+        for value in (
+            args.train,
+            args.test_model,
+            args.test_registry_model,
+            args.test_champion,
+        )
+    )
+    if model_modes > 1:
+        parser.error(
+            "--train, --test-model, --test-registry-model and --test-champion "
+            "are mutually exclusive"
+        )
     if (args.lot_size is None) != (args.stop_move is None):
         parser.error("--lot-size and --stop-move must be supplied together")
     if not 0.0 <= args.model_threshold <= 1.0:
         parser.error("--model-threshold must be between 0 and 1")
+    if not 0.0 <= args.v1_decision_threshold <= 1.0:
+        parser.error("--v1-decision-threshold must be between 0 and 1")
     if not 0.0 <= args.min_clean_probability <= 1.0:
         parser.error("--min-clean-probability must be between 0 and 1")
     if not 0.0 <= args.max_stop_probability <= 1.0:
@@ -410,13 +435,23 @@ def main() -> int:
     }
 
     walk_forward_result = None
-    if args.persist_training:
+    registry_model_test = None
+    storage = None
+    if (
+        args.persist_training
+        or args.test_registry_model
+        or args.test_champion
+        or args.walk_forward
+    ):
         from aureon.storage.runtime import build_storage
 
         storage = build_storage(
             account_scope=config.account_scope,
             state_heartbeat_seconds=config.state_heartbeat_seconds,
         )
+
+    if args.persist_training:
+        assert storage is not None
         for example in canonical_examples:
             storage.training_memory.write_canonical(example)
         if args.walk_forward:
@@ -426,6 +461,29 @@ def main() -> int:
                 training_memory=storage.training_memory,
                 models=storage.models,
             ).run(symbol)
+
+    if args.test_registry_model or args.test_champion:
+        assert storage is not None
+        if args.test_champion:
+            registry_model = storage.models.champion(symbol)
+            if registry_model is None:
+                raise ValueError(f"{symbol} has no registered V1 Champion")
+        else:
+            registry_model = storage.models.get_model(args.test_registry_model)
+            if registry_model is None:
+                raise ValueError(
+                    f"no registered model {args.test_registry_model!r}"
+                )
+            if registry_model.symbol.upper() != symbol:
+                raise ValueError(
+                    f"registry model {registry_model.model_id} is for "
+                    f"{registry_model.symbol}, not {symbol}"
+                )
+        registry_model_test = score_v1_model(
+            registry_model,
+            canonical_examples,
+            decision_threshold=args.v1_decision_threshold,
+        )
 
     model_test = None
     adaptive_model = None
@@ -589,6 +647,7 @@ def main() -> int:
             "walk_forward_backtest_id": (
                 getattr(walk_forward_result, "backtest_id", None)
             ),
+            "registry_model_test": registry_model_test,
             "records": [
                 example.model_dump(mode="json")
                 for example in canonical_examples
@@ -688,6 +747,23 @@ def main() -> int:
             f"  walk-forward         {walk_forward_result.status} | "
             f"oos={walk_forward_result.out_of_sample_predictions} | "
             f"clean precision={None if clean_metric is None else clean_metric.precision}"
+        )
+    if registry_model_test is not None:
+        clean_metric = (registry_model_test.get("metrics") or {}).get("clean_10") or {}
+        print("  --- V1 REGISTRY MODEL TEST ---")
+        print(f"  model                {registry_model_test.get('model_id')}")
+        print(f"  model status         {registry_model_test.get('model_status')}")
+        print(f"  samples              {registry_model_test.get('samples')}")
+        print(
+            f"  clean precision      {clean_metric.get('precision')} | "
+            f"recall={clean_metric.get('recall')} | "
+            f"brier={clean_metric.get('brier')} | "
+            f"auc={clean_metric.get('roc_auc')}"
+        )
+        print(
+            f"  selected clean       {registry_model_test.get('selected_clean_setups')} | "
+            f"actual clean={registry_model_test.get('selected_clean_wins')} | "
+            f"precision={registry_model_test.get('selected_clean_precision')}"
         )
     print("  --- position summary ---")
     print(f"  positions            {position_summary['positions']}")
