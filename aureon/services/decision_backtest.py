@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from aureon.agents.ema_rsi_eligibility_agent import EmaRsiEligibilityAgent
 from aureon.config.sessions import session_for
-from aureon.ml.logistic import binary_metrics, fit_logistic
+from aureon.ml.logistic import LogisticModel, binary_metrics, fit_logistic
 from aureon.models.enums import Direction, Timeframe
 from aureon.services.higher_timeframe_agent import HigherTimeframeAgent
 from aureon.services.market_director import DirectorInputs, MarketDirector
@@ -256,3 +256,83 @@ def _excursions(future: list[Any], entry: float, direction: Direction) -> tuple[
         mfe = max(max(0.0, entry - bar.low) for bar in future)
         mae = max(max(0.0, bar.high - entry) for bar in future)
     return mfe, mae
+
+
+def test_reference_model(
+    rows: list[DecisionReplayRow],
+    reference_model: dict[str, Any],
+) -> dict[str, Any]:
+    """Score unseen eligible rows with a previously saved reference model.
+
+    The model is never refit here. This is the strict holdout path used to test a
+    July-trained artifact on August data.
+    """
+    eligible = [row for row in rows if row.eligible]
+    if not eligible:
+        return {"status": "no_eligible_rows", "samples": 0}
+
+    if reference_model.get("status") != "reference_only":
+        raise ValueError(
+            "saved artifact does not contain a completed reference_only model"
+        )
+
+    names = tuple(reference_model.get("feature_names") or ())
+    expected = (
+        "direction_sign", "rsi", "ema_gap", "ema_gap_change",
+        "director_supporting", "director_opposing",
+        "htf_bullish", "htf_bearish", "director_ready",
+    )
+    if names != expected:
+        raise ValueError(
+            f"saved model feature contract mismatch: expected {expected}, got {names}"
+        )
+
+    means = [float(value) for value in reference_model.get("means") or ()]
+    scales = [float(value) for value in reference_model.get("scales") or ()]
+    if len(means) != len(expected) or len(scales) != len(expected):
+        raise ValueError("saved model normalization metadata is incomplete")
+
+    model = LogisticModel.from_dict(reference_model["model"])
+
+    def norm(values: list[float]) -> list[float]:
+        return [
+            (values[i] - means[i]) / max(scales[i], 1e-9)
+            for i in range(len(expected))
+        ]
+
+    probabilities = [model.probability(norm(_features(row))) for row in eligible]
+    labels = [1 if row.reached_10 else 0 for row in eligible]
+    metrics = binary_metrics(labels, probabilities)
+
+    scored = []
+    for row, probability in zip(eligible, probabilities, strict=True):
+        scored.append(
+            {
+                "at": row.at,
+                "direction": row.direction,
+                "event": row.event,
+                "probability_reach_10": probability,
+                "predicted_positive_50": probability >= 0.5,
+                "actual_reached_10": row.reached_10,
+                "bars_to_10": row.bars_to_10,
+                "mfe_12": row.mfe_12,
+                "mae_12": row.mae_12,
+            }
+        )
+
+    selected = [item for item in scored if item["predicted_positive_50"]]
+    selected_hits = sum(bool(item["actual_reached_10"]) for item in selected)
+    return {
+        "status": "tested_saved_model",
+        "historical_reference_only": True,
+        "samples": len(eligible),
+        "metrics": metrics,
+        "predicted_positive_50": len(selected),
+        "predicted_positive_hits": selected_hits,
+        "predicted_positive_misses": len(selected) - selected_hits,
+        "predicted_positive_hit_rate": (
+            selected_hits / len(selected) if selected else None
+        ),
+        "actual_positive_rate": sum(labels) / len(labels),
+        "scored_rows": scored,
+    }
