@@ -179,6 +179,13 @@ class LocalDatabase:
                 "time_to_forty_seconds": "FLOAT",
                 "max_favourable_move_price": "FLOAT",
                 "extension_after_six_price": "FLOAT",
+                "features": "JSON NOT NULL DEFAULT '{}'",
+                "outcome": "JSON",
+                "setup_created_at": "DATETIME",
+                "feature_frozen_at": "DATETIME",
+                "outcome_resolved_at": "DATETIME",
+                "entry_price": "FLOAT",
+                "direction": "VARCHAR",
             }
             for name, sql_type in additions.items():
                 if name not in training_columns:
