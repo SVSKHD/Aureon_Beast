@@ -164,6 +164,9 @@ class Observer:
         # Shadow predictors never execute; tests may leave either absent.
         self.champion_model: object | None = None
         self.shadow_model: object | None = None
+        # V1 local learning/prediction services are optional and fail closed.
+        self.learning_memory: object | None = None
+        self.v1_predictions: object | None = None
 
         #: 11B. The schedule comes from the market-state service when there is one, so the
         #: two cannot disagree about when the open is -- a second WeeklySchedule would be a
@@ -430,6 +433,11 @@ class Observer:
                 log.exception("could not archive %s", candle.open_time.utc)
         self._cache_market_day(candle)
         self._advance_evaluations(candle)
+        if self.learning_memory is not None:
+            try:
+                self.learning_memory.on_closed_candle(candle)
+            except Exception:  # noqa: BLE001 - learning must never stop observation
+                log.exception("V1 learning memory failed at %s", candle.open_time.utc)
         # Saved per candle, not per poll: a crash between two candles must not
         # re-process the earlier one.
         self.state.set_and_save(candle.symbol, candle.timeframe, candle.open_time.utc)
@@ -997,11 +1005,82 @@ class Observer:
                         )
                 except Exception:  # noqa: BLE001 - ML must never stop observation
                     log.exception("champion prediction failed for setup %s", event.setup_id)
+            full_context = self._learning_context(candle.symbol, candle.timeframe)
+            if self.learning_memory is not None:
+                try:
+                    self.learning_memory.freeze_setup(
+                        setup,
+                        event,
+                        full_context=full_context,
+                    )
+                except Exception:  # noqa: BLE001 - learning must never stop observation
+                    log.exception("could not freeze V1 setup %s", event.setup_id)
+            if self.v1_predictions is not None:
+                try:
+                    # Champion and Challenger/Shadow receive the exact same frozen setup event.
+                    # Neither path has execution authority.
+                    self.v1_predictions.predict_champion(setup, event)
+                    self.v1_predictions.predict_shadow(setup, event)
+                except Exception:  # noqa: BLE001
+                    log.exception("V1 prediction failed for setup %s", event.setup_id)
             if self.shadow_model is not None:
                 try:
+                    # Legacy +6 shadow artifacts remain readable during migration.
                     self.shadow_model.predict_setup(setup, event)
                 except Exception:  # noqa: BLE001 - shadow inference must never stop observation
-                    log.exception("shadow prediction failed for setup %s", event.setup_id)
+                    log.exception("legacy shadow prediction failed for setup %s", event.setup_id)
+
+    def _learning_context(self, symbol: str, timeframe: Timeframe) -> dict[str, object]:
+        """Flatten the observer-owned current state for an immutable V1 feature snapshot."""
+        key = (symbol, timeframe)
+        state = self._snapshot(symbol, timeframe).as_state()
+        result: dict[str, object] = {}
+
+        regime = state.get("market_regime") or {}
+        if isinstance(regime, dict):
+            result["market_regime"] = regime.get("regime") or regime.get("state")
+        participation = state.get("volume_participation") or {}
+        if isinstance(participation, dict):
+            result["participation_state"] = (
+                participation.get("state")
+                or participation.get("participation")
+                or participation.get("volume_state")
+            )
+        journey = state.get("market_journey")
+        if journey is not None:
+            result["market_journey"] = journey
+
+        htf = self._higher_timeframe_reads.get(key)
+        if htf is not None:
+            result["htf_trend"] = str(
+                getattr(getattr(htf, "dominant_bias", None), "value", None)
+                or getattr(htf, "state", None)
+                or "unknown"
+            )
+            result["htf_alignment"] = str(
+                getattr(getattr(htf, "state", None), "value", None)
+                or getattr(htf, "alignment", None)
+                or "unknown"
+            )
+
+        director = self._director_decisions.get(key)
+        if director is not None:
+            result["supporting_agents"] = int(getattr(director, "supporting", 0) or 0)
+            result["opposing_agents"] = int(getattr(director, "opposing", 0) or 0)
+            result["director_state"] = str(
+                getattr(getattr(director, "state", None), "value", None)
+                or getattr(director, "state", None)
+                or "unknown"
+            )
+
+        expansion = self._expansion_reads.get(key)
+        if expansion is not None:
+            result["expansion_state"] = str(
+                getattr(getattr(expansion, "phase", None), "value", None)
+                or getattr(expansion, "phase", None)
+                or "unknown"
+            )
+        return result
 
     def _setup_inputs(self, candle: Candle, detections: list[Detection]):
         """Assemble what the setup engine needs from what this candle already computed.
