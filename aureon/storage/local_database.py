@@ -194,6 +194,44 @@ class LocalDatabase:
                     )
                     log.info("upgraded local schema: training_examples.%s", name)
 
+            model_columns = {
+                row[1]
+                for row in connection.exec_driver_sql(
+                    "PRAGMA table_info(model_registry)"
+                ).fetchall()
+            }
+            model_additions = {
+                "parent_model_id": "VARCHAR",
+                "hyperparameters": "JSON NOT NULL DEFAULT '{}'",
+                "validation_metrics": "JSON NOT NULL DEFAULT '{}'",
+                "shadow_metrics": "JSON NOT NULL DEFAULT '{}'",
+                "retired_at": "DATETIME",
+                "promotion_reason": "VARCHAR",
+            }
+            for name, sql_type in model_additions.items():
+                if name not in model_columns:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE model_registry ADD COLUMN {name} {sql_type}"
+                    )
+                    log.info("upgraded local schema: model_registry.%s", name)
+
+            prediction_columns = {
+                row[1]
+                for row in connection.exec_driver_sql(
+                    "PRAGMA table_info(model_predictions)"
+                ).fetchall()
+            }
+            prediction_additions = {
+                "mode": "VARCHAR NOT NULL DEFAULT 'shadow'",
+                "decision_intelligence": "JSON NOT NULL DEFAULT '{}'",
+            }
+            for name, sql_type in prediction_additions.items():
+                if name not in prediction_columns:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE model_predictions ADD COLUMN {name} {sql_type}"
+                    )
+                    log.info("upgraded local schema: model_predictions.%s", name)
+
     def wait_until_ready(self, **_: Any) -> float:
         self.probe()
         return 0.0
