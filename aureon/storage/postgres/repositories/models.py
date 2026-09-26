@@ -156,11 +156,6 @@ class ModelRepository(PostgresRepository):
                     f"{model_id} is {status}; only {sorted(allowed)} may be promoted"
                 )
             symbol = str(row["symbol"])
-            status = str(row["status"])
-            if status not in {"candidate", "challenger", "shadow"}:
-                raise RuntimeError(
-                    f"{model_id} is {status}; only candidate/challenger may enter shadow"
-                )
             connection.execute(
                 update(self.models)
                 .where(self.models.c.symbol == symbol)
@@ -219,11 +214,17 @@ class ModelRepository(PostgresRepository):
             if row is None:
                 raise LookupError(f"no model {model_id}")
             symbol = str(row["symbol"])
+            status = str(row["status"])
+            if status not in {"candidate", "challenger", "shadow"}:
+                raise RuntimeError(
+                    f"{model_id} is {status}; only candidate/challenger may enter shadow"
+                )
             connection.execute(
                 update(self.models)
                 .where(self.models.c.symbol == symbol)
                 .where(self.models.c.status == "shadow")
-                .values(status="retired")
+                .where(self.models.c.model_id != model_id)
+                .values(status="retired", retired_at=at)
             )
             connection.execute(
                 update(self.models)
@@ -233,6 +234,33 @@ class ModelRepository(PostgresRepository):
         refreshed = self.get_model(model_id)
         if refreshed is None:
             raise LookupError(f"model {model_id} disappeared after activation")
+        return refreshed
+
+    def update_model_metrics(
+        self,
+        model_id: str,
+        *,
+        validation_metrics: dict[str, Any] | None = None,
+        shadow_metrics: dict[str, Any] | None = None,
+    ) -> ModelRegistryEntry:
+        current = self.get_model(model_id)
+        if current is None:
+            raise LookupError(f"no model {model_id}")
+        values: dict[str, Any] = {}
+        if validation_metrics is not None:
+            values["validation_metrics"] = validation_metrics
+        if shadow_metrics is not None:
+            values["shadow_metrics"] = shadow_metrics
+        if values:
+            with self._db.transaction() as connection:
+                connection.execute(
+                    update(self.models)
+                    .where(self.models.c.model_id == model_id)
+                    .values(**values)
+                )
+        refreshed = self.get_model(model_id)
+        if refreshed is None:
+            raise LookupError(f"model {model_id} disappeared while updating metrics")
         return refreshed
 
     def latest_training_run(self, symbol: str) -> ModelTrainingRun | None:
