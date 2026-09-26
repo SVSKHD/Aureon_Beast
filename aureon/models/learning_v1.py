@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
 
 from aureon.models.base import AureonDocument, AureonModel, UtcDatetime
 from aureon.models.enums import Direction, Timeframe
@@ -17,6 +17,32 @@ from aureon.models.enums import Direction, Timeframe
 FEATURE_SCHEMA_V1 = "AUREON_FEATURES_V1"
 LABEL_SCHEMA_V1 = "AUREON_CLEAN_MOVE_V1"
 MODEL_SCHEMA_V1 = "AUREON_ENTRY_MODEL_V1"
+
+
+class FrozenDict(dict):
+    """JSON-friendly dict that rejects mutation after a feature snapshot is built."""
+
+    @staticmethod
+    def _immutable(*args, **kwargs):
+        raise TypeError("frozen feature snapshot cannot be mutated")
+
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    popitem = _immutable
+    setdefault = _immutable
+    update = _immutable
+
+
+def _deep_freeze(value):
+    if isinstance(value, dict):
+        return FrozenDict({key: _deep_freeze(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_deep_freeze(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_deep_freeze(item) for item in value)
+    return value
 
 
 class ModelLifecycleStatus(StrEnum):
@@ -103,6 +129,14 @@ class FeatureSnapshotV1(AureonModel):
 
     agents: dict[str, AgentFeatureState] = Field(default_factory=dict)
     context: dict = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _freeze_nested_evidence(self) -> "FeatureSnapshotV1":
+        # Pydantic's frozen=True prevents field reassignment but a normal dict would
+        # still allow context["x"] = future_value. Freeze nested setup evidence too.
+        object.__setattr__(self, "agents", FrozenDict(dict(self.agents)))
+        object.__setattr__(self, "context", _deep_freeze(dict(self.context)))
+        return self
 
 
 class CleanMoveOutcomeV1(AureonModel):
