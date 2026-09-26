@@ -28,6 +28,11 @@ from aureon.data.mt5_provider import MT5DataProvider
 from aureon.engine.analysis_engine import AnalysisEngine
 from aureon.models.base import to_utc
 from aureon.models.enums import Timeframe
+from aureon.services.adaptive_learning import (
+    TARGETS,
+    test_adaptive_reference,
+    train_adaptive_reference,
+)
 from aureon.services.decision_backtest import (
     run_decision_replay,
     simulate_money_outcomes,
@@ -197,6 +202,10 @@ def main() -> int:
     parser.add_argument("--hold-bars", type=int, default=12)
     parser.add_argument("--contract-size", type=float, default=None)
     parser.add_argument("--model-threshold", type=float, default=0.50)
+    parser.add_argument(
+        "--learning-hold-bars", type=int, default=864,
+        help="future M5 bars used by adaptive +5/+10/+20/+30/+40 learning (864 = 72 market hours)",
+    )
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
     if args.train and args.test_model:
@@ -205,6 +214,8 @@ def main() -> int:
         parser.error("--lot-size and --stop-move must be supplied together")
     if not 0.0 <= args.model_threshold <= 1.0:
         parser.error("--model-threshold must be between 0 and 1")
+    if args.learning_hold_bars < 12:
+        parser.error("--learning-hold-bars must be at least 12")
 
     started = perf_counter()
     print("[1/6] Loading configuration...", flush=True)
@@ -217,6 +228,7 @@ def main() -> int:
     start = _bound(args.start, config.market_tz)
     end = _bound(args.end, config.market_tz, inclusive_end=("T" not in args.end))
 
+    outcome_tail_days = max(2, ((args.learning_hold_bars * 5 + 1439) // 1440) + 4)
     archive_files: list[Path] = []
     source_label = ""
     broker_economics = None
@@ -230,6 +242,7 @@ def main() -> int:
             market_tz=config.market_tz,
             start=start,
             end=end,
+            forward_days=outcome_tail_days,
         )
         replay_candles = all_candles
         requested_candles = [
@@ -251,7 +264,7 @@ def main() -> int:
         print("      MT5 connected.", flush=True)
         try:
             warmup_start = start - timedelta(days=14)
-            outcome_end = end + timedelta(days=2)
+            outcome_end = end + timedelta(days=outcome_tail_days)
             print(
                 f"      fetching {symbol} M5 from {warmup_start.date()} "
                 f"through {outcome_end.date()} "
@@ -346,6 +359,8 @@ def main() -> int:
     reached = [row for row in eligible if row.reached_10]
 
     model_test = None
+    adaptive_model = None
+    adaptive_test = None
     if args.train:
         print(
             f"[5/6] Training chronological reference model "
@@ -353,6 +368,11 @@ def main() -> int:
             flush=True,
         )
         reference_model = train_reference(rows)
+        adaptive_model = train_adaptive_reference(
+            rows,
+            replay_candles,
+            horizon_bars=args.learning_hold_bars,
+        )
     elif args.test_model:
         print(
             f"[5/6] Testing saved model {args.test_model} "
@@ -368,6 +388,14 @@ def main() -> int:
         if not isinstance(reference_model, dict):
             raise ValueError("saved artifact has no reference_model block")
         model_test = test_reference_model(rows, reference_model)
+        saved_adaptive = model_artifact.get("adaptive_model")
+        if isinstance(saved_adaptive, dict) and saved_adaptive.get("status") == "adaptive_reference_only":
+            adaptive_test = test_adaptive_reference(
+                rows,
+                replay_candles,
+                saved_adaptive,
+                threshold=args.model_threshold,
+            )
     else:
         print(
             f"[5/6] Skipping training/model test (elapsed {_elapsed(started)})...",
@@ -452,8 +480,10 @@ def main() -> int:
         },
         "rows": [row.to_dict() for row in rows],
         "reference_model": reference_model if args.train else None,
+        "adaptive_model": adaptive_model if args.train else None,
         "tested_model_artifact": args.test_model,
         "model_test": model_test,
+        "adaptive_model_test": adaptive_test,
         "note": (
             "Historical replay is reference evidence for matching live scenarios. "
             "It does not assume future live regimes will reproduce historical outcomes."
@@ -516,6 +546,34 @@ def main() -> int:
         _money_block("MONEY RESULTS - ALL AGENT20 ELIGIBLE", agent20_money)
         if args.test_model:
             _money_block(f"MONEY RESULTS - SAVED MODEL >= {args.model_threshold:.2f}", model_money)
+    if args.train and adaptive_model is not None:
+        print("  --- ADAPTIVE FIVE-OUTPUT MODEL ---")
+        print(f"  adaptive status      {adaptive_model.get('status')}")
+        print(f"  learning horizon     {adaptive_model.get('horizon_bars', args.learning_hold_bars)} M5 bars")
+        for target in TARGETS:
+            key = str(int(target))
+            block = (adaptive_model.get("target_models") or {}).get(key, {})
+            if block.get("status") == "trained":
+                chosen = block.get("chosen_model")
+                validation = (block.get("validation") or {}).get(chosen, {})
+                brier = validation.get("brier")
+                auc = validation.get("roc_auc")
+                print(f"  P(+{key}) model       {chosen} | brier={brier} | auc={auc}")
+            else:
+                print(f"  P(+{key}) model       {block.get('status', 'unavailable')}")
+        mae = adaptive_model.get("winner_mae_before_10") or {}
+        print(f"  winner MAE before +10 median {mae.get('median')} | max {mae.get('max')}")
+    if args.test_model and adaptive_test is not None:
+        print("  --- ADAPTIVE FIVE-OUTPUT TEST ---")
+        print(f"  adaptive samples     {adaptive_test.get('samples')}")
+        print(f"  selected >= +5       {adaptive_test.get('selected_for_5')}")
+        print(f"  selected >= +10      {adaptive_test.get('selected_for_10')}")
+        print(f"  runner >= +20        {adaptive_test.get('runner_candidates_20_plus')}")
+        for target in TARGETS:
+            key = str(int(target))
+            metrics = (adaptive_test.get("metrics_by_target") or {}).get(key)
+            if metrics:
+                print(f"  P(+{key}) test        brier={metrics.get('brier')} | auc={metrics.get('roc_auc')}")
     if args.train:
         model = artifact["reference_model"] or {}
         print(f"  reference model      {model.get('status', 'unknown')}")
