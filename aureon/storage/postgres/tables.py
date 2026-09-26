@@ -790,6 +790,34 @@ class TrainingExample(Base):
     )
 
 
+class CanonicalTrainingExample(Base):
+    """Immutable V1 learning example; legacy EOD rows remain in training_examples."""
+
+    __tablename__ = "canonical_training_examples"
+
+    example_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    market_date: Mapped[str] = mapped_column(String)
+    setup_id: Mapped[str] = mapped_column(String)
+    symbol: Mapped[str] = mapped_column(String)
+    timeframe: Mapped[str] = mapped_column(String)
+    feature_schema: Mapped[str] = mapped_column(String)
+    label_schema: Mapped[str] = mapped_column(String)
+    features: Mapped[dict[str, Any]] = mapped_column(Json)
+    outcome: Mapped[dict[str, Any]] = mapped_column(Json)
+    generated_at: Mapped[datetime] = mapped_column()
+
+    __table_args__ = (
+        Index("ix_canonical_training_symbol_date", "symbol", "market_date"),
+        UniqueConstraint(
+            "setup_id",
+            "feature_schema",
+            "label_schema",
+            name="uq_canonical_training_contract",
+        ),
+    )
+
+
 class DailyTrainingStatus(Base):
     """Durable EOD training checkpoint and data-readiness summary."""
 
@@ -840,11 +868,16 @@ class ModelRegistry(Base):
     feature_schema_version: Mapped[str] = mapped_column(String)
     label_schema_version: Mapped[str] = mapped_column(String)
     model_schema_version: Mapped[str] = mapped_column(String)
+    parent_model_id: Mapped[str | None] = mapped_column(String)
+    hyperparameters: Mapped[dict[str, Any]] = mapped_column(Json)
     trained_from: Mapped[str] = mapped_column(String)
     trained_through: Mapped[str] = mapped_column(String)
     training_samples: Mapped[int] = mapped_column(Integer)
     target_metrics: Mapped[dict[str, Any]] = mapped_column(Json)
+    validation_metrics: Mapped[dict[str, Any]] = mapped_column(Json)
+    shadow_metrics: Mapped[dict[str, Any]] = mapped_column(Json)
     artifact: Mapped[dict[str, Any]] = mapped_column(Json)
+    promotion_reason: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column()
     activated_at: Mapped[datetime | None] = mapped_column()
 
@@ -921,6 +954,27 @@ class ModelPrediction(Base):
         Index("ix_model_predictions_symbol_time", "symbol", "predicted_at"),
         Index("ix_model_predictions_model", "model_id", "predicted_at"),
         UniqueConstraint("model_id", "setup_id", name="uq_model_prediction_setup"),
+    )
+
+
+class ModelEvolutionLog(Base):
+    """Every model-governance transition is an append-only/auditable row."""
+
+    __tablename__ = "model_evolution_log"
+
+    decision_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    symbol: Mapped[str] = mapped_column(String)
+    model_id: Mapped[str] = mapped_column(String)
+    champion_model_id: Mapped[str | None] = mapped_column(String)
+    action: Mapped[str] = mapped_column(String)
+    reason: Mapped[str] = mapped_column(String)
+    metrics: Mapped[dict[str, Any]] = mapped_column(Json)
+    created_at: Mapped[datetime] = mapped_column()
+
+    __table_args__ = (
+        Index("ix_model_evolution_symbol_time", "symbol", "created_at"),
+        Index("ix_model_evolution_model_time", "model_id", "created_at"),
     )
 
 
