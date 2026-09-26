@@ -263,6 +263,45 @@ class ModelRepository(PostgresRepository):
         rows = self._rows(statement)
         return None if not rows else ModelPrediction.model_validate(self._prediction_dict(rows[0]))
 
+    def predictions_for_model(
+        self,
+        model_id: str,
+        *,
+        reconciled_only: bool = False,
+        limit: int | None = None,
+    ) -> list[ModelPrediction]:
+        statement = select(self.predictions).where(
+            self.predictions.c.model_id == model_id
+        )
+        if reconciled_only:
+            statement = statement.where(self.predictions.c.reconciled_at.is_not(None))
+        statement = statement.order_by(self.predictions.c.predicted_at)
+        if limit is not None:
+            statement = statement.limit(limit)
+        return [
+            ModelPrediction.model_validate(self._prediction_dict(row))
+            for row in self._rows(statement)
+        ]
+
+    def update_shadow_metrics(
+        self,
+        model_id: str,
+        metrics: dict[str, Any],
+    ) -> ModelRegistryEntry:
+        with self._db.transaction() as connection:
+            row = self._row(model_id, table=self.models, connection=connection)
+            if row is None:
+                raise LookupError(f"no model {model_id}")
+            connection.execute(
+                update(self.models)
+                .where(self.models.c.model_id == model_id)
+                .values(shadow_metrics=metrics)
+            )
+        refreshed = self.get_model(model_id)
+        if refreshed is None:
+            raise LookupError(f"model {model_id} disappeared after metrics update")
+        return refreshed
+
     def predictions_for_setup(
         self,
         setup_id: str,
