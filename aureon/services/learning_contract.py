@@ -8,6 +8,7 @@ Nothing in this module has execution authority.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 from datetime import datetime
 from typing import Any, Iterable
@@ -124,7 +125,7 @@ class FeatureBuilder:
 
     @classmethod
     def freeze_setup(cls, setup: Any, event: Any) -> dict[str, Any]:
-        snapshot = dict(getattr(event, "context_snapshot", None) or {})
+        snapshot = copy.deepcopy(dict(getattr(event, "context_snapshot", None) or {}))
         context = getattr(setup, "context_summary", None)
         confluence = getattr(setup, "agent_confluence", None)
         agents = cls._agent_states(snapshot, confluence)
