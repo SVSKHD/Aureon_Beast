@@ -17,6 +17,36 @@ depends_on = None
 
 def upgrade() -> None:
     op.create_table(
+        "pending_learning_setups",
+        sa.Column("learning_id", sa.String(), primary_key=True),
+        sa.Column("schema_version", sa.Integer(), nullable=False),
+        sa.Column("setup_id", sa.String(), nullable=False),
+        sa.Column("symbol", sa.String(), nullable=False),
+        sa.Column("timeframe", sa.String(), nullable=False),
+        sa.Column("market_date", sa.String(), nullable=False),
+        sa.Column("feature_schema", sa.String(), nullable=False),
+        sa.Column("label_schema", sa.String(), nullable=False),
+        sa.Column("features", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("horizon_bars", sa.Integer(), nullable=False),
+        sa.Column("bars_seen", sa.Integer(), nullable=False),
+        sa.Column("status", sa.String(), nullable=False),
+        sa.Column("outcome_state", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.UniqueConstraint(
+            "setup_id",
+            "feature_schema",
+            "label_schema",
+            name="uq_pending_learning_contract",
+        ),
+    )
+    op.create_index(
+        "ix_pending_learning_stream",
+        "pending_learning_setups",
+        ["symbol", "timeframe", "status", "created_at"],
+    )
+
+    op.create_table(
         "canonical_training_examples",
         sa.Column("example_id", sa.String(), primary_key=True),
         sa.Column("schema_version", sa.Integer(), nullable=False),
