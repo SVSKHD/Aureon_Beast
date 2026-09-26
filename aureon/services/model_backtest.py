@@ -300,8 +300,21 @@ class V1WalkForwardBacktester:
             if not test_dates:
                 break
 
-            train = [one for one in examples if one.market_date in train_dates]
             test = [one for one in examples if one.market_date in test_dates]
+            test_start_at = min(
+                (one.features.timestamp for one in test),
+                default=None,
+            )
+            train = [
+                one
+                for one in examples
+                if one.market_date in train_dates
+                and one.outcome.resolved_at is not None
+                and (
+                    test_start_at is None
+                    or one.outcome.resolved_at <= test_start_at
+                )
+            ]
             fold_number += 1
             metrics: dict[str, TargetMetrics] = {}
 
@@ -365,16 +378,32 @@ class V1WalkForwardBacktester:
             )
             test_start_index = test_end_index
 
-        aggregate = {
-            target: TargetMetrics.model_validate(
-                binary_metrics(
-                    aggregate_labels[target],
-                    aggregate_probabilities[target],
-                )
+        aggregate: dict[str, TargetMetrics] = {}
+        for target in V1_TARGETS:
+            if not aggregate_labels[target]:
+                continue
+            metric_data = binary_metrics(
+                aggregate_labels[target],
+                aggregate_probabilities[target],
             )
-            for target in V1_TARGETS
-            if aggregate_labels[target]
-        }
+            target_examples = [
+                one
+                for one in examples
+                if v1_target_value(one, target)
+            ]
+            metric_data["average_mae"] = (
+                sum(one.outcome.max_adverse_move for one in target_examples)
+                / len(target_examples)
+                if target_examples
+                else None
+            )
+            metric_data["average_mfe"] = (
+                sum(one.outcome.max_favourable_move for one in target_examples)
+                / len(target_examples)
+                if target_examples
+                else None
+            )
+            aggregate[target] = TargetMetrics.model_validate(metric_data)
         result = ModelBacktest(
             backtest_id=backtest_id,
             model_id=model_id,
