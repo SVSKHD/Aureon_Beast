@@ -193,6 +193,49 @@ def _norm(vector: list[float], means: list[float], scales: list[float]) -> list[
     ]
 
 
+def _fit_binary_challengers(
+    *,
+    train_vectors: list[list[float]],
+    train_labels: list[int],
+    test_vectors: list[list[float]],
+    test_labels: list[int],
+) -> dict[str, Any]:
+    """Fit logistic + boosted challengers and select by chronological Brier score."""
+    if not train_labels:
+        return {"status": "insufficient_data", "samples": 0}
+    if not any(train_labels) or all(train_labels):
+        return {
+            "status": "constant",
+            "constant_probability": (sum(train_labels) + 1.0) / (len(train_labels) + 2.0),
+            "positives": sum(train_labels),
+            "samples": len(train_labels),
+            "note": "Single-class training sample; using Laplace-smoothed historical rate.",
+        }
+
+    logistic = fit_logistic(train_vectors, train_labels)
+    boosted = fit_boosted_stumps(train_vectors, train_labels)
+    logistic_probs = [logistic.probability(vector) for vector in test_vectors]
+    boosted_probs = [boosted.probability(vector) for vector in test_vectors]
+    logistic_metrics = binary_metrics(test_labels, logistic_probs)
+    boosted_metrics = binary_metrics(test_labels, boosted_probs)
+    logistic_raw = logistic_metrics.get("brier")
+    boosted_raw = boosted_metrics.get("brier")
+    logistic_brier = float(logistic_raw) if logistic_raw is not None else 1.0
+    boosted_brier = float(boosted_raw) if boosted_raw is not None else 1.0
+    chosen = "boosted_stumps" if boosted_brier < logistic_brier else "logistic"
+    return {
+        "status": "trained",
+        "chosen_model": chosen,
+        "logistic": logistic.to_dict(),
+        "boosted_stumps": boosted.to_dict(),
+        "validation": {
+            "logistic": logistic_metrics,
+            "boosted_stumps": boosted_metrics,
+        },
+        "train_positive_rate": sum(train_labels) / len(train_labels),
+    }
+
+
 def train_adaptive_reference(
     rows: list[DecisionReplayRow],
     candles: list[Any],
@@ -220,40 +263,14 @@ def train_adaptive_reference(
     for target in TARGETS:
         key = str(int(target))
         labels = [1 if item["target_hits"][key] else 0 for item in train]
-        if not any(labels) or all(labels):
-            target_models[key] = {
-                "status": "constant",
-                "constant_probability": (sum(labels) + 1.0) / (len(labels) + 2.0),
-                "positives": sum(labels),
-                "samples": len(labels),
-                "note": "Single-class training sample; using Laplace-smoothed historical rate.",
-            }
-            continue
-
-        logistic = fit_logistic(norm_train, labels)
-        boosted = fit_boosted_stumps(norm_train, labels)
         test_vectors = [_norm(item["features"], means, scales) for item in test]
         test_labels = [1 if item["target_hits"][key] else 0 for item in test]
-        logistic_probs = [logistic.probability(vector) for vector in test_vectors]
-        boosted_probs = [boosted.probability(vector) for vector in test_vectors]
-        logistic_metrics = binary_metrics(test_labels, logistic_probs)
-        boosted_metrics = binary_metrics(test_labels, boosted_probs)
-        logistic_raw = logistic_metrics.get("brier")
-        boosted_raw = boosted_metrics.get("brier")
-        logistic_brier = float(logistic_raw) if logistic_raw is not None else 1.0
-        boosted_brier = float(boosted_raw) if boosted_raw is not None else 1.0
-        chosen = "boosted_stumps" if boosted_brier < logistic_brier else "logistic"
-        target_models[key] = {
-            "status": "trained",
-            "chosen_model": chosen,
-            "logistic": logistic.to_dict(),
-            "boosted_stumps": boosted.to_dict(),
-            "validation": {
-                "logistic": logistic_metrics,
-                "boosted_stumps": boosted_metrics,
-            },
-            "train_positive_rate": sum(labels) / len(labels),
-        }
+        target_models[key] = _fit_binary_challengers(
+            train_vectors=norm_train,
+            train_labels=labels,
+            test_vectors=test_vectors,
+            test_labels=test_labels,
+        )
 
     quality = {}
     for stop in QUALITY_STOPS:
@@ -277,6 +294,42 @@ def train_adaptive_reference(
         if item["mae_before_target"]["10"] is not None
     ]
 
+    # Loss control is deliberately based on first-touch ordering, not eventual
+    # target reach.  This directly addresses setups that later reach +10 only
+    # after an execution stop would already have been hit.
+    train_vectors = norm_train
+    test_vectors = [_norm(item["features"], means, scales) for item in test]
+    clean10_train = [
+        1 if item["first_touch_10_vs_stop"]["15"] == "target_first" else 0
+        for item in train
+    ]
+    clean10_test = [
+        1 if item["first_touch_10_vs_stop"]["15"] == "target_first" else 0
+        for item in test
+    ]
+    stop15_train = [
+        1 if item["first_touch_10_vs_stop"]["15"] == "stop_first" else 0
+        for item in train
+    ]
+    stop15_test = [
+        1 if item["first_touch_10_vs_stop"]["15"] == "stop_first" else 0
+        for item in test
+    ]
+    loss_control_models = {
+        "clean_10_before_stop_15": _fit_binary_challengers(
+            train_vectors=train_vectors,
+            train_labels=clean10_train,
+            test_vectors=test_vectors,
+            test_labels=clean10_test,
+        ),
+        "stop_15_before_clean_10": _fit_binary_challengers(
+            train_vectors=train_vectors,
+            train_labels=stop15_train,
+            test_vectors=test_vectors,
+            test_labels=stop15_test,
+        ),
+    }
+
     return {
         "status": "adaptive_reference_only",
         "schema": "AUREON_ADAPTIVE_MULTI_TARGET_V2",
@@ -296,6 +349,7 @@ def train_adaptive_reference(
         "scales": scales,
         "target_models": target_models,
         "quality_10_first_touch": quality,
+        "loss_control_models": loss_control_models,
         "winner_mae_before_10": {
             "samples": len(winner_mae10),
             "median": median(winner_mae10) if winner_mae10 else None,
@@ -304,7 +358,8 @@ def train_adaptive_reference(
         "note": (
             "Five target probabilities are historical reference outputs. "
             "The nonlinear challenger is selected per target only when its chronological "
-            "validation Brier score beats the logistic baseline."
+            "validation Brier score beats the logistic baseline. Loss-control models "
+            "learn first-touch +10-before--15 and -15-before-+10 separately."
         ),
     }
 
@@ -320,6 +375,28 @@ def _load_probability(model_block: dict[str, Any], vector: list[float]) -> float
         return model.probability(vector)
     model = LogisticModel.from_dict(model_block["logistic"])
     return model.probability(vector)
+
+
+def select_loss_control_times(
+    adaptive_test: dict[str, Any],
+    *,
+    min_clean_probability: float = 0.55,
+    max_stop_probability: float = 0.35,
+    max_trades: int = 10,
+) -> set[str]:
+    """Select only the strongest loss-controlled setups; never force a minimum count."""
+    candidates = []
+    for row in adaptive_test.get("scored_rows", []):
+        clean = row.get("probability_clean_10_before_15")
+        stop = row.get("probability_stop_15_before_10")
+        if clean is None or stop is None:
+            continue
+        if float(clean) < min_clean_probability or float(stop) > max_stop_probability:
+            continue
+        score = float(clean) - float(stop)
+        candidates.append((score, row["at"]))
+    candidates.sort(reverse=True)
+    return {at for _, at in candidates[:max(0, max_trades)]}
 
 
 def test_adaptive_reference(
@@ -339,6 +416,7 @@ def test_adaptive_reference(
     means = [float(value) for value in artifact["means"]]
     scales = [float(value) for value in artifact["scales"]]
     models = artifact["target_models"]
+    loss_models = artifact.get("loss_control_models") or {}
 
     scored: list[dict[str, Any]] = []
     labels_by_target: dict[str, list[int]] = {str(int(t)): [] for t in TARGETS}
@@ -357,6 +435,15 @@ def test_adaptive_reference(
                 labels_by_target[key].append(1 if item["target_hits"][key] else 0)
                 probs_by_target[key].append(probability)
             raw[key] = probability
+
+        clean10_probability = _load_probability(
+            loss_models.get("clean_10_before_stop_15", {}),
+            vector,
+        )
+        stop15_probability = _load_probability(
+            loss_models.get("stop_15_before_clean_10", {}),
+            vector,
+        )
 
         recommended_target = 0
         for target in TARGETS:
@@ -381,6 +468,12 @@ def test_adaptive_reference(
                 "at": item["at"],
                 "direction": item["direction"],
                 "probabilities": raw,
+                "probability_clean_10_before_15": clean10_probability,
+                "probability_stop_15_before_10": stop15_probability,
+                "loss_control_edge": (
+                    None if clean10_probability is None or stop15_probability is None
+                    else clean10_probability - stop15_probability
+                ),
                 "recommended_target": recommended_target,
                 "runner_bias": runner_bias,
                 "actual_target_hits": item["target_hits"],
@@ -400,6 +493,33 @@ def test_adaptive_reference(
         else:
             metrics[key] = None
 
+    clean_labels = [
+        1 if item["first_touch_10_vs_stop"]["15"] == "target_first" else 0
+        for item in examples
+    ]
+    stop_labels = [
+        1 if item["first_touch_10_vs_stop"]["15"] == "stop_first" else 0
+        for item in examples
+    ]
+    clean_probs = [
+        float(item["probability_clean_10_before_15"])
+        for item in scored
+        if item["probability_clean_10_before_15"] is not None
+    ]
+    stop_probs = [
+        float(item["probability_stop_15_before_10"])
+        for item in scored
+        if item["probability_stop_15_before_10"] is not None
+    ]
+    loss_control_metrics = {
+        "clean_10_before_stop_15": (
+            binary_metrics(clean_labels[: len(clean_probs)], clean_probs) if clean_probs else None
+        ),
+        "stop_15_before_clean_10": (
+            binary_metrics(stop_labels[: len(stop_probs)], stop_probs) if stop_probs else None
+        ),
+    }
+
     selected_5 = [item for item in scored if item["recommended_target"] >= 5]
     selected_10 = [item for item in scored if item["recommended_target"] >= 10]
     runner_candidates = [item for item in scored if item["recommended_target"] >= 20]
@@ -415,5 +535,6 @@ def test_adaptive_reference(
         "selected_for_5": len(selected_5),
         "selected_for_10": len(selected_10),
         "runner_candidates_20_plus": len(runner_candidates),
+        "loss_control_metrics": loss_control_metrics,
         "scored_rows": scored,
     }
