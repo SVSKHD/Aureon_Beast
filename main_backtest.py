@@ -4,6 +4,7 @@
 Examples:
   python main_backtest.py --data data/xau_m5.csv --from 2026-01-01 --to 2026-06-30
   python main_backtest.py --data data/xau_m5.parquet --from 2026-01-01 --to 2026-06-30 --train
+  python main_backtest.py --data-dir data/live_candles --symbol XAUUSD --from 2026-07-01 --to 2026-07-31 --train
 
 Date-only bounds are interpreted in AUREON_MARKET_TZ. --to is inclusive for a date-only value.
 The output is historical reference evidence only and is never auto-promoted into live trading.
@@ -14,16 +15,18 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from aureon.config import AureonConfig
 from aureon.data.historical_provider import HistoricalDataProvider
+from aureon.data.live_candle_archive import read_archive
 from aureon.engine.analysis_engine import AnalysisEngine
 from aureon.models.base import to_utc
 from aureon.models.enums import Timeframe
 from aureon.services.decision_backtest import run_decision_replay, train_reference
+from aureon.services.symbol_intelligence_agent import SymbolIntelligenceAgent
 from main_observer import default_agents
 
 
@@ -41,9 +44,86 @@ def _bound(raw: str, tz: str, *, inclusive_end: bool = False) -> datetime:
     return to_utc(dt)
 
 
+def _archive_date(path: Path, *, symbol: str, timeframe: Timeframe) -> date | None:
+    prefix = f"{symbol}_{timeframe.value}_"
+    if not path.name.startswith(prefix) or path.suffix.lower() != ".parquet":
+        return None
+    raw = path.stem[len(prefix):]
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def _archive_candles(
+    root: Path,
+    *,
+    symbol: str,
+    timeframe: Timeframe,
+    market_tz: str,
+    start: datetime,
+    end: datetime,
+    warmup_days: int = 14,
+    forward_days: int = 2,
+) -> tuple[list, list[Path]]:
+    """Load daily live-candle archives as one chronological stream.
+
+    Files before the requested start are included only to warm EMA/RSI/MTF state.
+    A small tail after the requested end lets the final requested-day setups receive
+    their forward 12-bar outcome without pretending those future bars were available
+    at decision time.
+    """
+
+    if not root.exists():
+        raise FileNotFoundError(f"archive directory not found: {root}")
+
+    zone = ZoneInfo(market_tz)
+    start_day = start.astimezone(zone).date()
+    end_day = (end - timedelta(microseconds=1)).astimezone(zone).date()
+    load_from = start_day - timedelta(days=warmup_days)
+    load_through = end_day + timedelta(days=forward_days)
+
+    selected: list[tuple[date, Path]] = []
+    pattern = f"{symbol}_{timeframe.value}_*.parquet"
+    for path in root.glob(pattern):
+        archive_day = _archive_date(path, symbol=symbol, timeframe=timeframe)
+        if archive_day is not None and load_from <= archive_day <= load_through:
+            selected.append((archive_day, path))
+    selected.sort(key=lambda item: item[0])
+
+    candles_by_open = {}
+    used_files: list[Path] = []
+    for archive_day, path in selected:
+        try:
+            day_candles = read_archive(
+                symbol,
+                timeframe,
+                archive_day,
+                market_tz=market_tz,
+                root=root,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"failed reading archive {path}: {exc}") from exc
+        used_files.append(path)
+        for candle in day_candles:
+            candles_by_open[candle.open_time.utc] = candle
+
+    candles = [
+        candles_by_open[key]
+        for key in sorted(candles_by_open)
+        if key < end + timedelta(days=forward_days)
+    ]
+    return candles, used_files
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Aureon chronological M5 decision backtest")
-    parser.add_argument("--data", required=True, help="CSV or Parquet M5 candle file")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--data", help="single CSV or Parquet M5 candle file")
+    source.add_argument(
+        "--data-dir",
+        help="directory of daily live archives, e.g. data/live_candles",
+    )
     parser.add_argument("--from", dest="start", required=True, help="YYYY-MM-DD or ISO datetime")
     parser.add_argument("--to", dest="end", required=True, help="YYYY-MM-DD or ISO datetime")
     parser.add_argument("--symbol", default=None)
@@ -58,33 +138,65 @@ def main() -> int:
         update={"symbols": (symbol,), "timeframes": (Timeframe.M5,)}
     )
 
-    provider = HistoricalDataProvider(
-        args.data,
-        symbol=symbol,
-        timeframe=Timeframe.M5,
-        market_tz=config.market_tz,
-    )
-    provider.connect()
     start = _bound(args.start, config.market_tz)
     end = _bound(args.end, config.market_tz, inclusive_end=("T" not in args.end))
-    candles = provider.get_closed_candles(symbol, Timeframe.M5, start, end)
-    if not candles:
-        print("No candles in requested range.", file=sys.stderr)
+
+    archive_files: list[Path] = []
+    if args.data_dir:
+        all_candles, archive_files = _archive_candles(
+            Path(args.data_dir),
+            symbol=symbol,
+            timeframe=Timeframe.M5,
+            market_tz=config.market_tz,
+            start=start,
+            end=end,
+        )
+        # Replay includes pre-range warmup and a short post-range outcome tail.
+        replay_candles = all_candles
+        requested_candles = [
+            candle for candle in all_candles
+            if start <= candle.open_time.utc < end
+        ]
+        point = SymbolIntelligenceAgent().resolve_tuning(symbol).point
+    else:
+        provider = HistoricalDataProvider(
+            args.data,
+            symbol=symbol,
+            timeframe=Timeframe.M5,
+            market_tz=config.market_tz,
+        )
+        provider.connect()
+        replay_candles = provider.get_closed_candles(
+            symbol, Timeframe.M5, start, end
+        )
+        requested_candles = replay_candles
+        point = provider.symbol_info(symbol).point
+
+    if not requested_candles:
+        source_name = args.data_dir or args.data
+        print(
+            f"No {symbol} M5 candles in requested range from {source_name}.",
+            file=sys.stderr,
+        )
         return 2
 
-    tuning = provider.symbol_info(symbol)
     engine = AnalysisEngine(
-        default_agents(config, symbol=symbol, point=tuning.point),
+        default_agents(config, symbol=symbol, point=point),
         account_scope=config.account_scope,
         market_tz=config.market_tz,
         mtf_bars=config.mtf_m5_bars,
         mtf_periods=(config.ema_fast, config.ema_slow),
     )
-    rows = run_decision_replay(
-        candles=candles,
+    replay_rows = run_decision_replay(
+        candles=replay_candles,
         engine=engine,
         target_move=args.target_move,
     )
+    rows = [
+        row
+        for row in replay_rows
+        if start <= datetime.fromisoformat(row.at) < end
+    ]
     eligible = [row for row in rows if row.eligible]
     reached = [row for row in eligible if row.reached_10]
 
@@ -95,7 +207,9 @@ def main() -> int:
         "timeframe": "M5",
         "start": start.isoformat(),
         "end_exclusive": end.isoformat(),
-        "candles": len(candles),
+        "candles": len(requested_candles),
+        "replay_candles_with_warmup": len(replay_candles),
+        "archive_files_loaded": [str(path) for path in archive_files],
         "agent20_crosses": len(rows),
         "eligible_crosses": len(eligible),
         "eligible_reached_target": len(reached),
@@ -122,7 +236,11 @@ def main() -> int:
 
     rate = (len(reached) / len(eligible)) if eligible else None
     print(f"Aureon decision backtest — {symbol} M5")
-    print(f"  candles              {len(candles)}")
+    if args.data_dir:
+        print(f"  archive              {args.data_dir}")
+        print(f"  parquet files loaded {len(archive_files)}")
+        print(f"  replay candles       {len(replay_candles)} (includes warmup/outcome tail)")
+    print(f"  candles in range     {len(requested_candles)}")
     print(f"  EMA/RSI cross rows   {len(rows)}")
     print(f"  eligible             {len(eligible)}")
     print(f"  reached +{args.target_move:g}       {len(reached)}")
