@@ -87,12 +87,24 @@ def build_training_agent(config: AureonConfig, symbol: str):
         account_scope=config.account_scope,
         state_heartbeat_seconds=config.state_heartbeat_seconds,
     )
+    from aureon.config.symbol_tuning import tuning_for
+    from aureon.services.training_memory import TrainingMemoryBuilder
+
+    v1_builder = None
+    if symbol.upper() == "XAUUSD":
+        v1_builder = TrainingMemoryBuilder(
+            setups=storage.setups,
+            evaluations=storage.setup_evaluations,
+            memory=storage.training_memory,
+            point=tuning_for(symbol).point,
+        )
     agent = EodTrainingAgent(
         setups=storage.setups,
         setup_evaluations=storage.setup_evaluations,
         market_days=storage.market_days,
         memory=storage.training_memory,
         rule_id=config.rule_id_for(symbol),
+        v1_builder=v1_builder,
     )
     agent.model_repository = storage.models
     return agent
@@ -111,6 +123,7 @@ def run_training(
         market_date = complete[-1].market_date
 
     status = agent.build_day(symbol=symbol, market_date=market_date)
+    v1_rows = agent.build_v1_resolved(symbol=symbol, market_date=market_date)
     from aureon.services.shadow_model import ShadowModelService
 
     reconciled = ShadowModelService(agent.model_repository).reconcile_day(
@@ -125,6 +138,7 @@ def run_training(
         f"{status.not_reached_six} did not reach +$6 by EOD, "
         f"{status.unavailable_six} unavailable, "
         f"{status.mae_before_six_available} with pre-$6 MAE, "
+        f"{len(v1_rows)} canonical V1 example(s) resolved, "
         f"{reconciled} shadow prediction(s) reconciled"
     )
     for one in status.by_timeframe:
@@ -335,6 +349,26 @@ class ReviewWatcher:
                 if not complete:
                     continue
                 market_date = complete[-1].market_date
+
+                # V1 outcomes are multi-session, so EOD is only a scheduling cadence.
+                # Revisit recent setup dates; pending rows stay unknown and resolved rows
+                # upsert idempotently under their canonical contract.
+                v1_recent_days = agent.market_days.complete_days(symbol, limit=7)
+                v1_written = 0
+                for v1_day in v1_recent_days:
+                    v1_written += len(
+                        agent.build_v1_resolved(
+                            symbol=symbol,
+                            market_date=v1_day.market_date,
+                        )
+                    )
+                if v1_written:
+                    log.info(
+                        "canonical V1 memory %s: %d resolved example(s) refreshed",
+                        symbol,
+                        v1_written,
+                    )
+
                 existing = agent.memory.status_for(
                     symbol,
                     market_date,
