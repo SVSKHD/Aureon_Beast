@@ -282,6 +282,7 @@ class ReviewWatcher:
         self._last_training_check_monotonic = 0.0
         self._training_check_seconds = 60.0
         self._training_agents: dict[str, object] = {}
+        self._last_evolution_market_date: dict[str, str] = {}
 
     def _market_states(self) -> dict[str, MarketState]:
         if self._market_state_provider is None:
@@ -358,6 +359,7 @@ class ReviewWatcher:
                             symbol,
                             market_date,
                         )
+                    self._evolution_tick(agent, symbol, market_date)
                     continue
                 status = agent.build_day(symbol=symbol, market_date=market_date)
                 reconciled = ShadowModelService(agent.model_repository).reconcile_day(
@@ -377,8 +379,44 @@ class ReviewWatcher:
                     status.mae_before_six_available,
                     reconciled,
                 )
+                self._evolution_tick(agent, symbol, market_date)
             except Exception:  # noqa: BLE001 - training must not stop the review watcher
                 log.exception("EOD training build failed for %s", symbol)
+
+    def _evolution_tick(
+        self,
+        training_agent: object,
+        symbol: str,
+        market_date: str,
+    ) -> None:
+        """Run at most one V1 governance cycle per completed market date.
+
+        Legacy EOD memory remains untouched. The V1 cycle reads canonical cross-session
+        examples, and a newly trained model can only progress as far as Shadow here.
+        """
+        if self._last_evolution_market_date.get(symbol) == market_date:
+            return
+        self._last_evolution_market_date[symbol] = market_date
+        try:
+            from aureon.services.evolution_agent import EvolutionAgent
+
+            report = EvolutionAgent(
+                training_agent.model_repository  # type: ignore[attr-defined]
+            ).run_cycle(
+                symbol,
+                training_memory=training_agent.memory,  # type: ignore[attr-defined]
+            )
+            log.info(
+                "V1 evolution %s %s: champion=%s shadow=%s trained=%s reason=%s",
+                symbol,
+                market_date,
+                report.get("champion"),
+                report.get("shadow"),
+                report.get("trained"),
+                report.get("reason"),
+            )
+        except Exception:  # noqa: BLE001 - model governance must never stop reviews/trading
+            log.exception("V1 evolution cycle failed for %s %s", symbol, market_date)
 
     def run(self) -> None:
         """Watch until stopped."""
