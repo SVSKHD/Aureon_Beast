@@ -18,25 +18,36 @@ class TargetMetrics(AureonModel):
     brier: float | None = Field(default=None, ge=0)
     log_loss: float | None = Field(default=None, ge=0)
     roc_auc: float | None = Field(default=None, ge=0, le=1)
+    false_positive_rate: float | None = Field(default=None, ge=0, le=1)
+    average_mae: float | None = Field(default=None, ge=0)
+    average_mfe: float | None = Field(default=None, ge=0)
 
 
 class ModelRegistryEntry(AureonDocument):
     model_id: str
     symbol: str
     algorithm: str = "logistic_regression_v1"
-    status: str = Field(description="candidate, shadow, or retired")
+    status: str = Field(
+        description="candidate, challenger, shadow, champion, retired, or rejected"
+    )
     feature_schema_version: str
     label_schema_version: str
     model_schema_version: str = "AUREON_MOVE_MODEL_V1"
+    parent_model_id: str | None = None
+    hyperparameters: dict = Field(default_factory=dict)
 
     trained_from: str
     trained_through: str
     training_samples: int = Field(ge=0)
     target_metrics: dict[str, TargetMetrics] = Field(default_factory=dict)
+    validation_metrics: dict = Field(default_factory=dict)
+    shadow_metrics: dict = Field(default_factory=dict)
     artifact: dict = Field(default_factory=dict)
 
     created_at: UtcDatetime
     activated_at: UtcDatetime | None = None
+    retired_at: UtcDatetime | None = None
+    promotion_reason: str | None = None
 
 
 class ModelTrainingRun(AureonDocument):
@@ -97,6 +108,8 @@ class ModelPrediction(AureonDocument):
     label_schema_version: str
     probabilities: dict[str, float] = Field(default_factory=dict)
     feature_snapshot: dict = Field(default_factory=dict)
+    mode: str = Field(default="shadow", description="champion or shadow")
+    decision_intelligence: dict = Field(default_factory=dict)
     actual_outcomes: dict[str, bool | float | None] | None = None
     reconciled_at: UtcDatetime | None = None
 
@@ -107,3 +120,22 @@ class ShadowPredictionSummary(AureonModel):
     six_brier: float | None = Field(default=None, ge=0)
     twenty_brier: float | None = Field(default=None, ge=0)
     forty_brier: float | None = Field(default=None, ge=0)
+
+
+class EvolutionDecision(AureonDocument):
+    """Immutable governance decision. Evolution never predicts the market."""
+
+    decision_id: str
+    symbol: str
+    model_id: str | None = None
+    champion_model_id: str | None = None
+    action: str = Field(
+        description=(
+            "candidate_created, challenger_qualified, rejected, shadow_started, "
+            "shadow_evaluated, promoted, champion_retired, or degradation_detected"
+        )
+    )
+    reason: str
+    metrics: dict = Field(default_factory=dict)
+    detail: dict = Field(default_factory=dict)
+    decided_at: UtcDatetime
