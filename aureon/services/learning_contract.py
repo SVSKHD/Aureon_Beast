@@ -139,6 +139,7 @@ class FeatureBuilder:
             _float(snapshot.get("reference_price"))
             or _float(snapshot.get("entry_price"))
             or _float(snapshot.get("price"))
+            or _float(snapshot.get("close"))
             or float(setup.anchor.price)
         )
         atr = _float(snapshot.get("atr"))
