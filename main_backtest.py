@@ -572,6 +572,28 @@ def main() -> int:
         "eligible_crosses": len(eligible),
         "eligible_reached_target": len(reached),
         "target_move": args.target_move,
+        "canonical_learning": {
+            "feature_schema": "AUREON_FEATURES_V1",
+            "label_schema": "AUREON_CLEAN_MOVE_V1",
+            "clean_target": args.clean_target,
+            "clean_max_mae": args.clean_max_mae,
+            "horizon_bars": args.learning_hold_bars,
+            "examples": len(canonical_examples),
+            "clean_wins": len(clean_examples),
+            "clean_win_rate": (
+                len(clean_examples) / len(canonical_examples)
+                if canonical_examples else None
+            ),
+            "target_counts": canonical_target_counts,
+            "persisted_local": bool(args.persist_training),
+            "walk_forward_backtest_id": (
+                getattr(walk_forward_result, "backtest_id", None)
+            ),
+            "records": [
+                example.model_dump(mode="json")
+                for example in canonical_examples
+            ],
+        },
         "position_summary": position_summary,
         "money_simulation": {
             "currency": "USD" if agent20_money is not None else None,
@@ -634,6 +656,39 @@ def main() -> int:
     print(f"  eligible             {len(eligible)}")
     print(f"  reached +{args.target_move:g}       {len(reached)}")
     print(f"  historical hit rate  {'—' if rate is None else f'{rate:.1%}'}")
+    print("  --- CANONICAL V1 LEARNING ---")
+    print(
+        f"  clean contract       +{args.clean_target:g} with "
+        f"MAE <= ${args.clean_max_mae:g}"
+    )
+    print(f"  canonical examples   {len(canonical_examples)}")
+    clean_rate = (
+        len(clean_examples) / len(canonical_examples)
+        if canonical_examples else None
+    )
+    print(
+        f"  clean wins           {len(clean_examples)}"
+    )
+    print(
+        "  clean win rate       "
+        + ("—" if clean_rate is None else format(clean_rate, ".1%"))
+    )
+    print(
+        "  target ladder        "
+        + " | ".join(
+            f"+{target}={count}"
+            for target, count in canonical_target_counts.items()
+        )
+    )
+    if args.persist_training:
+        print("  training memory      persisted locally")
+    if walk_forward_result is not None:
+        clean_metric = walk_forward_result.aggregate_metrics.get("clean_10")
+        print(
+            f"  walk-forward         {walk_forward_result.status} | "
+            f"oos={walk_forward_result.out_of_sample_predictions} | "
+            f"clean precision={None if clean_metric is None else clean_metric.precision}"
+        )
     print("  --- position summary ---")
     print(f"  positions            {position_summary['positions']}")
     print(f"  target wins          {position_summary['target_wins']}")
