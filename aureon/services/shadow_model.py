@@ -9,8 +9,10 @@ from typing import Any
 from aureon.ml.features import FeatureEncoder, raw_setup_features
 from aureon.ml.logistic import LogisticModel
 from aureon.models.base import to_utc, utc_now
+from aureon.models.learning_v1 import MODEL_SCHEMA_V1
 from aureon.models.ml import ModelPrediction
 from aureon.services.model_training import FEATURE_SCHEMA, LABEL_SCHEMA, MODEL_SCHEMA
+from aureon.services.prediction_service import PredictionService
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +28,11 @@ class ShadowModelService:
         model = self.models.active_shadow(setup.symbol)
         if model is None:
             return None
+        if model.model_schema_version == MODEL_SCHEMA_V1:
+            # Reuse the canonical fail-closed prediction path. It persists the same
+            # ModelPrediction contract and still has zero execution authority.
+            PredictionService(self.models, now=self._now).predict_shadow(setup, event)
+            return self.models.prediction_for(model.model_id, setup.setup_id)
         if (
             model.feature_schema_version != FEATURE_SCHEMA
             or model.label_schema_version != LABEL_SCHEMA
@@ -80,9 +87,42 @@ class ShadowModelService:
         return prediction
 
     def reconcile_day(self, training_memory: Any, symbol: str, market_date: str) -> int:
-        """Attach EOD outcomes to every unreconciled shadow prediction for the day's setups."""
+        """Attach resolved outcomes to unreconciled predictions.
+
+        Canonical V1 outcomes are not defined by EOD. The job may run at EOD, but it
+        reconciles only examples whose canonical outcome has actually been resolved.
+        Legacy examples remain supported unchanged.
+        """
         count = 0
         moment = to_utc(self._now())
+
+        canonical_reader = getattr(training_memory, "canonical_for", None)
+        if callable(canonical_reader):
+            for example in canonical_reader(symbol, market_date):
+                predictions = self.models.predictions_for_setup(
+                    example.setup_id,
+                    unreconciled_only=True,
+                )
+                outcomes = example.outcome
+                payload = {
+                    "clean_10": outcomes.clean_10,
+                    "reach_5": outcomes.reached_5,
+                    "reach_10": outcomes.reached_10,
+                    "reach_20": outcomes.reached_20,
+                    "reach_30": outcomes.reached_30,
+                    "reach_40": outcomes.reached_40,
+                    "mae_before_10": outcomes.mae_before_10,
+                    "max_favourable_move": outcomes.max_favourable_move,
+                    "max_adverse_move": outcomes.max_adverse_move,
+                }
+                for prediction in predictions:
+                    self.models.reconcile_prediction(
+                        prediction.model_id,
+                        example.setup_id,
+                        outcomes=payload,
+                        at=moment,
+                    )
+                    count += 1
         for example in training_memory.examples_for(symbol, market_date):
             predictions = self.models.predictions_for_setup(
                 example.setup_id,
