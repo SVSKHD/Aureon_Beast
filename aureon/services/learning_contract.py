@@ -117,8 +117,15 @@ class FeatureBuilder:
     feature_schema = FEATURE_SCHEMA_V1
 
     @staticmethod
-    def from_setup_event(setup: Any, event: Any) -> FeatureSnapshotV1:
+    def from_setup_event(
+        setup: Any,
+        event: Any,
+        *,
+        extra_context: dict[str, Any] | None = None,
+    ) -> FeatureSnapshotV1:
         snapshot = dict(getattr(event, "context_snapshot", {}) or {})
+        if extra_context:
+            snapshot.update(extra_context)
         timestamp = to_utc(event.market_time.utc)
         direction = _direction(setup.direction_context)
         reference_price = (
