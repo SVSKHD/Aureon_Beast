@@ -160,7 +160,9 @@ class Observer:
         self.alerts = (
             AlertWatcher(alert_repository) if alert_repository is not None else None
         )
-        # Research-only predictor. Wired by build_observer; tests may leave it absent.
+        # ML intelligence is downstream of deterministic setup analysis. Champion and
+        # Shadow predictors never execute; tests may leave either absent.
+        self.champion_model: object | None = None
         self.shadow_model: object | None = None
 
         #: 11B. The schedule comes from the market-state service when there is one, so the
@@ -981,6 +983,20 @@ class Observer:
                 evaluator.on_confirmed(setup, candle)
             except Exception:  # noqa: BLE001
                 log.exception("could not begin evaluating setup %s", event.setup_id)
+            if self.champion_model is not None:
+                try:
+                    intelligence = self.champion_model.predict_champion(setup, event)
+                    if intelligence is not None:
+                        self.agent_highway.publish(
+                            topic="decision.ml.champion",
+                            source_agent="champion_prediction",
+                            symbol=setup.symbol,
+                            timeframe=setup.timeframe.value,
+                            observed_at=event.market_time.utc,
+                            payload=intelligence.model_dump(mode="json"),
+                        )
+                except Exception:  # noqa: BLE001 - ML must never stop observation
+                    log.exception("champion prediction failed for setup %s", event.setup_id)
             if self.shadow_model is not None:
                 try:
                     self.shadow_model.predict_setup(setup, event)
@@ -2214,8 +2230,10 @@ def build_observer(config: AureonConfig) -> Observer:
     # 11D, and assigned the same way for the same reason: a test of observation should not
     # have to stand up a day cache to watch a candle close.
     observer.market_days = storage.market_days
+    from aureon.services.prediction_service import PredictionService
     from aureon.services.shadow_model import ShadowModelService
 
+    observer.champion_model = PredictionService(storage.models)
     observer.shadow_model = ShadowModelService(storage.models)
     _wire_setups(observer, config, storage)
     return observer
