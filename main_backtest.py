@@ -34,6 +34,7 @@ from aureon.services.adaptive_learning import (
     test_adaptive_reference,
     train_adaptive_reference,
 )
+from aureon.services.learning_contract import canonical_examples_from_replay
 from aureon.services.decision_backtest import (
     run_decision_replay,
     simulate_money_outcomes,
@@ -199,6 +200,8 @@ def main() -> int:
         help="load a prior main_backtest JSON artifact and score this date range without retraining",
     )
     parser.add_argument("--target-move", type=float, default=10.0)
+    parser.add_argument("--clean-target", type=float, default=10.0)
+    parser.add_argument("--clean-max-mae", type=float, default=7.0)
     parser.add_argument("--stop-move", type=float, default=None)
     parser.add_argument("--lot-size", type=float, default=None)
     parser.add_argument("--hold-bars", type=int, default=12)
@@ -215,6 +218,8 @@ def main() -> int:
         "--learning-hold-bars", type=int, default=864,
         help="future M5 bars used by adaptive +5/+10/+20/+30/+40 learning (864 = 72 market hours)",
     )
+    parser.add_argument("--persist-training", action="store_true", help="write canonical V1 examples to local training memory")
+    parser.add_argument("--walk-forward", action="store_true", help="run V1 chronological walk-forward validation after replay")
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
     if args.train and args.test_model:
@@ -229,6 +234,12 @@ def main() -> int:
         parser.error("--max-stop-probability must be between 0 and 1")
     if args.max_adaptive_trades < 0:
         parser.error("--max-adaptive-trades must be >= 0")
+    if args.clean_target <= 0:
+        parser.error("--clean-target must be > 0")
+    if args.clean_max_mae < 0:
+        parser.error("--clean-max-mae must be >= 0")
+    if args.walk_forward and not args.persist_training:
+        parser.error("--walk-forward requires --persist-training")
     if args.learning_hold_bars < 12:
         parser.error("--learning-hold-bars must be at least 12")
     if args.trail_activation_move <= 0:
@@ -251,7 +262,8 @@ def main() -> int:
     start = _bound(args.start, config.market_tz)
     end = _bound(args.end, config.market_tz, inclusive_end=("T" not in args.end))
 
-    outcome_tail_days = max(2, ((args.learning_hold_bars * 5 + 1439) // 1440) + 4)
+    outcome_horizon_bars = max(args.learning_hold_bars, args.trail_hold_bars)
+    outcome_tail_days = max(2, ((outcome_horizon_bars * 5 + 1439) // 1440) + 4)
     archive_files: list[Path] = []
     source_label = ""
     broker_economics = None
