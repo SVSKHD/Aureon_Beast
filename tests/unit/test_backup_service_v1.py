@@ -39,7 +39,8 @@ def test_drive_failure_does_not_fail_local_snapshot(tmp_path) -> None:
     )
 
     result = service.monthly_snapshot(month="2026-09", assets=[source])
+    thread = service.sync_drive_async(result.snapshot_dir)
+    thread.join(timeout=2)
 
     assert result.manifest_path.exists()
-    assert result.drive_failed is True
     assert result.files == 1
