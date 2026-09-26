@@ -166,3 +166,19 @@ class EvolutionDecision(AureonDocument):
     reason: str
     metrics: dict = Field(default_factory=dict)
     created_at: UtcDatetime
+
+
+class EntryIntelligence(AureonModel):
+    """Champion intelligence supplied to the decision/risk layer; never an order."""
+
+    model_id: str
+    setup_id: str
+    symbol: str
+    timeframe: Timeframe
+    direction: Direction
+    predicted_at: UtcDatetime
+    probabilities: dict[str, float] = Field(default_factory=dict)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    recommended_target: int = Field(default=0, ge=0)
+    decision: str
+    reason: str
