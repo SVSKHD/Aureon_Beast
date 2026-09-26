@@ -232,6 +232,19 @@ class LocalDatabase:
                     )
                     log.info("upgraded local schema: model_predictions.%s", name)
 
+            backtest_columns = {
+                row[1]
+                for row in connection.exec_driver_sql(
+                    "PRAGMA table_info(model_backtests)"
+                ).fetchall()
+            }
+            if "breakdown_metrics" not in backtest_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE model_backtests "
+                    "ADD COLUMN breakdown_metrics JSON NOT NULL DEFAULT '{}'"
+                )
+                log.info("upgraded local schema: model_backtests.breakdown_metrics")
+
     def wait_until_ready(self, **_: Any) -> float:
         self.probe()
         return 0.0
