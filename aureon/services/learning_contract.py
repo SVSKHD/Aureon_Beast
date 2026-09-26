@@ -10,7 +10,7 @@ import hashlib
 from datetime import datetime
 from typing import Any
 
-from aureon.models.base import to_utc
+from aureon.models.base import to_utc, utc_now
 from aureon.models.enums import Direction, DirectionContext, Timeframe
 from aureon.models.learning_v1 import (
     AgentFeatureState,
@@ -386,7 +386,7 @@ def canonical_examples_from_replay(
     from bisect import bisect_left
 
     opens = [candle.open_time.utc for candle in candles]
-    moment = to_utc(generated_at or datetime.now().astimezone())
+    moment = to_utc(generated_at or utc_now())
     result: list[CanonicalTrainingExample] = []
     for row in rows:
         if not bool(getattr(row, "eligible", False)):
