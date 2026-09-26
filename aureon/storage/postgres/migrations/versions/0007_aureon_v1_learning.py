@@ -16,6 +16,38 @@ depends_on = None
 
 
 def upgrade() -> None:
+    op.add_column(
+        "trades",
+        sa.Column("management", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    )
+    op.add_column(
+        "trades",
+        sa.Column("guardian", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    )
+    op.create_table(
+        "trade_management_events",
+        sa.Column("event_id", sa.String(), primary_key=True),
+        sa.Column("schema_version", sa.Integer(), nullable=False),
+        sa.Column("trade_id", sa.String(), nullable=False),
+        sa.Column("observed_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("source", sa.String(), nullable=False),
+        sa.Column("action", sa.String(), nullable=False),
+        sa.Column("current_move", sa.Float(), nullable=True),
+        sa.Column("peak_move", sa.Float(), nullable=True),
+        sa.Column("giveback", sa.Float(), nullable=True),
+        sa.Column("protected_move", sa.Float(), nullable=True),
+        sa.Column("trail_price", sa.Float(), nullable=True),
+        sa.Column("continuation_score", sa.Integer(), nullable=True),
+        sa.Column("continuation_total", sa.Integer(), nullable=True),
+        sa.Column("exit_price", sa.Float(), nullable=True),
+        sa.Column("realized_move", sa.Float(), nullable=True),
+        sa.Column("exit_reason", sa.String(), nullable=True),
+    )
+    op.create_index(
+        "ix_trade_management_trade_time",
+        "trade_management_events",
+        ["trade_id", "observed_at"],
+    )
     op.create_table(
         "pending_learning_setups",
         sa.Column("learning_id", sa.String(), primary_key=True),
