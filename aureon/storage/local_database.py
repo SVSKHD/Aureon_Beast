@@ -187,6 +187,23 @@ class LocalDatabase:
                     )
                     log.info("upgraded local schema: training_examples.%s", name)
 
+            trade_columns = {
+                row[1]
+                for row in connection.exec_driver_sql(
+                    "PRAGMA table_info(trades)"
+                ).fetchall()
+            }
+            trade_additions = {
+                "management": "JSON",
+                "guardian": "JSON",
+            }
+            for name, sql_type in trade_additions.items():
+                if name not in trade_columns:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE trades ADD COLUMN {name} {sql_type}"
+                    )
+                    log.info("upgraded local schema: trades.%s", name)
+
             model_columns = {
                 row[1]
                 for row in connection.exec_driver_sql(
