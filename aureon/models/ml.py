@@ -92,6 +92,7 @@ class ModelBacktest(AureonDocument):
     end_market_date: str | None = None
     folds: tuple[BacktestFold, ...] = ()
     aggregate_metrics: dict[str, TargetMetrics] = Field(default_factory=dict)
+    breakdown_metrics: dict = Field(default_factory=dict)
     out_of_sample_predictions: int = Field(default=0, ge=0)
     failure_message: str | None = None
 
