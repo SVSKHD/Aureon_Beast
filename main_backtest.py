@@ -361,6 +361,21 @@ def main() -> int:
         )
         reference_model = None
 
+    target_misses = len(eligible) - len(reached)
+    position_summary = {
+        "positions": len(eligible),
+        "target_wins": len(reached),
+        "target_misses": target_misses,
+        "target_win_rate": (len(reached) / len(eligible)) if eligible else None,
+        "target_miss_rate": (target_misses / len(eligible)) if eligible else None,
+        "gross_target_move": len(reached) * args.target_move,
+        "realized_pnl": None,
+        "realized_pnl_note": (
+            "Not calculated until a deterministic stop/exit rule is configured. "
+            "A target miss is not automatically a losing trade."
+        ),
+    }
+
     artifact = {
         "schema": "AUREON_DECISION_BACKTEST_V1",
         "historical_reference_only": True,
@@ -376,6 +391,7 @@ def main() -> int:
         "eligible_crosses": len(eligible),
         "eligible_reached_target": len(reached),
         "target_move": args.target_move,
+        "position_summary": position_summary,
         "eligibility_rule": {
             "ema_fast": config.ema_fast,
             "ema_slow": config.ema_slow,
@@ -411,6 +427,16 @@ def main() -> int:
     print(f"  eligible             {len(eligible)}")
     print(f"  reached +{args.target_move:g}       {len(reached)}")
     print(f"  historical hit rate  {'—' if rate is None else f'{rate:.1%}'}")
+    print("  --- position summary ---")
+    print(f"  positions            {position_summary['positions']}")
+    print(f"  target wins          {position_summary['target_wins']}")
+    print(f"  target misses        {position_summary['target_misses']}")
+    print(
+        f"  target win rate      "
+        f"{'—' if position_summary['target_win_rate'] is None else f'{position_summary['target_win_rate']:.1%}'}"
+    )
+    print(f"  gross target move    +{position_summary['gross_target_move']:.2f}")
+    print("  realized P&L         — (requires deterministic stop/exit rule)")
     if args.train:
         model = artifact["reference_model"] or {}
         print(f"  reference model      {model.get('status', 'unknown')}")
