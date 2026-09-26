@@ -397,6 +397,7 @@ def main() -> int:
     eligible = [row for row in rows if row.eligible]
     reached = [row for row in eligible if row.reached_10]
 
+    v1_saved_model_test = None
     canonical_examples = canonical_examples_from_replay(
         rows,
         replay_candles,
@@ -452,7 +453,6 @@ def main() -> int:
             ).run(symbol)
 
     model_test = None
-    v1_saved_model_test = None
     adaptive_model = None
     adaptive_test = None
     if args.train:
