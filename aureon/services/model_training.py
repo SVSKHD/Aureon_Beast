@@ -213,6 +213,8 @@ class ModelTrainer:
         min_samples: int = 30,
         min_class_samples: int = 5,
         hyperparameters: dict[str, Any] | None = None,
+        start_market_date: str = "0001-01-01",
+        end_market_date: str = "9999-12-31",
     ) -> ModelRegistryEntry:
         symbol = symbol.upper()
         started = to_utc(self._now())
@@ -230,8 +232,8 @@ class ModelTrainer:
 
         examples = self.training_memory.examples_between(
             symbol,
-            "0001-01-01",
-            "9999-12-31",
+            start_market_date,
+            end_market_date,
         )
         usable = [
             example
