@@ -13,6 +13,26 @@ from aureon.models.base import AureonDocument, AureonModel, UtcDatetime
 from aureon.models.enums import DirectionContext, SetupFamily, Timeframe
 
 
+class CanonicalOutcome(AureonModel):
+    """Versioned V1 outcome. Measured only after the frozen setup snapshot."""
+
+    clean_10: bool
+    reached_5: bool
+    reached_10: bool
+    reached_20: bool
+    reached_30: bool
+    reached_40: bool
+    mae_before_10: float | None = Field(default=None, ge=0)
+    max_favourable_move: float = Field(default=0.0, ge=0)
+    max_adverse_move: float = Field(default=0.0, ge=0)
+    bars_to_5: int | None = Field(default=None, ge=1)
+    bars_to_10: int | None = Field(default=None, ge=1)
+    bars_to_20: int | None = Field(default=None, ge=1)
+    bars_to_30: int | None = Field(default=None, ge=1)
+    bars_to_40: int | None = Field(default=None, ge=1)
+    ambiguous_clean_10_bar: bool = False
+
+
 class TrainingExample(AureonDocument):
     """One immutable EOD training row for one setup under one feature/label contract."""
 
@@ -30,6 +50,16 @@ class TrainingExample(AureonDocument):
 
     context: dict = Field(default_factory=dict)
     agent_read: dict = Field(default_factory=dict)
+
+    # V1 canonical contract. Legacy rows keep these empty/null and retain their original
+    # feature/label schema values, so historical meaning is never silently rewritten.
+    features: dict = Field(default_factory=dict)
+    outcome: CanonicalOutcome | None = None
+    setup_created_at: UtcDatetime | None = None
+    feature_frozen_at: UtcDatetime | None = None
+    outcome_resolved_at: UtcDatetime | None = None
+    entry_price: float | None = None
+    direction: str | None = None
 
     six_dollar_status: str = Field(
         description=(
