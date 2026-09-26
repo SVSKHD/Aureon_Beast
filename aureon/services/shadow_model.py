@@ -24,14 +24,22 @@ class ShadowModelService:
         self.models = models
         self._now = now
 
-    def predict_setup(self, setup: Any, event: Any) -> ModelPrediction | None:
+    def predict_setup(
+        self,
+        setup: Any,
+        event: Any,
+        *,
+        extra_context: dict[str, Any] | None = None,
+    ) -> ModelPrediction | None:
         model = self.models.active_shadow(setup.symbol)
         if model is None:
             return None
         if model.model_schema_version == MODEL_SCHEMA_V1:
             # Reuse the canonical fail-closed prediction path. It persists the same
             # ModelPrediction contract and still has zero execution authority.
-            PredictionService(self.models, now=self._now).predict_shadow(setup, event)
+            PredictionService(self.models, now=self._now).predict_shadow(
+                setup, event, extra_context=extra_context
+            )
             return self.models.prediction_for(model.model_id, setup.setup_id)
         if (
             model.feature_schema_version != FEATURE_SCHEMA
