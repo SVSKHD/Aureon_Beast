@@ -27,8 +27,52 @@ class ModelRepository(PostgresRepository):
     evolution = tables.ModelEvolutionLog.__table__
 
     def write_model(self, model: ModelRegistryEntry) -> ModelRegistryEntry:
-        self._upsert(self._model_row(model), table=self.models)
-        return model
+        """Insert one immutable model artifact, idempotently.
+
+        Lifecycle fields are changed only through the explicit status/promotion methods.
+        Re-writing the same deterministic model id is allowed when its trained artifact is
+        identical, but it must never demote a Shadow/Champion or replace its bytes.
+        """
+        with self._db.transaction() as connection:
+            row = self._row(model.model_id, table=self.models, connection=connection)
+            if row is None:
+                self._upsert(
+                    self._model_row(model),
+                    table=self.models,
+                    connection=connection,
+                )
+                return model
+
+            existing = ModelRegistryEntry.model_validate(self._model_dict(row))
+            immutable_fields = (
+                "symbol",
+                "algorithm",
+                "feature_schema_version",
+                "label_schema_version",
+                "model_schema_version",
+                "parent_model_id",
+                "hyperparameters",
+                "trained_from",
+                "trained_through",
+                "training_samples",
+                "target_metrics",
+                "validation_metrics",
+                "artifact",
+                "created_at",
+            )
+            changed = [
+                field
+                for field in immutable_fields
+                if getattr(existing, field) != getattr(model, field)
+            ]
+            if changed:
+                raise ValueError(
+                    f"model {model.model_id} already exists with different immutable "
+                    f"content: {', '.join(changed)}"
+                )
+            # Preserve the stored lifecycle state. A repeated training/write call must
+            # not turn Champion -> candidate or Shadow -> candidate.
+            return existing
 
     def write_training_run(self, run: ModelTrainingRun) -> ModelTrainingRun:
         self._upsert(self._run_row(run), table=self.runs)
