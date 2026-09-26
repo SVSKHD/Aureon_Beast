@@ -12,6 +12,7 @@ import json
 import logging
 import shutil
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -123,26 +124,28 @@ class BackupService:
             encoding="utf-8",
         )
 
-        synced = 0
-        failed = False
-        if self.drive_root is not None:
-            try:
-                synced = self.sync_changed_to_drive(root)
-            except Exception:
-                failed = True
-                log.warning(
-                    "Google Drive backup unavailable; local snapshot is complete and Aureon "
-                    "continues normally",
-                    exc_info=True,
-                )
+        # Local snapshot completion is the success boundary. Offsite sync is separate.
         return BackupResult(
             snapshot_dir=root,
             manifest_path=manifest_path,
             files=len(records),
-            drive_synced=synced,
-            drive_failed=failed,
         )
 
+    def sync_drive_async(self, snapshot_dir: Path) -> threading.Thread:
+        """Start best-effort Drive sync without blocking any Aureon service."""
+        def _run() -> None:
+            try:
+                self.sync_changed_to_drive(snapshot_dir)
+            except Exception:  # noqa: BLE001
+                log.warning("Google Drive backup failed; local operation continues", exc_info=True)
+
+        thread = threading.Thread(
+            target=_run,
+            name=f"aureon-drive-backup-{snapshot_dir.name}",
+            daemon=True,
+        )
+        thread.start()
+        return thread
     def sync_changed_to_drive(self, snapshot_dir: Path) -> int:
         """Mirror only missing/changed files into the optional Drive folder."""
         if self.drive_root is None:
