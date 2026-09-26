@@ -44,6 +44,7 @@ class EodTrainingAgent:
         memory: Any,
         rule_id: str,
         now: Any = utc_now,
+        v1_builder: Any | None = None,
     ) -> None:
         self.setups = setups
         self.setup_evaluations = setup_evaluations
@@ -51,6 +52,7 @@ class EodTrainingAgent:
         self.memory = memory
         self.rule_id = rule_id
         self._now = now
+        self.v1_builder = v1_builder
 
     def build_day(self, *, symbol: str, market_date: str) -> DailyTrainingStatus:
         """Build or rebuild one completed broker day's training memory idempotently."""
@@ -89,6 +91,25 @@ class EodTrainingAgent:
         )
         self.memory.write_status(status)
         return status
+
+    def build_v1_resolved(
+        self,
+        *,
+        symbol: str,
+        market_date: str,
+    ) -> list[TrainingExample]:
+        """Persist V1 rows only after their multi-session outcome is COMPLETE.
+
+        This may be called repeatedly for the same broker day. Deterministic example ids
+        make it idempotent, and pending outcomes remain absent rather than becoming misses.
+        """
+        if self.v1_builder is None:
+            return []
+        return self.v1_builder.build_resolved_day(
+            symbol=symbol,
+            market_date=market_date,
+            generated_at=to_utc(self._now()),
+        )
 
     def _example(
         self,
