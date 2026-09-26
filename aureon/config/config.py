@@ -190,6 +190,14 @@ class AureonConfig(AureonModel):
     evaluation_rules: dict[str, str] = Field(default_factory=dict)
 
     # ── Firestore ─────────────────────────────────────────────────────────────
+    # ── Local-first backup ───────────────────────────────────────────────────
+    # Optional directory managed by Google Drive Desktop (or another mounted/synced
+    # Drive folder). Never required by observer/executor/monitor.
+    backup_enabled: bool = False
+    drive_backup_dir: str | None = None
+    backup_interval_seconds: float = 3600.0
+    backup_local_root: str = "data/backups"
+
     firebase_project_id: str | None = None
     google_application_credentials: str | None = None
     firestore_emulator_host: str | None = None
@@ -348,6 +356,10 @@ class AureonConfig(AureonModel):
                 _env_str("AUREON_EVALUATION_RULE_ID", "XAU_OUTCOME_V2"),
             ),
             evaluation_rules=_env_map("AUREON_EVAL_RULES"),
+            backup_enabled=_env_true("AUREON_BACKUP_ENABLED"),
+            drive_backup_dir=_env_opt("AUREON_DRIVE_BACKUP_DIR"),
+            backup_interval_seconds=_env_float("AUREON_BACKUP_INTERVAL_SECONDS", 3600.0),
+            backup_local_root=_env_str("AUREON_BACKUP_LOCAL_ROOT", "data/backups"),
             firebase_project_id=_env_opt("AUREON_FIREBASE_PROJECT_ID"),
             google_application_credentials=_env_opt("GOOGLE_APPLICATION_CREDENTIALS"),
             firestore_emulator_host=_env_opt("FIRESTORE_EMULATOR_HOST"),
