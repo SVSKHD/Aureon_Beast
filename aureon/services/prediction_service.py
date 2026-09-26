@@ -39,18 +39,30 @@ class PredictionService:
         self.clean_threshold = clean_threshold
         self.target_threshold = target_threshold
 
-    def predict_champion(self, setup: Any, event: Any) -> EntryIntelligence | None:
+    def predict_champion(
+        self,
+        setup: Any,
+        event: Any,
+        *,
+        features: Any | None = None,
+    ) -> EntryIntelligence | None:
         model = self.models.champion(setup.symbol)
         if model is None:
             log.warning("%s has no Champion; ML intelligence unavailable", setup.symbol)
             return None
-        return self._predict(model, setup, event, role="champion")
+        return self._predict(model, setup, event, role="champion", features=features)
 
-    def predict_shadow(self, setup: Any, event: Any) -> EntryIntelligence | None:
+    def predict_shadow(
+        self,
+        setup: Any,
+        event: Any,
+        *,
+        features: Any | None = None,
+    ) -> EntryIntelligence | None:
         model = self.models.active_shadow(setup.symbol)
         if model is None:
             return None
-        return self._predict(model, setup, event, role="shadow")
+        return self._predict(model, setup, event, role="shadow", features=features)
 
     def _predict(
         self,
@@ -59,6 +71,7 @@ class PredictionService:
         event: Any,
         *,
         role: str,
+        features: Any | None = None,
     ) -> EntryIntelligence | None:
         if (
             model.feature_schema_version != FEATURE_SCHEMA_V1
@@ -76,8 +89,8 @@ class PredictionService:
             return None
 
         try:
-            features = FeatureBuilder.from_setup_event(setup, event)
-            probabilities = predict_v1_artifact(model, features)
+            frozen = features or FeatureBuilder.from_setup_event(setup, event)
+            probabilities = predict_v1_artifact(model, frozen)
         except Exception:
             log.exception("%s prediction failed closed for model %s", role, model.model_id)
             return None
@@ -99,7 +112,7 @@ class PredictionService:
                 feature_schema_version=model.feature_schema_version,
                 label_schema_version=model.label_schema_version,
                 probabilities=probabilities,
-                feature_snapshot=features.model_dump(mode="json"),
+                feature_snapshot=frozen.model_dump(mode="json"),
             )
             self.models.write_prediction(prediction)
 
@@ -128,7 +141,7 @@ class PredictionService:
             setup_id=setup.setup_id,
             symbol=setup.symbol,
             timeframe=setup.timeframe,
-            direction=features.direction,
+            direction=frozen.direction,
             predicted_at=predicted_at,
             probabilities=probabilities,
             confidence=clean,
