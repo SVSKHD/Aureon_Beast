@@ -220,6 +220,19 @@ class MT5DataProvider(BaseMarketDataProvider):
             spread=int(getattr(info, "spread", 0)) or None,
         )
 
+    def symbol_economics(self, symbol: str) -> dict[str, Any]:
+        """Broker economics needed to translate historical price moves into money."""
+        info = self.mt5.symbol_info(symbol)
+        if info is None:
+            raise MarketDataError(f"symbol_info({symbol}) failed: {self.mt5.last_error()}")
+        return {
+            "symbol": symbol,
+            "contract_size": float(getattr(info, "trade_contract_size", 0.0)),
+            "currency_base": str(getattr(info, "currency_base", "")),
+            "currency_profit": str(getattr(info, "currency_profit", "")),
+            "currency_margin": str(getattr(info, "currency_margin", "")),
+        }
+
     def account_info(self) -> dict[str, Any]:
         """Who the terminal is logged in as, for the preflight identity check (P-2).
 
