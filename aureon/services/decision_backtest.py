@@ -469,3 +469,169 @@ def simulate_money_outcomes(
         "trade_rows": trades,
         "note": "Ambiguous M5 bars touch TP and SL in the same candle and are excluded from USD P&L.",
     }
+
+def simulate_trailing_outcomes(
+    rows: list[DecisionReplayRow],
+    candles: list[Any],
+    *,
+    stop_move: float,
+    activation_move: float,
+    minimum_lock_move: float,
+    trail_fraction_of_peak: float,
+    hold_bars: int,
+    lot_size: float,
+    contract_size: float,
+    selected_times: set[str] | None = None,
+) -> dict[str, Any]:
+    """Simulate no fixed TP: initial SL, then trail once +5 is reached.
+
+    The stop used inside each M5 bar is based only on information known before
+    that bar. This avoids pretending we know the intrabar high/low ordering.
+    """
+    if stop_move <= 0 or activation_move <= 0:
+        raise ValueError("stop_move and activation_move must be > 0")
+    if minimum_lock_move < 0 or minimum_lock_move >= activation_move:
+        raise ValueError("minimum_lock_move must be >= 0 and < activation_move")
+    if not 0 < trail_fraction_of_peak < 1:
+        raise ValueError("trail_fraction_of_peak must be in (0,1)")
+    if hold_bars < 1:
+        raise ValueError("hold_bars must be >= 1")
+    if lot_size <= 0 or contract_size <= 0:
+        raise ValueError("lot_size and contract_size must be > 0")
+
+    ordered_times = [candle.open_time.utc for candle in candles]
+
+    def first_future_index(at: str) -> int | None:
+        moment = datetime.fromisoformat(at)
+        for i, opened in enumerate(ordered_times):
+            if opened >= moment:
+                return i
+        return None
+
+    trades: list[dict[str, Any]] = []
+    for row in rows:
+        if not row.eligible:
+            continue
+        if selected_times is not None and row.at not in selected_times:
+            continue
+        start_index = first_future_index(row.at)
+        if start_index is None:
+            continue
+        future = candles[start_index : start_index + hold_bars]
+        if not future:
+            continue
+
+        direction = Direction.BUY if row.direction == "buy" else Direction.SELL
+        activated = False
+        peak_move = 0.0
+        trail_move: float | None = None
+        exit_move: float | None = None
+        exit_bar: int | None = None
+        result = "timeout"
+        max_adverse_before_exit = 0.0
+
+        for offset, bar in enumerate(future, start=1):
+            if direction is Direction.BUY:
+                favourable = max(0.0, bar.high - row.entry_price)
+                adverse = max(0.0, row.entry_price - bar.low)
+                initial_stop_hit = bar.low <= row.entry_price - stop_move
+                trail_hit = (
+                    activated
+                    and trail_move is not None
+                    and bar.low <= row.entry_price + trail_move
+                )
+            else:
+                favourable = max(0.0, row.entry_price - bar.low)
+                adverse = max(0.0, bar.high - row.entry_price)
+                initial_stop_hit = bar.high >= row.entry_price + stop_move
+                trail_hit = (
+                    activated
+                    and trail_move is not None
+                    and bar.high >= row.entry_price - trail_move
+                )
+
+            max_adverse_before_exit = max(max_adverse_before_exit, adverse)
+
+            if activated and trail_hit:
+                result = "trailed"
+                exit_move = float(trail_move)
+                exit_bar = offset
+                break
+            if not activated and initial_stop_hit:
+                result = "loss"
+                exit_move = -stop_move
+                exit_bar = offset
+                break
+
+            peak_move = max(peak_move, favourable)
+            if not activated and peak_move >= activation_move:
+                activated = True
+
+            if activated:
+                desired = max(minimum_lock_move, peak_move * trail_fraction_of_peak)
+                executable_cap = max(0.0, peak_move - 0.25)
+                candidate = min(desired, executable_cap)
+                trail_move = max(trail_move or 0.0, candidate)
+
+        if exit_move is None:
+            last = future[-1]
+            exit_move = (
+                last.close - row.entry_price
+                if direction is Direction.BUY
+                else row.entry_price - last.close
+            )
+            exit_bar = len(future)
+            result = "timeout_runner" if activated else "timeout"
+
+        usd_pnl = exit_move * contract_size * lot_size
+        trades.append({
+            "at": row.at,
+            "direction": row.direction,
+            "entry_price": row.entry_price,
+            "result": result,
+            "exit_bar": exit_bar,
+            "price_move": exit_move,
+            "usd_pnl": usd_pnl,
+            "trail_activated": activated,
+            "peak_move": peak_move,
+            "final_trail_move": trail_move,
+            "mae_before_exit": max_adverse_before_exit,
+        })
+
+    profitable = [t for t in trades if float(t["usd_pnl"]) > 0]
+    losing = [t for t in trades if float(t["usd_pnl"]) < 0]
+    flat = [t for t in trades if float(t["usd_pnl"]) == 0]
+    trailed = [t for t in trades if t["result"] == "trailed"]
+    initial_losses = [t for t in trades if t["result"] == "loss"]
+    activated_trades = [t for t in trades if t["trail_activated"]]
+    usd_made = sum(max(0.0, float(t["usd_pnl"])) for t in trades)
+    usd_lost = -sum(min(0.0, float(t["usd_pnl"])) for t in trades)
+    net = sum(float(t["usd_pnl"]) for t in trades)
+
+    return {
+        "trades": len(trades),
+        "trail_activated": len(activated_trades),
+        "trailed_exits": len(trailed),
+        "initial_sl_losses": len(initial_losses),
+        "profitable_exits": len(profitable),
+        "losing_exits": len(losing),
+        "flat_exits": len(flat),
+        "usd_made": usd_made,
+        "usd_lost": usd_lost,
+        "net_usd": net,
+        "average_usd_per_trade": (net / len(trades)) if trades else None,
+        "max_mae_before_exit": max((float(t["mae_before_exit"]) for t in trades), default=0.0),
+        "max_peak_move": max((float(t["peak_move"]) for t in trades), default=0.0),
+        "activation_move": activation_move,
+        "minimum_lock_move": minimum_lock_move,
+        "trail_fraction_of_peak": trail_fraction_of_peak,
+        "stop_move": stop_move,
+        "hold_bars": hold_bars,
+        "lot_size": lot_size,
+        "contract_size": contract_size,
+        "trade_rows": trades,
+        "note": (
+            "No fixed TP. Initial SL remains until +5 activation. Trail updates only "
+            "from information known before each next M5 bar; this avoids intrabar lookahead."
+        ),
+    }
