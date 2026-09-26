@@ -130,3 +130,32 @@ def test_schema_mismatch_returns_no_prediction() -> None:
 
     assert service.predict_shadow(setup, event) is None
     assert models.writes == []
+
+
+def test_extra_context_is_used_for_live_v1_snapshot() -> None:
+    models = FakeModels(_model("champion"))
+    service = PredictionService(models)
+    setup, event = _setup_event()
+
+    intelligence = service.predict_champion(
+        setup,
+        event,
+        extra_context={
+            "rsi": 58.0,
+            "market_regime": "trend_expansion",
+            "agent_states": {
+                "wick": {
+                    "stance": "bullish",
+                    "alignment": "aligned",
+                    "state": "rejection",
+                }
+            },
+        },
+    )
+
+    assert intelligence is not None
+    assert len(models.writes) == 1
+    frozen = models.writes[0].feature_snapshot
+    assert frozen["rsi"] == 58.0
+    assert frozen["market_regime"] == "trend_expansion"
+    assert frozen["agents"]["wick"]["state"] == "rejection"

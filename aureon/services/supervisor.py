@@ -91,13 +91,14 @@ DEFAULT_SERVICES: tuple[ServiceSpec, ...] = (
     # outbox are being drained before anything else can produce work. The monitor before the
     # executor, so that a position opened by the executor's first poll is already being watched.
     # The executor before Discord, so that a human cannot confirm a request into a process that
-    # has not claimed its lease yet. Discord before the review watcher only because the watcher
-    # is the one service nothing else waits on.
+    # has not claimed its lease yet. Discord before the review watcher next, and the learning sidecar last because neither is part of the
+    # execution dependency chain.
     ServiceSpec("observer", ("main_observer.py",)),
     ServiceSpec("monitor", ("main_monitor.py",)),
     ServiceSpec("executor", ("main_executor.py",)),
     ServiceSpec("discord", ("main_discord.py",)),
     ServiceSpec("review", ("main_review.py", "watch")),
+    ServiceSpec("learning", ("main_learning.py",)),
 )
 
 SERVICE_NAMES: tuple[str, ...] = tuple(spec.name for spec in DEFAULT_SERVICES)
