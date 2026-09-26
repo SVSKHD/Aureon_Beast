@@ -418,6 +418,8 @@ class Trade(Base):
 
     deal_ids: Mapped[dict[str, Any]] = mapped_column(Json)
     excursion: Mapped[dict[str, Any]] = mapped_column(Json)
+    management: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    guardian: Mapped[dict[str, Any] | None] = mapped_column(Json)
     last_reconciled_at: Mapped[datetime | None] = mapped_column()
     last_synced_at: Mapped[datetime | None] = mapped_column()
 
@@ -427,6 +429,33 @@ class Trade(Base):
         Index("ix_trades_symbol_status", "symbol", "status"),
         Index("ix_trades_open_time", "open_time_utc"),
         Index("ix_trades_request", "trade_request_id"),
+    )
+
+
+class TradeManagementEvent(Base):
+    """Append-only Agent14/16 trail/protection history for exit-learning later."""
+
+    __tablename__ = "trade_management_events"
+
+    event_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    trade_id: Mapped[str] = mapped_column(String)
+    observed_at: Mapped[datetime] = mapped_column()
+    source: Mapped[str] = mapped_column(String)
+    action: Mapped[str] = mapped_column(String)
+    current_move: Mapped[float | None] = mapped_column(Float)
+    peak_move: Mapped[float | None] = mapped_column(Float)
+    giveback: Mapped[float | None] = mapped_column(Float)
+    protected_move: Mapped[float | None] = mapped_column(Float)
+    trail_price: Mapped[float | None] = mapped_column(Float)
+    continuation_score: Mapped[int | None] = mapped_column(Integer)
+    continuation_total: Mapped[int | None] = mapped_column(Integer)
+    exit_price: Mapped[float | None] = mapped_column(Float)
+    realized_move: Mapped[float | None] = mapped_column(Float)
+    exit_reason: Mapped[str | None] = mapped_column(String)
+
+    __table_args__ = (
+        Index("ix_trade_management_trade_time", "trade_id", "observed_at"),
     )
 
 
