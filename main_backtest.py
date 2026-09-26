@@ -14,6 +14,7 @@ The output is historical reference evidence only and is never auto-promoted into
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_left
 import json
 import sys
 from datetime import date, datetime, time, timedelta
@@ -26,6 +27,7 @@ from aureon.data.historical_provider import HistoricalDataProvider
 from aureon.data.live_candle_archive import read_archive
 from aureon.data.mt5_provider import MT5DataProvider
 from aureon.engine.analysis_engine import AnalysisEngine
+from aureon.ml.features import FeatureEncoder, raw_training_features
 from aureon.models.base import to_utc
 from aureon.models.enums import Timeframe
 from aureon.services.adaptive_learning import (
@@ -40,6 +42,19 @@ from aureon.services.decision_backtest import (
     simulate_trailing_outcomes,
     test_reference_model,
     train_reference,
+)
+from aureon.services.learning_contract import (
+    FEATURE_SCHEMA_V1,
+    LABEL_SCHEMA_V1,
+    canonical_example_from_replay,
+    enforce_target_probability_order,
+)
+from aureon.services.model_training import (
+    ALGORITHM as V1_LOGISTIC,
+    CHALLENGER_ALGORITHM as V1_BOOSTED,
+    fit_bundle as fit_v1_bundle,
+    prediction_metrics as v1_prediction_metrics,
+    probability_from_payload,
 )
 from aureon.services.symbol_intelligence_agent import SymbolIntelligenceAgent
 from main_observer import default_agents
@@ -177,6 +192,167 @@ def _fetch_mt5_chunked(
     return [candles_by_open[key] for key in sorted(candles_by_open)]
 
 
+
+def _canonical_examples(
+    rows,
+    candles,
+    *,
+    horizon_bars: int,
+    clean_target: float,
+    clean_max_mae: float,
+):
+    opens = [candle.open_time.utc for candle in candles]
+    examples = []
+    for row in rows:
+        if not row.eligible:
+            continue
+        moment = datetime.fromisoformat(row.at)
+        start_index = bisect_left(opens, moment)
+        future = candles[start_index : start_index + horizon_bars]
+        # Unknown remains unknown. Do not turn an incomplete tail into a miss.
+        if len(future) < horizon_bars:
+            continue
+        examples.append(
+            canonical_example_from_replay(
+                row=row,
+                future_bars=future,
+                generated_at=future[-1].close_time,
+                clean_target=clean_target,
+                clean_max_mae=clean_max_mae,
+            )
+        )
+    return examples
+
+
+def _train_v1_file_models(examples, *, min_samples: int):
+    models = {}
+    errors = {}
+    for algorithm in (V1_LOGISTIC, V1_BOOSTED):
+        try:
+            bundle = fit_v1_bundle(
+                examples,
+                algorithm=algorithm,
+                min_samples=min_samples,
+                min_class_samples=max(2, min(5, min_samples // 5)),
+            )
+            models[algorithm] = {
+                "feature_schema_version": FEATURE_SCHEMA_V1,
+                "label_schema_version": LABEL_SCHEMA_V1,
+                "artifact": bundle.to_artifact(),
+                "training_samples": len(examples),
+                "metrics": {
+                    name: metric.model_dump(mode="json")
+                    for name, metric in bundle.metrics.items()
+                },
+            }
+        except Exception as exc:
+            errors[algorithm] = str(exc)
+    return models, errors
+
+
+def _test_v1_file_model(examples, saved):
+    artifact = saved.get("artifact") or {}
+    if saved.get("feature_schema_version") != FEATURE_SCHEMA_V1:
+        raise ValueError("saved V1 model feature schema mismatch")
+    if saved.get("label_schema_version") != LABEL_SCHEMA_V1:
+        raise ValueError("saved V1 model label schema mismatch")
+    encoder = FeatureEncoder.from_dict(artifact["encoder"])
+    target_payloads = artifact.get("targets") or {}
+    labels = {name: [] for name in ("clean_10","reach_5","reach_10","reach_20","reach_30","reach_40")}
+    probabilities = {name: [] for name in labels}
+    scored = []
+    for example in examples:
+        vector = encoder.transform(*raw_training_features(example))
+        row_probs = {
+            target: probability_from_payload(payload, vector)
+            for target, payload in target_payloads.items()
+        }
+        row_probs = enforce_target_probability_order(row_probs)
+        actual = example.outcome
+        if actual is None:
+            continue
+        actuals = {
+            "clean_10": actual.clean_10,
+            "reach_5": actual.reached_5,
+            "reach_10": actual.reached_10,
+            "reach_20": actual.reached_20,
+            "reach_30": actual.reached_30,
+            "reach_40": actual.reached_40,
+        }
+        for target, value in actuals.items():
+            if target in row_probs:
+                labels[target].append(1 if value else 0)
+                probabilities[target].append(float(row_probs[target]))
+        scored.append({
+            "at": example.features.get("timestamp"),
+            "direction": example.direction,
+            "probabilities": row_probs,
+            "actual": actual.model_dump(mode="json"),
+        })
+    metrics = {
+        target: v1_prediction_metrics(labels[target], probabilities[target])
+        if labels[target] else None
+        for target in labels
+    }
+    return {"samples": len(scored), "metrics": metrics, "scored_rows": scored}
+
+
+def _walk_forward_v1(examples, *, algorithm: str, min_samples: int):
+    dates = sorted({one.market_date for one in examples})
+    folds = []
+    all_labels = []
+    all_probs = []
+    # Expanding calendar-date folds; never shuffle.
+    for split in range(1, len(dates)):
+        train_dates = dates[:split]
+        test_date = dates[split]
+        train = [one for one in examples if one.market_date in train_dates]
+        test = [one for one in examples if one.market_date == test_date]
+        if len(train) < min_samples or not test:
+            continue
+        if max(train_dates) >= test_date:
+            raise AssertionError("walk-forward leakage detected")
+        try:
+            bundle = fit_v1_bundle(
+                train,
+                algorithm=algorithm,
+                min_samples=min_samples,
+                min_class_samples=max(2, min(5, min_samples // 5)),
+            )
+        except ValueError:
+            continue
+        labels = []
+        probs = []
+        for one in test:
+            if one.outcome is None or "clean_10" not in bundle.models:
+                continue
+            vector = bundle.encoder.transform(*raw_training_features(one))
+            probability = float(bundle.models["clean_10"].probability(vector))
+            labels.append(1 if one.outcome.clean_10 else 0)
+            probs.append(probability)
+        if not labels:
+            continue
+        all_labels.extend(labels)
+        all_probs.extend(probs)
+        folds.append({
+            "train_from": train_dates[0],
+            "train_through": train_dates[-1],
+            "test_from": test_date,
+            "test_through": test_date,
+            "train_samples": len(train),
+            "test_samples": len(test),
+            "clean_10": v1_prediction_metrics(labels, probs),
+        })
+    return {
+        "algorithm": algorithm,
+        "folds": folds,
+        "aggregate_clean_10": (
+            v1_prediction_metrics(all_labels, all_probs) if all_labels else None
+        ),
+        "out_of_sample_predictions": len(all_labels),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Aureon chronological M5 decision backtest")
     source = parser.add_mutually_exclusive_group(required=True)
@@ -199,6 +375,15 @@ def main() -> int:
         help="load a prior main_backtest JSON artifact and score this date range without retraining",
     )
     parser.add_argument("--target-move", type=float, default=10.0)
+    parser.add_argument("--clean-target", type=float, default=10.0)
+    parser.add_argument("--clean-max-mae", type=float, default=7.0)
+    parser.add_argument("--min-train-samples", type=int, default=30)
+    parser.add_argument("--walk-forward", action="store_true")
+    parser.add_argument(
+        "--persist-training-memory",
+        action="store_true",
+        help="write canonical historical V1 examples to local TrainingMemory",
+    )
     parser.add_argument("--stop-move", type=float, default=None)
     parser.add_argument("--lot-size", type=float, default=None)
     parser.add_argument("--hold-bars", type=int, default=12)
@@ -231,6 +416,12 @@ def main() -> int:
         parser.error("--max-adaptive-trades must be >= 0")
     if args.learning_hold_bars < 12:
         parser.error("--learning-hold-bars must be at least 12")
+    if args.clean_target <= 0:
+        parser.error("--clean-target must be > 0")
+    if args.clean_max_mae < 0:
+        parser.error("--clean-max-mae must be >= 0")
+    if args.min_train_samples < 10:
+        parser.error("--min-train-samples must be >= 10")
     if args.trail_activation_move <= 0:
         parser.error("--trail-activation-move must be > 0")
     if args.trail_min_lock < 0 or args.trail_min_lock >= args.trail_activation_move:
@@ -381,6 +572,27 @@ def main() -> int:
     eligible = [row for row in rows if row.eligible]
     reached = [row for row in eligible if row.reached_10]
 
+    canonical_examples = _canonical_examples(
+        rows,
+        replay_candles,
+        horizon_bars=args.learning_hold_bars,
+        clean_target=args.clean_target,
+        clean_max_mae=args.clean_max_mae,
+    )
+    clean_wins = [
+        one for one in canonical_examples
+        if one.outcome is not None and one.outcome.clean_10
+    ]
+    if args.persist_training_memory and canonical_examples:
+        from aureon.storage.runtime import build_storage
+
+        storage = build_storage(
+            account_scope=config.account_scope,
+            state_heartbeat_seconds=config.state_heartbeat_seconds,
+        )
+        for example in canonical_examples:
+            storage.training_memory.write_example(example)
+
     model_test = None
     adaptive_model = None
     adaptive_test = None
@@ -425,6 +637,34 @@ def main() -> int:
             flush=True,
         )
         reference_model = None
+
+    v1_file_models = None
+    v1_model_test = None
+    v1_walk_forward = None
+    if args.train:
+        v1_file_models, v1_train_errors = _train_v1_file_models(
+            canonical_examples,
+            min_samples=args.min_train_samples,
+        )
+    else:
+        v1_train_errors = {}
+    if args.test_model:
+        saved_payload = json.loads(Path(args.test_model).read_text(encoding="utf-8"))
+        saved_v1_models = saved_payload.get("v1_models") or {}
+        if saved_v1_models:
+            v1_model_test = {
+                algorithm: _test_v1_file_model(canonical_examples, payload)
+                for algorithm, payload in saved_v1_models.items()
+            }
+    if args.walk_forward:
+        v1_walk_forward = {
+            algorithm: _walk_forward_v1(
+                canonical_examples,
+                algorithm=algorithm,
+                min_samples=args.min_train_samples,
+            )
+            for algorithm in (V1_LOGISTIC, V1_BOOSTED)
+        }
 
     agent20_money = None
     model_money = None
@@ -526,6 +766,23 @@ def main() -> int:
         "eligible_crosses": len(eligible),
         "eligible_reached_target": len(reached),
         "target_move": args.target_move,
+        "canonical_learning": {
+            "feature_schema": FEATURE_SCHEMA_V1,
+            "label_schema": LABEL_SCHEMA_V1,
+            "clean_target": args.clean_target,
+            "clean_max_mae": args.clean_max_mae,
+            "examples": len(canonical_examples),
+            "clean_wins": len(clean_wins),
+            "clean_win_rate": (
+                len(clean_wins) / len(canonical_examples)
+                if canonical_examples else None
+            ),
+            "persisted_to_training_memory": bool(args.persist_training_memory),
+        },
+        "v1_models": v1_file_models,
+        "v1_train_errors": v1_train_errors,
+        "v1_model_test": v1_model_test,
+        "v1_walk_forward": v1_walk_forward,
         "position_summary": position_summary,
         "money_simulation": {
             "currency": "USD" if agent20_money is not None else None,
@@ -588,6 +845,14 @@ def main() -> int:
     print(f"  eligible             {len(eligible)}")
     print(f"  reached +{args.target_move:g}       {len(reached)}")
     print(f"  historical hit rate  {'—' if rate is None else f'{rate:.1%}'}")
+    clean_rate = (
+        len(clean_wins) / len(canonical_examples)
+        if canonical_examples else None
+    )
+    print("  --- CANONICAL V1 LEARNING ---")
+    print(f"  canonical examples   {len(canonical_examples)}")
+    print(f"  clean +{args.clean_target:g} <= -{args.clean_max_mae:g} MAE  {len(clean_wins)}")
+    print(f"  clean-win rate       {'—' if clean_rate is None else f'{clean_rate:.1%}'}")
     print("  --- position summary ---")
     print(f"  positions            {position_summary['positions']}")
     print(f"  target wins          {position_summary['target_wins']}")
@@ -728,6 +993,35 @@ def main() -> int:
         print(f"  model target wins    {result.get('predicted_positive_hits', 0)}")
         print(f"  model target misses  {result.get('predicted_positive_misses', 0)}")
         print(f"  >= 0.50 hit rate     {result.get('predicted_positive_hit_rate')}")
+    if args.train and v1_file_models is not None:
+        print("  --- V1 TRAINED CANDIDATES ---")
+        for algorithm, payload in v1_file_models.items():
+            clean = (payload.get("metrics") or {}).get("clean_10") or {}
+            print(
+                f"  {algorithm:<22} samples={payload.get('training_samples')} "
+                f"precision={clean.get('precision')} brier={clean.get('brier')} "
+                f"auc={clean.get('roc_auc')}"
+            )
+        for algorithm, error in v1_train_errors.items():
+            print(f"  {algorithm:<22} unavailable: {error}")
+    if args.test_model and v1_model_test:
+        print("  --- V1 SAVED MODEL TEST ---")
+        for algorithm, result in v1_model_test.items():
+            clean = (result.get("metrics") or {}).get("clean_10") or {}
+            print(
+                f"  {algorithm:<22} samples={result.get('samples')} "
+                f"precision={clean.get('precision')} recall={clean.get('recall')} "
+                f"brier={clean.get('brier')} auc={clean.get('roc_auc')}"
+            )
+    if args.walk_forward and v1_walk_forward:
+        print("  --- V1 WALK-FORWARD ---")
+        for algorithm, result in v1_walk_forward.items():
+            clean = result.get("aggregate_clean_10") or {}
+            print(
+                f"  {algorithm:<22} OOS={result.get('out_of_sample_predictions')} "
+                f"precision={clean.get('precision')} recall={clean.get('recall')} "
+                f"brier={clean.get('brier')} auc={clean.get('roc_auc')}"
+            )
     print(f"  output               {output}")
     print(f"  total elapsed        {_elapsed(started)}")
     print("  NOTE: historical reference only; no live model is auto-activated.")
