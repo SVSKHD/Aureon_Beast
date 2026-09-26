@@ -118,6 +118,9 @@ class ModelPrediction(AureonDocument):
 class ShadowPredictionSummary(AureonModel):
     predictions: int = Field(default=0, ge=0)
     reconciled: int = Field(default=0, ge=0)
+    clean_10_brier: float | None = Field(default=None, ge=0)
+    target_brier: dict[str, float | None] = Field(default_factory=dict)
+    # Legacy readers remain compatible.
     six_brier: float | None = Field(default=None, ge=0)
     twenty_brier: float | None = Field(default=None, ge=0)
     forty_brier: float | None = Field(default=None, ge=0)
