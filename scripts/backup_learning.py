@@ -52,22 +52,37 @@ def main(argv: list[str] | None = None) -> int:
         "evaluation_rule_id": config.evaluation_rule_id,
     }
 
-    result = BackupService(
+    service = BackupService(
         backup_root=args.backup_root,
         drive_root=args.drive_root,
-    ).monthly_snapshot(
+    )
+    result = service.monthly_snapshot(
         month=args.month,
         assets=assets,
         config_snapshot=safe_config,
     )
+
+    # This command is an offline maintenance job, never part of the trading hot path.
+    # The service itself also exposes sync_drive_async() for long-running schedulers.
+    drive_synced = 0
+    drive_failed = False
+    if args.drive_root:
+        try:
+            drive_synced = service.sync_changed_to_drive(result.snapshot_dir)
+        except Exception as exc:  # noqa: BLE001 - offsite failure must not fail local backup
+            drive_failed = True
+            print(
+                f"WARNING: Drive backup failed; local snapshot is safe: {exc}",
+                file=sys.stderr,
+            )
     print(
         json.dumps(
             {
                 "snapshot": str(result.snapshot_dir),
                 "manifest": str(result.manifest_path),
                 "files": result.files,
-                "drive_synced": result.drive_synced,
-                "drive_failed": result.drive_failed,
+                "drive_synced": drive_synced,
+                "drive_failed": drive_failed,
             },
             indent=2,
         )
