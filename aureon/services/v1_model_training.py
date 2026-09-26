@@ -230,6 +230,36 @@ def fit_v1_bundle(
     )
 
 
+def refit_v1_artifact(
+    examples: list[CanonicalTrainingExample],
+    *,
+    algorithm: str,
+) -> dict[str, Any]:
+    """Refit deployment artifact on all past examples after validation is frozen."""
+    ordered = sorted(
+        examples, key=lambda one: (one.features.timestamp, one.setup_id)
+    )
+    raw = [raw_v1_features(example.features) for example in ordered]
+    encoder = V1FeatureEncoder.fit(raw)
+    vectors = [encoder.transform(*row) for row in raw]
+    targets: dict[str, dict[str, Any]] = {}
+    for target in V1_TARGETS:
+        labels = [1 if target_value(example, target) else 0 for example in ordered]
+        targets[target] = _fit_target(
+            algorithm=algorithm, train_vectors=vectors, train_labels=labels
+        )
+    return {
+        "model_schema_version": MODEL_SCHEMA_V1,
+        "feature_schema_version": FEATURE_SCHEMA_V1,
+        "label_schema_version": LABEL_SCHEMA_V1,
+        "algorithm": algorithm,
+        "encoder": encoder.to_dict(),
+        "feature_names": list(encoder.feature_names),
+        "targets": targets,
+        "target_order": list(V1_TARGETS),
+        "refit_on_all_past_examples": True,
+    }
+
 class V1ModelTrainer:
     """Train new candidates; never changes Champion/Shadow state."""
 
@@ -274,7 +304,7 @@ class V1ModelTrainer:
                 algorithm=algorithm,
                 min_samples=min_samples,
             )
-            artifact = bundle.artifact()
+            artifact = refit_v1_artifact(examples, algorithm=algorithm)
             digest = hashlib.sha256(
                 (
                     f"{symbol}|{algorithm}|{FEATURE_SCHEMA_V1}|{LABEL_SCHEMA_V1}|"
