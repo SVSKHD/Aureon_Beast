@@ -197,6 +197,13 @@ class HorizonResult(AureonModel):
     time_to: dict[str, float | None] = Field(
         default_factory=dict, description="Seconds from detection to first reach."
     )
+    mae_before: dict[str, float | None] = Field(
+        default_factory=dict,
+        description=(
+            "Maximum adverse excursion in points observed up to the first reach of "
+            "each favourable threshold. Frozen when that threshold is reached."
+        ),
+    )
 
     path: PathClassification = PathClassification.NONE
     path_ambiguous: bool = Field(
