@@ -37,6 +37,7 @@ HORIZON_60_MINUTES = "m60"
 HORIZON_SESSION_CLOSE = "session_close"
 HORIZON_DAY_CLOSE = "day_close"
 HORIZON_OPPOSITE_CROSS = "opposite_cross"
+HORIZON_LEARNING_864 = "learning_864"
 
 EMA_OUTCOME_V1 = EvaluationRule(
     rule_id="EMA_OUTCOME_V1",
@@ -79,6 +80,18 @@ XAU_OUTCOME_V2 = EvaluationRule(
     threshold_unit=ThresholdUnit.PRICE,
 )
 
+
+
+# Aureon Beast V1 learning contract. Separate rule id preserves all historical V2 meaning.
+# 864 M5 candles are 72 market hours; scheduled market closures are tolerated by the tracker
+# when the symbol schedule supplies a gap guard.
+XAU_CLEAN_MOVE_V1 = EvaluationRule(
+    rule_id="XAU_CLEAN_MOVE_V1",
+    reference_price=ReferencePrice.NEXT_OPEN,
+    horizons=(Horizon(id=HORIZON_LEARNING_864, kind=HorizonKind.CANDLES, value=864),),
+    thresholds=(5.0, 7.0, 10.0, 20.0, 30.0, 40.0),
+    threshold_unit=ThresholdUnit.PRICE,
+)
 
 #: XAGUSD's rule. Silver trades near $30 against gold's ~$2400, so a rule measuring
 #: $3-$20 would ask whether silver moved 10-65% of its price -- the answer is always no,
@@ -145,4 +158,5 @@ def registered_rules() -> tuple[str, ...]:
 
 register(EMA_OUTCOME_V1)
 register(XAU_OUTCOME_V2)
+register(XAU_CLEAN_MOVE_V1)
 register(XAG_OUTCOME_V1)
