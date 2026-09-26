@@ -790,6 +790,44 @@ class TrainingExample(Base):
     )
 
 
+class PendingLearningSetup(Base):
+    """Durable cross-session V1 outcome accumulator."""
+
+    __tablename__ = "pending_learning_setups"
+
+    learning_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    setup_id: Mapped[str] = mapped_column(String)
+    symbol: Mapped[str] = mapped_column(String)
+    timeframe: Mapped[str] = mapped_column(String)
+    market_date: Mapped[str] = mapped_column(String)
+    feature_schema: Mapped[str] = mapped_column(String)
+    label_schema: Mapped[str] = mapped_column(String)
+    features: Mapped[dict[str, Any]] = mapped_column(Json)
+    horizon_bars: Mapped[int] = mapped_column(Integer)
+    bars_seen: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String)
+    outcome_state: Mapped[dict[str, Any]] = mapped_column(Json)
+    created_at: Mapped[datetime] = mapped_column()
+    updated_at: Mapped[datetime] = mapped_column()
+
+    __table_args__ = (
+        Index(
+            "ix_pending_learning_stream",
+            "symbol",
+            "timeframe",
+            "status",
+            "created_at",
+        ),
+        UniqueConstraint(
+            "setup_id",
+            "feature_schema",
+            "label_schema",
+            name="uq_pending_learning_contract",
+        ),
+    )
+
+
 class CanonicalTrainingExample(Base):
     """Immutable V1 learning example; legacy EOD rows remain in training_examples."""
 
