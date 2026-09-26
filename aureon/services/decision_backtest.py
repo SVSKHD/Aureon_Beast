@@ -8,7 +8,7 @@ randomly shuffles future periods into the past.
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from typing import Any
+from typing import Any, Callable
 
 from aureon.agents.ema_rsi_eligibility_agent import EmaRsiEligibilityAgent
 from aureon.config.sessions import session_for
@@ -55,11 +55,19 @@ class DecisionReplayRow:
         return asdict(self)
 
 
-def run_decision_replay(*, candles: list[Any], engine: Any, target_move: float = 10.0) -> list[DecisionReplayRow]:
+def run_decision_replay(
+    *,
+    candles: list[Any],
+    engine: Any,
+    target_move: float = 10.0,
+    on_progress: Callable[[int, int, int], None] | None = None,
+) -> list[DecisionReplayRow]:
     snapshot = MarketSnapshot(symbol=candles[0].symbol if candles else "UNKNOWN")
     htf_agent = HigherTimeframeAgent()
     director = MarketDirector(primary_target_move=target_move)
     pending: list[tuple[int, Any, Any, Any, Any, list[str]]] = []
+    total = len(candles)
+    progress_every = max(1, total // 20)
 
     for index, candle in enumerate(candles):
         detections = engine.on_closed_candle(candle)
@@ -78,6 +86,10 @@ def run_decision_replay(*, candles: list[Any], engine: Any, target_move: float =
             None,
         )
         if eligibility is None:
+            if on_progress is not None and (
+                (index + 1) % progress_every == 0 or index + 1 == total
+            ):
+                on_progress(index + 1, total, len(pending))
             continue
 
         mtf = engine.mtf_context(candle.symbol, candle.timeframe)
@@ -110,6 +122,10 @@ def run_decision_replay(*, candles: list[Any], engine: Any, target_move: float =
                 sorted({d.agent_name for d in detections}),
             )
         )
+        if on_progress is not None and (
+            (index + 1) % progress_every == 0 or index + 1 == total
+        ):
+            on_progress(index + 1, total, len(pending))
 
     rows: list[DecisionReplayRow] = []
     for index, detection, htf, decision, current, same_candle_agents in pending:

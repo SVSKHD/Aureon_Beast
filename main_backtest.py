@@ -17,6 +17,7 @@ import argparse
 import json
 import sys
 from datetime import date, datetime, time, timedelta
+from time import perf_counter
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -118,6 +119,52 @@ def _archive_candles(
     return candles, used_files
 
 
+def _elapsed(started: float) -> str:
+    seconds = max(0, int(perf_counter() - started))
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def _fetch_mt5_chunked(
+    provider: MT5DataProvider,
+    *,
+    symbol: str,
+    start: datetime,
+    end: datetime,
+    chunk_days: int = 7,
+) -> list:
+    candles_by_open = {}
+    cursor = start
+    total_seconds = max(1.0, (end - start).total_seconds())
+    part = 0
+    while cursor < end:
+        part += 1
+        chunk_end = min(end, cursor + timedelta(days=chunk_days))
+        print(
+            f"      MT5 chunk {part}: {cursor.date()} -> {chunk_end.date()} ...",
+            flush=True,
+        )
+        chunk = provider.get_closed_candles(
+            symbol,
+            Timeframe.M5,
+            cursor,
+            chunk_end,
+        )
+        for candle in chunk:
+            candles_by_open[candle.open_time.utc] = candle
+        done = min(1.0, (chunk_end - start).total_seconds() / total_seconds)
+        print(
+            f"      fetched {len(candles_by_open):,} candles total "
+            f"({done * 100:.0f}% of requested fetch span)",
+            flush=True,
+        )
+        cursor = chunk_end
+    return [candles_by_open[key] for key in sorted(candles_by_open)]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Aureon chronological M5 decision backtest")
     source = parser.add_mutually_exclusive_group(required=True)
@@ -139,6 +186,8 @@ def main() -> int:
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
 
+    started = perf_counter()
+    print("[1/6] Loading configuration...", flush=True)
     config = AureonConfig.from_env()
     symbol = (args.symbol or config.symbols[0]).upper()
     config = config.model_copy(
@@ -151,6 +200,7 @@ def main() -> int:
     archive_files: list[Path] = []
     source_label = ""
     if args.data_dir:
+        print(f"[2/6] Loading archived candles from {args.data_dir}...", flush=True)
         all_candles, archive_files = _archive_candles(
             Path(args.data_dir),
             symbol=symbol,
@@ -167,6 +217,7 @@ def main() -> int:
         point = SymbolIntelligenceAgent().resolve_tuning(symbol).point
         source_label = f"archive:{args.data_dir}"
     elif args.mt5:
+        print("[2/6] Connecting to MT5...", flush=True)
         provider = MT5DataProvider(
             market_tz=config.market_tz,
             login=config.mt5_login,
@@ -175,14 +226,21 @@ def main() -> int:
             terminal_path=config.mt5_terminal_path,
         )
         provider.connect()
+        print("      MT5 connected.", flush=True)
         try:
             warmup_start = start - timedelta(days=14)
             outcome_end = end + timedelta(days=2)
-            replay_candles = provider.get_closed_candles(
-                symbol,
-                Timeframe.M5,
-                warmup_start,
-                outcome_end,
+            print(
+                f"      fetching {symbol} M5 from {warmup_start.date()} "
+                f"through {outcome_end.date()} "
+                "(includes warmup + outcome tail)...",
+                flush=True,
+            )
+            replay_candles = _fetch_mt5_chunked(
+                provider,
+                symbol=symbol,
+                start=warmup_start,
+                end=outcome_end,
             )
             requested_candles = [
                 candle for candle in replay_candles
@@ -199,6 +257,7 @@ def main() -> int:
         finally:
             provider.close()
     else:
+        print(f"[2/6] Loading historical file {args.data}...", flush=True)
         provider = HistoricalDataProvider(
             args.data,
             symbol=symbol,
@@ -221,6 +280,11 @@ def main() -> int:
         )
         return 2
 
+    print(
+        f"[3/6] Preparing replay engine for {len(replay_candles):,} candles "
+        f"(elapsed {_elapsed(started)})...",
+        flush=True,
+    )
     engine = AnalysisEngine(
         default_agents(config, symbol=symbol, point=point),
         account_scope=config.account_scope,
@@ -228,10 +292,26 @@ def main() -> int:
         mtf_bars=config.mtf_m5_bars,
         mtf_periods=(config.ema_fast, config.ema_slow),
     )
+    print("[4/6] Replaying candles through Aureon agents...", flush=True)
+
+    last_percent = -1
+    def _replay_progress(done: int, total: int, crosses: int) -> None:
+        nonlocal last_percent
+        percent = int((done / total) * 100) if total else 100
+        bucket = (percent // 5) * 5
+        if bucket != last_percent or done == total:
+            last_percent = bucket
+            print(
+                f"      replay {percent:3d}% | {done:,}/{total:,} candles "
+                f"| Agent20 crosses {crosses:,} | elapsed {_elapsed(started)}",
+                flush=True,
+            )
+
     replay_rows = run_decision_replay(
         candles=replay_candles,
         engine=engine,
         target_move=args.target_move,
+        on_progress=_replay_progress,
     )
     rows = [
         row
@@ -240,6 +320,13 @@ def main() -> int:
     ]
     eligible = [row for row in rows if row.eligible]
     reached = [row for row in eligible if row.reached_10]
+
+    print(
+        f"[5/6] {'Training chronological reference model' if args.train else 'Skipping training'} "
+        f"(elapsed {_elapsed(started)})...",
+        flush=True,
+    )
+    reference_model = train_reference(rows) if args.train else None
 
     artifact = {
         "schema": "AUREON_DECISION_BACKTEST_V1",
@@ -263,13 +350,14 @@ def main() -> int:
             "short": f"bearish cross and RSI > {config.ema_rsi_short_above:g}",
         },
         "rows": [row.to_dict() for row in rows],
-        "reference_model": train_reference(rows) if args.train else None,
+        "reference_model": reference_model,
         "note": (
             "Historical replay is reference evidence for matching live scenarios. "
             "It does not assume future live regimes will reproduce historical outcomes."
         ),
     }
 
+    print(f"[6/6] Writing backtest artifact... (elapsed {_elapsed(started)})", flush=True)
     output = Path(args.output) if args.output else Path("data/backtests") / (
         f"agent20_{symbol}_{args.start.replace(':','-')}_{args.end.replace(':','-')}.json"
     )
@@ -297,6 +385,7 @@ def main() -> int:
             print(f"  OOS brier            {metrics.get('brier')}")
             print(f"  OOS roc_auc          {metrics.get('roc_auc')}")
     print(f"  output               {output}")
+    print(f"  total elapsed        {_elapsed(started)}")
     print("  NOTE: historical reference only; no live model is auto-activated.")
     return 0
 
