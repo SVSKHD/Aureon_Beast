@@ -182,3 +182,37 @@ class EntryIntelligence(AureonModel):
     recommended_target: int = Field(default=0, ge=0)
     decision: str
     reason: str
+
+
+class PendingLearningSetup(AureonDocument):
+    """Durable live outcome accumulator for one frozen setup."""
+
+    learning_id: str
+    setup_id: str
+    symbol: str
+    timeframe: Timeframe
+    market_date: str
+    feature_schema: str = FEATURE_SCHEMA_V1
+    label_schema: str = LABEL_SCHEMA_V1
+    features: FeatureSnapshotV1
+    horizon_bars: int = Field(default=864, ge=1)
+    bars_seen: int = Field(default=0, ge=0)
+    status: str = "pending"
+
+    reached_5: bool = False
+    reached_10: bool = False
+    reached_20: bool = False
+    reached_30: bool = False
+    reached_40: bool = False
+    bars_to_5: int | None = Field(default=None, ge=1)
+    bars_to_10: int | None = Field(default=None, ge=1)
+    bars_to_20: int | None = Field(default=None, ge=1)
+    bars_to_30: int | None = Field(default=None, ge=1)
+    bars_to_40: int | None = Field(default=None, ge=1)
+    max_favourable_move: float = Field(default=0.0, ge=0)
+    max_adverse_move: float = Field(default=0.0, ge=0)
+    mae_before_10: float | None = Field(default=None, ge=0)
+    path_ambiguous: bool = False
+
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
