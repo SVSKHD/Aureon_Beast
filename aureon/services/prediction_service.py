@@ -45,12 +45,20 @@ class PredictionService:
         event: Any,
         *,
         features: Any | None = None,
+        extra_context: dict[str, Any] | None = None,
     ) -> EntryIntelligence | None:
         model = self.models.champion(setup.symbol)
         if model is None:
             log.warning("%s has no Champion; ML intelligence unavailable", setup.symbol)
             return None
-        return self._predict(model, setup, event, role="champion", features=features)
+        return self._predict(
+            model,
+            setup,
+            event,
+            role="champion",
+            features=features,
+            extra_context=extra_context,
+        )
 
     def predict_shadow(
         self,
@@ -58,11 +66,19 @@ class PredictionService:
         event: Any,
         *,
         features: Any | None = None,
+        extra_context: dict[str, Any] | None = None,
     ) -> EntryIntelligence | None:
         model = self.models.active_shadow(setup.symbol)
         if model is None:
             return None
-        return self._predict(model, setup, event, role="shadow", features=features)
+        return self._predict(
+            model,
+            setup,
+            event,
+            role="shadow",
+            features=features,
+            extra_context=extra_context,
+        )
 
     def _predict(
         self,
@@ -72,6 +88,7 @@ class PredictionService:
         *,
         role: str,
         features: Any | None = None,
+        extra_context: dict[str, Any] | None = None,
     ) -> EntryIntelligence | None:
         if (
             model.feature_schema_version != FEATURE_SCHEMA_V1
@@ -89,7 +106,11 @@ class PredictionService:
             return None
 
         try:
-            frozen = features or FeatureBuilder.from_setup_event(setup, event)
+            frozen = features or FeatureBuilder.from_setup_event(
+                setup,
+                event,
+                extra_context=extra_context,
+            )
             probabilities = predict_v1_artifact(model, frozen)
         except Exception:
             log.exception("%s prediction failed closed for model %s", role, model.model_id)
