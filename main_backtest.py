@@ -30,6 +30,7 @@ from aureon.models.base import to_utc
 from aureon.models.enums import Timeframe
 from aureon.services.decision_backtest import (
     run_decision_replay,
+    simulate_money_outcomes,
     test_reference_model,
     train_reference,
 )
@@ -191,10 +192,19 @@ def main() -> int:
         help="load a prior main_backtest JSON artifact and score this date range without retraining",
     )
     parser.add_argument("--target-move", type=float, default=10.0)
+    parser.add_argument("--stop-move", type=float, default=None)
+    parser.add_argument("--lot-size", type=float, default=None)
+    parser.add_argument("--hold-bars", type=int, default=12)
+    parser.add_argument("--contract-size", type=float, default=None)
+    parser.add_argument("--model-threshold", type=float, default=0.50)
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
     if args.train and args.test_model:
         parser.error("--train and --test-model are mutually exclusive")
+    if (args.lot_size is None) != (args.stop_move is None):
+        parser.error("--lot-size and --stop-move must be supplied together")
+    if not 0.0 <= args.model_threshold <= 1.0:
+        parser.error("--model-threshold must be between 0 and 1")
 
     started = perf_counter()
     print("[1/6] Loading configuration...", flush=True)
@@ -209,6 +219,8 @@ def main() -> int:
 
     archive_files: list[Path] = []
     source_label = ""
+    broker_economics = None
+    account_currency = None
     if args.data_dir:
         print(f"[2/6] Loading archived candles from {args.data_dir}...", flush=True)
         all_candles, archive_files = _archive_candles(
@@ -257,8 +269,10 @@ def main() -> int:
                 if start <= candle.open_time.utc < end
             ]
             point = provider.symbol_info(symbol).point
+            broker_economics = provider.symbol_economics(symbol)
             terminal = provider.terminal_info()
             account = provider.account_info()
+            account_currency = account.get("currency")
             source_label = (
                 f"mt5:{account.get('server') or 'unknown'}"
                 f"/{account.get('login') or 'unknown'}"
@@ -361,6 +375,36 @@ def main() -> int:
         )
         reference_model = None
 
+    agent20_money = None
+    model_money = None
+    money_contract_size = None
+    if args.lot_size is not None and args.stop_move is not None:
+        money_contract_size = args.contract_size
+        if money_contract_size is None and broker_economics:
+            money_contract_size = broker_economics.get("contract_size")
+        if not money_contract_size:
+            raise ValueError("money simulation needs broker contract size; use --mt5 or --contract-size")
+        if broker_economics:
+            profit_currency = str(broker_economics.get("currency_profit") or "").upper()
+            if profit_currency and profit_currency != "USD":
+                raise ValueError(f"USD output requested but broker profit currency is {profit_currency}")
+        if account_currency and str(account_currency).upper() != "USD":
+            raise ValueError(f"USD output requested but MT5 account currency is {account_currency}")
+        agent20_money = simulate_money_outcomes(
+            rows, replay_candles, target_move=args.target_move, stop_move=args.stop_move,
+            hold_bars=args.hold_bars, lot_size=args.lot_size,
+            contract_size=float(money_contract_size),
+        )
+        if model_test is not None:
+            selected_times = {
+                item["at"] for item in model_test.get("scored_rows", [])
+                if float(item.get("probability_reach_10", 0.0)) >= args.model_threshold
+            }
+            model_money = simulate_money_outcomes(
+                rows, replay_candles, target_move=args.target_move, stop_move=args.stop_move,
+                hold_bars=args.hold_bars, lot_size=args.lot_size,
+                contract_size=float(money_contract_size), selected_times=selected_times,
+            )
     target_misses = len(eligible) - len(reached)
     position_summary = {
         "positions": len(eligible),
@@ -392,6 +436,14 @@ def main() -> int:
         "eligible_reached_target": len(reached),
         "target_move": args.target_move,
         "position_summary": position_summary,
+        "money_simulation": {
+            "currency": "USD" if agent20_money is not None else None,
+            "agent20_eligible": agent20_money,
+            "saved_model_selected": model_money,
+            "model_threshold": args.model_threshold if model_test is not None else None,
+            "broker_economics": broker_economics,
+            "account_currency": account_currency,
+        },
         "eligibility_rule": {
             "ema_fast": config.ema_fast,
             "ema_slow": config.ema_slow,
@@ -437,7 +489,33 @@ def main() -> int:
         f"{'—' if target_win_rate is None else format(target_win_rate, '.1%')}"
     )
     print(f"  gross target move    +{position_summary['gross_target_move']:.2f}")
-    print("  realized P&L         — (requires deterministic stop/exit rule)")
+    if agent20_money is None:
+        print("  realized P&L         — (add --lot-size and --stop-move)")
+    else:
+        def _money_block(title: str, summary: dict | None) -> None:
+            print(f"  --- {title} ---")
+            if summary is None:
+                print("  trades               0")
+                print("  USD made             $0.00")
+                print("  USD lost             $0.00")
+                print("  NET P&L              $0.00")
+                return
+            print(f"  trades               {summary['trades']}")
+            print(f"  TP wins              {summary['wins']}")
+            print(f"  SL losses            {summary['losses']}")
+            print(f"  timeouts             {summary['timeouts']}")
+            print(f"  ambiguous M5 bars    {summary['ambiguous']}")
+            print(f"  profitable exits     {summary['profitable_exits']}")
+            print(f"  losing exits         {summary['losing_exits']}")
+            print(f"  USD made             +${summary['usd_made']:.2f}")
+            print(f"  USD lost             -${summary['usd_lost']:.2f}")
+            sign = "+" if summary["net_usd"] >= 0 else ""
+            print(f"  NET P&L              {sign}${summary['net_usd']:.2f}")
+            print(f"  worst drawdown move  ${summary['max_mae_before_exit']:.2f}")
+        print(f"  money assumptions    {args.lot_size:g} lot | TP +${args.target_move:g} | SL -${args.stop_move:g} | max {args.hold_bars} M5 bars")
+        _money_block("MONEY RESULTS - ALL AGENT20 ELIGIBLE", agent20_money)
+        if args.test_model:
+            _money_block(f"MONEY RESULTS - SAVED MODEL >= {args.model_threshold:.2f}", model_money)
     if args.train:
         model = artifact["reference_model"] or {}
         print(f"  reference model      {model.get('status', 'unknown')}")

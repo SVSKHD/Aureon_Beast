@@ -8,6 +8,7 @@ randomly shuffles future periods into the past.
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+from datetime import datetime
 from typing import Any, Callable
 
 from aureon.agents.ema_rsi_eligibility_agent import EmaRsiEligibilityAgent
@@ -335,4 +336,136 @@ def test_reference_model(
         ),
         "actual_positive_rate": sum(labels) / len(labels),
         "scored_rows": scored,
+    }
+
+
+def simulate_money_outcomes(
+    rows: list[DecisionReplayRow],
+    candles: list[Any],
+    *,
+    target_move: float,
+    stop_move: float,
+    hold_bars: int,
+    lot_size: float,
+    contract_size: float,
+    selected_times: set[str] | None = None,
+) -> dict[str, Any]:
+    """Simulate first-touch TP/SL outcomes and translate price moves into money."""
+    if target_move <= 0 or stop_move <= 0:
+        raise ValueError("target_move and stop_move must be > 0")
+    if hold_bars < 1:
+        raise ValueError("hold_bars must be >= 1")
+    if lot_size <= 0 or contract_size <= 0:
+        raise ValueError("lot_size and contract_size must be > 0")
+
+    ordered_times = [candle.open_time.utc for candle in candles]
+
+    def first_future_index(at: str) -> int | None:
+        moment = datetime.fromisoformat(at)
+        for i, opened in enumerate(ordered_times):
+            if opened >= moment:
+                return i
+        return None
+
+    trades: list[dict[str, Any]] = []
+    for row in rows:
+        if not row.eligible:
+            continue
+        if selected_times is not None and row.at not in selected_times:
+            continue
+        start_index = first_future_index(row.at)
+        if start_index is None:
+            continue
+        direction = Direction.BUY if row.direction == "buy" else Direction.SELL
+        future = candles[start_index : start_index + hold_bars]
+        if not future:
+            continue
+
+        result = "timeout"
+        exit_move = 0.0
+        exit_bar = None
+        max_adverse_before_exit = 0.0
+
+        for offset, bar in enumerate(future, start=1):
+            if direction is Direction.BUY:
+                adverse = max(0.0, row.entry_price - bar.low)
+                hit_tp = bar.high >= row.entry_price + target_move
+                hit_sl = bar.low <= row.entry_price - stop_move
+            else:
+                adverse = max(0.0, bar.high - row.entry_price)
+                hit_tp = bar.low <= row.entry_price - target_move
+                hit_sl = bar.high >= row.entry_price + stop_move
+            max_adverse_before_exit = max(max_adverse_before_exit, adverse)
+
+            if hit_tp and hit_sl:
+                result = "ambiguous"
+                exit_bar = offset
+                break
+            if hit_tp:
+                result = "win"
+                exit_move = target_move
+                exit_bar = offset
+                break
+            if hit_sl:
+                result = "loss"
+                exit_move = -stop_move
+                exit_bar = offset
+                break
+
+        if result == "timeout":
+            last = future[-1]
+            exit_move = (
+                last.close - row.entry_price
+                if direction is Direction.BUY
+                else row.entry_price - last.close
+            )
+            exit_bar = len(future)
+
+        usd_pnl = None if result == "ambiguous" else exit_move * contract_size * lot_size
+        trades.append({
+            "at": row.at,
+            "direction": row.direction,
+            "entry_price": row.entry_price,
+            "result": result,
+            "exit_bar": exit_bar,
+            "price_move": None if result == "ambiguous" else exit_move,
+            "usd_pnl": usd_pnl,
+            "mae_before_exit": max_adverse_before_exit,
+        })
+
+    resolved = [trade for trade in trades if trade["usd_pnl"] is not None]
+    wins = [trade for trade in resolved if trade["result"] == "win"]
+    losses = [trade for trade in resolved if trade["result"] == "loss"]
+    timeouts = [trade for trade in resolved if trade["result"] == "timeout"]
+    ambiguous = [trade for trade in trades if trade["result"] == "ambiguous"]
+    profitable_exits = [trade for trade in resolved if float(trade["usd_pnl"]) > 0]
+    losing_exits = [trade for trade in resolved if float(trade["usd_pnl"]) < 0]
+    flat_exits = [trade for trade in resolved if float(trade["usd_pnl"]) == 0]
+    usd_made = sum(max(0.0, float(trade["usd_pnl"])) for trade in resolved)
+    usd_lost = -sum(min(0.0, float(trade["usd_pnl"])) for trade in resolved)
+    net = sum(float(trade["usd_pnl"]) for trade in resolved)
+
+    return {
+        "trades": len(trades),
+        "resolved_trades": len(resolved),
+        "wins": len(wins),
+        "losses": len(losses),
+        "timeouts": len(timeouts),
+        "ambiguous": len(ambiguous),
+        "profitable_exits": len(profitable_exits),
+        "losing_exits": len(losing_exits),
+        "flat_exits": len(flat_exits),
+        "usd_made": usd_made,
+        "usd_lost": usd_lost,
+        "net_usd": net,
+        "win_rate": (len(wins) / len(resolved)) if resolved else None,
+        "average_usd_per_resolved_trade": (net / len(resolved)) if resolved else None,
+        "max_mae_before_exit": max((float(t["mae_before_exit"]) for t in trades), default=0.0),
+        "target_move": target_move,
+        "stop_move": stop_move,
+        "hold_bars": hold_bars,
+        "lot_size": lot_size,
+        "contract_size": contract_size,
+        "trade_rows": trades,
+        "note": "Ambiguous M5 bars touch TP and SL in the same candle and are excluded from USD P&L.",
     }
