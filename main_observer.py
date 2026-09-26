@@ -991,9 +991,21 @@ class Observer:
                 evaluator.on_confirmed(setup, candle)
             except Exception:  # noqa: BLE001
                 log.exception("could not begin evaluating setup %s", event.setup_id)
+            full_context = self._learning_context(
+                candle.symbol, candle.timeframe, setup=setup
+            )
+            if self.learning_memory is not None:
+                try:
+                    self.learning_memory.freeze_setup(
+                        setup, event, full_context=full_context
+                    )
+                except Exception:  # noqa: BLE001 - learning must never stop observation
+                    log.exception("could not freeze V1 setup %s", event.setup_id)
             if self.champion_model is not None:
                 try:
-                    intelligence = self.champion_model.predict_champion(setup, event)
+                    intelligence = self.champion_model.predict_champion(
+                        setup, event, extra_context=full_context
+                    )
                     if intelligence is not None:
                         self.agent_highway.publish(
                             topic="decision.ml.champion",
@@ -1005,24 +1017,13 @@ class Observer:
                         )
                 except Exception:  # noqa: BLE001 - ML must never stop observation
                     log.exception("champion prediction failed for setup %s", event.setup_id)
-            full_context = self._learning_context(
-                candle.symbol, candle.timeframe, setup=setup
-            )
-            if self.learning_memory is not None:
-                try:
-                    self.learning_memory.freeze_setup(
-                        setup,
-                        event,
-                        full_context=full_context,
-                    )
-                except Exception:  # noqa: BLE001 - learning must never stop observation
-                    log.exception("could not freeze V1 setup %s", event.setup_id)
             if self.shadow_model is not None:
                 try:
-                    # Legacy +6 shadow artifacts remain readable during migration.
-                    self.shadow_model.predict_setup(setup, event)
+                    self.shadow_model.predict_setup(
+                        setup, event, extra_context=full_context
+                    )
                 except Exception:  # noqa: BLE001 - shadow inference must never stop observation
-                    log.exception("legacy shadow prediction failed for setup %s", event.setup_id)
+                    log.exception("shadow prediction failed for setup %s", event.setup_id)
 
     def _learning_context(
         self, symbol: str, timeframe: Timeframe, *, setup: object | None = None
