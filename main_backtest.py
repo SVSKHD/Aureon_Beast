@@ -37,6 +37,7 @@ from aureon.services.adaptive_learning import (
 from aureon.services.decision_backtest import (
     run_decision_replay,
     simulate_money_outcomes,
+    simulate_trailing_outcomes,
     test_reference_model,
     train_reference,
 )
@@ -201,6 +202,10 @@ def main() -> int:
     parser.add_argument("--stop-move", type=float, default=None)
     parser.add_argument("--lot-size", type=float, default=None)
     parser.add_argument("--hold-bars", type=int, default=12)
+    parser.add_argument("--trail-activation-move", type=float, default=5.0)
+    parser.add_argument("--trail-min-lock", type=float, default=4.0)
+    parser.add_argument("--trail-fraction", type=float, default=0.55)
+    parser.add_argument("--trail-hold-bars", type=int, default=864)
     parser.add_argument("--contract-size", type=float, default=None)
     parser.add_argument("--model-threshold", type=float, default=0.50)
     parser.add_argument("--min-clean-probability", type=float, default=0.55)
@@ -226,6 +231,14 @@ def main() -> int:
         parser.error("--max-adaptive-trades must be >= 0")
     if args.learning_hold_bars < 12:
         parser.error("--learning-hold-bars must be at least 12")
+    if args.trail_activation_move <= 0:
+        parser.error("--trail-activation-move must be > 0")
+    if args.trail_min_lock < 0 or args.trail_min_lock >= args.trail_activation_move:
+        parser.error("--trail-min-lock must be >= 0 and < --trail-activation-move")
+    if not 0.0 < args.trail_fraction < 1.0:
+        parser.error("--trail-fraction must be between 0 and 1")
+    if args.trail_hold_bars < 1:
+        parser.error("--trail-hold-bars must be >= 1")
 
     started = perf_counter()
     print("[1/6] Loading configuration...", flush=True)
@@ -416,6 +429,8 @@ def main() -> int:
     agent20_money = None
     model_money = None
     adaptive_loss_money = None
+    adaptive_trailing_money = None
+    all_trailing_money = None
     adaptive_loss_selected_times: set[str] = set()
     money_contract_size = None
     if args.lot_size is not None and args.stop_move is not None:
@@ -433,6 +448,17 @@ def main() -> int:
         agent20_money = simulate_money_outcomes(
             rows, replay_candles, target_move=args.target_move, stop_move=args.stop_move,
             hold_bars=args.hold_bars, lot_size=args.lot_size,
+            contract_size=float(money_contract_size),
+        )
+        all_trailing_money = simulate_trailing_outcomes(
+            rows,
+            replay_candles,
+            stop_move=args.stop_move,
+            activation_move=args.trail_activation_move,
+            minimum_lock_move=args.trail_min_lock,
+            trail_fraction_of_peak=args.trail_fraction,
+            hold_bars=args.trail_hold_bars,
+            lot_size=args.lot_size,
             contract_size=float(money_contract_size),
         )
         if model_test is not None:
@@ -455,6 +481,18 @@ def main() -> int:
             adaptive_loss_money = simulate_money_outcomes(
                 rows, replay_candles, target_move=args.target_move, stop_move=args.stop_move,
                 hold_bars=args.hold_bars, lot_size=args.lot_size,
+                contract_size=float(money_contract_size),
+                selected_times=adaptive_loss_selected_times,
+            )
+            adaptive_trailing_money = simulate_trailing_outcomes(
+                rows,
+                replay_candles,
+                stop_move=args.stop_move,
+                activation_move=args.trail_activation_move,
+                minimum_lock_move=args.trail_min_lock,
+                trail_fraction_of_peak=args.trail_fraction,
+                hold_bars=args.trail_hold_bars,
+                lot_size=args.lot_size,
                 contract_size=float(money_contract_size),
                 selected_times=adaptive_loss_selected_times,
             )
@@ -494,12 +532,21 @@ def main() -> int:
             "agent20_eligible": agent20_money,
             "saved_model_selected": model_money,
             "adaptive_loss_control_selected": adaptive_loss_money,
+            "all_eligible_trailing": all_trailing_money,
+            "adaptive_loss_control_trailing": adaptive_trailing_money,
             "model_threshold": args.model_threshold if model_test is not None else None,
             "loss_control": {
                 "min_clean_probability": args.min_clean_probability,
                 "max_stop_probability": args.max_stop_probability,
                 "max_adaptive_trades": args.max_adaptive_trades,
                 "selected_times": sorted(adaptive_loss_selected_times),
+            },
+            "trailing": {
+                "activation_move": args.trail_activation_move,
+                "minimum_lock_move": args.trail_min_lock,
+                "trail_fraction_of_peak": args.trail_fraction,
+                "hold_bars": args.trail_hold_bars,
+                "fixed_take_profit": None,
             },
             "broker_economics": broker_economics,
             "account_currency": account_currency,
@@ -574,8 +621,31 @@ def main() -> int:
             sign = "+" if summary["net_usd"] >= 0 else ""
             print(f"  NET P&L              {sign}${summary['net_usd']:.2f}")
             print(f"  worst drawdown move  ${summary['max_mae_before_exit']:.2f}")
+        def _trail_money_block(title: str, summary: dict | None) -> None:
+            print(f"  --- {title} ---")
+            if summary is None:
+                print("  trades               0")
+                print("  NET P&L              $0.00")
+                return
+            print(f"  trades               {summary['trades']}")
+            print(f"  trail activated      {summary['trail_activated']}")
+            print(f"  trailed exits        {summary['trailed_exits']}")
+            print(f"  initial SL losses    {summary['initial_sl_losses']}")
+            print(f"  profitable exits     {summary['profitable_exits']}")
+            print(f"  losing exits         {summary['losing_exits']}")
+            print(f"  USD made             +${summary['usd_made']:.2f}")
+            print(f"  USD lost             -${summary['usd_lost']:.2f}")
+            sign = "+" if summary["net_usd"] >= 0 else ""
+            print(f"  NET P&L              {sign}${summary['net_usd']:.2f}")
+            print(f"  biggest peak move    ${summary['max_peak_move']:.2f}")
+            print(f"  worst adverse move   ${summary['max_mae_before_exit']:.2f}")
+
         print(f"  money assumptions    {args.lot_size:g} lot | TP +${args.target_move:g} | SL -${args.stop_move:g} | max {args.hold_bars} M5 bars")
         _money_block("MONEY RESULTS - ALL AGENT20 ELIGIBLE", agent20_money)
+        _trail_money_block(
+            f"TRAILING - ALL AGENT20 (+{args.trail_activation_move:g} activates, no fixed TP)",
+            all_trailing_money,
+        )
         if args.test_model:
             _money_block(f"MONEY RESULTS - SAVED MODEL >= {args.model_threshold:.2f}", model_money)
         if adaptive_test is not None:
@@ -584,6 +654,11 @@ def main() -> int:
                 f"(clean>={args.min_clean_probability:.2f}, stop<={args.max_stop_probability:.2f}, "
                 f"max {args.max_adaptive_trades})",
                 adaptive_loss_money,
+            )
+            _trail_money_block(
+                "TRAILING - LOSS-CONTROLLED ENTRIES "
+                f"(+{args.trail_activation_move:g} activates, no fixed TP)",
+                adaptive_trailing_money,
             )
     if args.train and adaptive_model is not None:
         print("  --- ADAPTIVE FIVE-OUTPUT MODEL ---")
