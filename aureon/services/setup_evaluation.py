@@ -116,6 +116,7 @@ class SetupEvaluator:
         repository: Any,
         tracker: Any | None = None,
         gap_guard: object | None = None,
+        additional_rules: tuple[EvaluationRule, ...] = (),
     ) -> None:
         from aureon.evaluation.outcome_tracker import OutcomeTracker
 
@@ -124,6 +125,16 @@ class SetupEvaluator:
         self.tracker = tracker or OutcomeTracker(
             rule, market_tz=market_tz, point=point, gap_guard=gap_guard
         )
+        self._trackers: dict[str, Any] = {rule.rule_id: self.tracker}
+        for extra in additional_rules:
+            if extra.rule_id in self._trackers:
+                continue
+            self._trackers[extra.rule_id] = OutcomeTracker(
+                extra,
+                market_tz=market_tz,
+                point=point,
+                gap_guard=gap_guard,
+            )
         #: setup_id -> the setup, so a completed evaluation can carry its family and context
         #: without a read.
         self._confirmed: dict[str, Setup] = {}
@@ -143,21 +154,27 @@ class SetupEvaluator:
             )
             return None
         self._confirmed[setup.setup_id] = setup
-        evaluation = self.tracker.track(subject)
-        if evaluation is None:
-            return None
-        return self._write(setup, evaluation)
+        primary: SetupEvaluation | None = None
+        for rule_id, one_tracker in self._trackers.items():
+            evaluation = one_tracker.track(subject)
+            if evaluation is None:
+                continue
+            stored = self._write(setup, evaluation)
+            if rule_id == self.rule.rule_id:
+                primary = stored
+        return primary
 
     def on_closed_candle(self, candle: Candle) -> list[SetupEvaluation]:
         """Advance every open measurement. Returns the ones that changed."""
         written: list[SetupEvaluation] = []
-        for evaluation in self.tracker.on_closed_candle(candle):
-            setup = self._confirmed.get(evaluation.detection_id)
-            if setup is None:
-                continue
-            stored = self._write(setup, evaluation)
-            if stored is not None:
-                written.append(stored)
+        for one_tracker in self._trackers.values():
+            for evaluation in one_tracker.on_closed_candle(candle):
+                setup = self._confirmed.get(evaluation.detection_id)
+                if setup is None:
+                    continue
+                stored = self._write(setup, evaluation)
+                if stored is not None:
+                    written.append(stored)
         return written
 
     def _write(self, setup: Setup, evaluation: Any) -> SetupEvaluation | None:
