@@ -370,3 +370,46 @@ def canonical_example(
         outcome=outcome,
         generated_at=to_utc(generated_at),
     )
+
+
+
+def canonical_examples_from_replay(
+    rows: list[Any],
+    candles: list[Any],
+    *,
+    horizon_bars: int = 864,
+    clean_target: float = 10.0,
+    clean_max_mae: float = 7.0,
+    generated_at: datetime | None = None,
+) -> list[CanonicalTrainingExample]:
+    """Produce the same canonical schema from historical replay as live resolution."""
+    from bisect import bisect_left
+
+    opens = [candle.open_time.utc for candle in candles]
+    moment = to_utc(generated_at or datetime.now().astimezone())
+    result: list[CanonicalTrainingExample] = []
+    for row in rows:
+        if not bool(getattr(row, "eligible", False)):
+            continue
+        features = FeatureBuilder.from_replay_row(row)
+        start = bisect_left(opens, features.timestamp)
+        future = candles[start : start + horizon_bars]
+        if len(future) < horizon_bars:
+            continue
+        outcome = outcome_from_future_candles(
+            candles=future,
+            entry_price=features.reference_price,
+            direction=features.direction,
+            horizon_bars=horizon_bars,
+            clean_target=clean_target,
+            clean_max_mae=clean_max_mae,
+        )
+        result.append(
+            canonical_example(
+                features=features,
+                outcome=outcome,
+                market_date=features.timestamp.date().isoformat(),
+                generated_at=moment,
+            )
+        )
+    return result
