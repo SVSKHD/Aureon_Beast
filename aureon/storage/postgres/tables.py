@@ -757,6 +757,15 @@ class TrainingExample(Base):
     context: Mapped[dict[str, Any]] = mapped_column(Json)
     agent_read: Mapped[dict[str, Any]] = mapped_column(Json)
 
+    # V1 canonical training record. Additive-only so legacy +6 rows remain readable.
+    features: Mapped[dict[str, Any]] = mapped_column(Json, default=dict)
+    outcome: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    setup_created_at: Mapped[datetime | None] = mapped_column()
+    feature_frozen_at: Mapped[datetime | None] = mapped_column()
+    outcome_resolved_at: Mapped[datetime | None] = mapped_column()
+    entry_price: Mapped[float | None] = mapped_column(Float)
+    direction: Mapped[str | None] = mapped_column(String)
+
     six_dollar_status: Mapped[str] = mapped_column(String)
     six_dollar_reached: Mapped[bool | None] = mapped_column(Boolean)
     six_dollar_reference_price: Mapped[float | None] = mapped_column(Float)
