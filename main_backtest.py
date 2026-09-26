@@ -42,6 +42,7 @@ from aureon.services.decision_backtest import (
     test_reference_model,
     train_reference,
 )
+from aureon.services.v1_model_training import evaluate_v1_artifact
 from aureon.services.symbol_intelligence_agent import SymbolIntelligenceAgent
 from main_observer import default_agents
 
@@ -220,6 +221,9 @@ def main() -> int:
     )
     parser.add_argument("--persist-training", action="store_true", help="write canonical V1 examples to local training memory")
     parser.add_argument("--walk-forward", action="store_true", help="run V1 chronological walk-forward validation after replay")
+    v1_saved = parser.add_mutually_exclusive_group()
+    v1_saved.add_argument("--v1-model-id", help="score an exact saved V1 registry model on this range without refitting")
+    v1_saved.add_argument("--v1-champion", action="store_true", help="score the current V1 Champion on this range without refitting")
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
     if args.train and args.test_model:
@@ -401,6 +405,26 @@ def main() -> int:
         clean_max_mae=args.clean_max_mae,
     )
     clean_examples = [example for example in canonical_examples if example.outcome.clean_10]
+    if args.v1_model_id or args.v1_champion:
+        from aureon.storage.runtime import build_storage
+
+        storage_for_models = build_storage(
+            account_scope=config.account_scope,
+            state_heartbeat_seconds=config.state_heartbeat_seconds,
+        )
+        if args.v1_champion:
+            saved_v1_model = storage_for_models.models.champion(symbol)
+            if saved_v1_model is None:
+                raise ValueError(f"{symbol} has no V1 Champion to test")
+        else:
+            saved_v1_model = storage_for_models.models.get_model(args.v1_model_id)
+            if saved_v1_model is None:
+                raise ValueError(f"no saved V1 model {args.v1_model_id}")
+        v1_saved_model_test = evaluate_v1_artifact(
+            saved_v1_model,
+            canonical_examples,
+        )
+
     canonical_target_counts = {
         "5": sum(example.outcome.reached_5 for example in canonical_examples),
         "10": sum(example.outcome.reached_10 for example in canonical_examples),
@@ -428,6 +452,7 @@ def main() -> int:
             ).run(symbol)
 
     model_test = None
+    v1_saved_model_test = None
     adaptive_model = None
     adaptive_test = None
     if args.train:
@@ -631,6 +656,7 @@ def main() -> int:
         "tested_model_artifact": args.test_model,
         "model_test": model_test,
         "adaptive_model_test": adaptive_test,
+        "v1_saved_model_test": v1_saved_model_test,
         "note": (
             "Historical replay is reference evidence for matching live scenarios. "
             "It does not assume future live regimes will reproduce historical outcomes."
@@ -689,6 +715,19 @@ def main() -> int:
             f"oos={walk_forward_result.out_of_sample_predictions} | "
             f"clean precision={None if clean_metric is None else clean_metric.precision}"
         )
+    if v1_saved_model_test is not None:
+        print("  --- V1 SAVED MODEL HOLDOUT ---")
+        print(f"  model                {v1_saved_model_test['model_id']}")
+        print(f"  algorithm            {v1_saved_model_test['algorithm']}")
+        print(f"  samples              {v1_saved_model_test['samples']}")
+        for target in ("clean_10", "reach_5", "reach_10", "reach_20", "reach_30", "reach_40"):
+            metrics = (v1_saved_model_test.get("metrics") or {}).get(target)
+            if metrics:
+                print(
+                    f"  {target:<20} precision={metrics.get('precision')} | "
+                    f"recall={metrics.get('recall')} | brier={metrics.get('brier')} | "
+                    f"auc={metrics.get('roc_auc')}"
+                )
     print("  --- position summary ---")
     print(f"  positions            {position_summary['positions']}")
     print(f"  target wins          {position_summary['target_wins']}")
