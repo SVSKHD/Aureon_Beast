@@ -54,3 +54,36 @@ def test_shadow_promotion_retires_previous_champion_atomically(tmp_path) -> None
     assert promoted.status == ModelLifecycleStatus.CHAMPION.value
     assert repo.get_model(old.model_id).status == ModelLifecycleStatus.RETIRED.value
     assert repo.champion("XAUUSD").model_id == shadow.model_id
+
+
+def test_write_model_cannot_overwrite_existing_champion_artifact(tmp_path) -> None:
+    db = LocalDatabase(tmp_path / "aureon.db")
+    db.ensure_schema()
+    repo = ModelRepository(db)
+    shadow = _model("immutable-1", ModelLifecycleStatus.SHADOW.value)
+    repo.write_model(shadow)
+    repo.promote_champion(
+        shadow.model_id,
+        at=datetime.now(UTC),
+        reason="validated",
+    )
+
+    # Rewriting the identical artifact is idempotent and must preserve Champion state.
+    repeated = repo.write_model(
+        shadow.model_copy(update={"status": ModelLifecycleStatus.CANDIDATE.value})
+    )
+    assert repeated.status == ModelLifecycleStatus.CHAMPION.value
+
+    changed = shadow.model_copy(
+        update={
+            "status": ModelLifecycleStatus.CANDIDATE.value,
+            "artifact": {"different": True},
+        }
+    )
+    with pytest.raises(ValueError, match="different immutable content"):
+        repo.write_model(changed)
+
+    champion = repo.champion("XAUUSD")
+    assert champion is not None
+    assert champion.model_id == shadow.model_id
+    assert champion.artifact == {}
