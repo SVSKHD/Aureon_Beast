@@ -85,3 +85,22 @@ def test_feature_snapshot_is_immutable() -> None:
     )
     with pytest.raises(ValidationError):
         snapshot.reference_price = 101.0
+
+
+def test_feature_snapshot_nested_context_is_deeply_immutable() -> None:
+    snapshot = FeatureSnapshotV1(
+        setup_id="s2",
+        symbol="XAUUSD",
+        timeframe="M5",
+        timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+        frozen_at=datetime(2026, 1, 1, tzinfo=UTC),
+        direction=Direction.BUY,
+        reference_price=100.0,
+        context={"nested": {"state": "setup-time"}, "levels": [1, 2, 3]},
+    )
+
+    with pytest.raises(TypeError, match="cannot be mutated"):
+        snapshot.context["new"] = "future"
+    with pytest.raises(TypeError, match="cannot be mutated"):
+        snapshot.context["nested"]["state"] = "future"
+    assert snapshot.context["levels"] == (1, 2, 3)
