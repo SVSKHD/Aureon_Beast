@@ -28,7 +28,11 @@ from aureon.data.mt5_provider import MT5DataProvider
 from aureon.engine.analysis_engine import AnalysisEngine
 from aureon.models.base import to_utc
 from aureon.models.enums import Timeframe
-from aureon.services.decision_backtest import run_decision_replay, train_reference
+from aureon.services.decision_backtest import (
+    run_decision_replay,
+    test_reference_model,
+    train_reference,
+)
 from aureon.services.symbol_intelligence_agent import SymbolIntelligenceAgent
 from main_observer import default_agents
 
@@ -182,9 +186,15 @@ def main() -> int:
     parser.add_argument("--to", dest="end", required=True, help="YYYY-MM-DD or ISO datetime")
     parser.add_argument("--symbol", default=None)
     parser.add_argument("--train", action="store_true", help="fit chronological reference model")
+    parser.add_argument(
+        "--test-model",
+        help="load a prior main_backtest JSON artifact and score this date range without retraining",
+    )
     parser.add_argument("--target-move", type=float, default=10.0)
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
+    if args.train and args.test_model:
+        parser.error("--train and --test-model are mutually exclusive")
 
     started = perf_counter()
     print("[1/6] Loading configuration...", flush=True)
@@ -321,12 +331,35 @@ def main() -> int:
     eligible = [row for row in rows if row.eligible]
     reached = [row for row in eligible if row.reached_10]
 
-    print(
-        f"[5/6] {'Training chronological reference model' if args.train else 'Skipping training'} "
-        f"(elapsed {_elapsed(started)})...",
-        flush=True,
-    )
-    reference_model = train_reference(rows) if args.train else None
+    model_test = None
+    if args.train:
+        print(
+            f"[5/6] Training chronological reference model "
+            f"(elapsed {_elapsed(started)})...",
+            flush=True,
+        )
+        reference_model = train_reference(rows)
+    elif args.test_model:
+        print(
+            f"[5/6] Testing saved model {args.test_model} "
+            f"(elapsed {_elapsed(started)})...",
+            flush=True,
+        )
+        model_artifact = json.loads(Path(args.test_model).read_text(encoding="utf-8"))
+        if str(model_artifact.get("symbol") or "").upper() != symbol:
+            raise ValueError(
+                f"saved model symbol {model_artifact.get('symbol')!r} does not match {symbol}"
+            )
+        reference_model = model_artifact.get("reference_model")
+        if not isinstance(reference_model, dict):
+            raise ValueError("saved artifact has no reference_model block")
+        model_test = test_reference_model(rows, reference_model)
+    else:
+        print(
+            f"[5/6] Skipping training/model test (elapsed {_elapsed(started)})...",
+            flush=True,
+        )
+        reference_model = None
 
     artifact = {
         "schema": "AUREON_DECISION_BACKTEST_V1",
@@ -350,7 +383,9 @@ def main() -> int:
             "short": f"bearish cross and RSI > {config.ema_rsi_short_above:g}",
         },
         "rows": [row.to_dict() for row in rows],
-        "reference_model": reference_model,
+        "reference_model": reference_model if args.train else None,
+        "tested_model_artifact": args.test_model,
+        "model_test": model_test,
         "note": (
             "Historical replay is reference evidence for matching live scenarios. "
             "It does not assume future live regimes will reproduce historical outcomes."
@@ -384,6 +419,18 @@ def main() -> int:
             print(f"  OOS samples          {metrics.get('samples')}")
             print(f"  OOS brier            {metrics.get('brier')}")
             print(f"  OOS roc_auc          {metrics.get('roc_auc')}")
+    elif args.test_model:
+        result = model_test or {}
+        metrics = result.get("metrics") or {}
+        print(f"  tested saved model   {args.test_model}")
+        print(f"  holdout samples      {result.get('samples', 0)}")
+        print(f"  holdout accuracy     {metrics.get('accuracy')}")
+        print(f"  holdout precision    {metrics.get('precision')}")
+        print(f"  holdout recall       {metrics.get('recall')}")
+        print(f"  holdout brier        {metrics.get('brier')}")
+        print(f"  holdout roc_auc      {metrics.get('roc_auc')}")
+        print(f"  predicted >= 0.50    {result.get('predicted_positive_50', 0)}")
+        print(f"  >= 0.50 hit rate     {result.get('predicted_positive_hit_rate')}")
     print(f"  output               {output}")
     print(f"  total elapsed        {_elapsed(started)}")
     print("  NOTE: historical reference only; no live model is auto-activated.")
