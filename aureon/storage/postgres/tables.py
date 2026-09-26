@@ -849,13 +849,19 @@ class ModelRegistry(Base):
     feature_schema_version: Mapped[str] = mapped_column(String)
     label_schema_version: Mapped[str] = mapped_column(String)
     model_schema_version: Mapped[str] = mapped_column(String)
+    parent_model_id: Mapped[str | None] = mapped_column(String)
+    hyperparameters: Mapped[dict[str, Any]] = mapped_column(Json)
     trained_from: Mapped[str] = mapped_column(String)
     trained_through: Mapped[str] = mapped_column(String)
     training_samples: Mapped[int] = mapped_column(Integer)
     target_metrics: Mapped[dict[str, Any]] = mapped_column(Json)
+    validation_metrics: Mapped[dict[str, Any]] = mapped_column(Json)
+    shadow_metrics: Mapped[dict[str, Any]] = mapped_column(Json)
     artifact: Mapped[dict[str, Any]] = mapped_column(Json)
     created_at: Mapped[datetime] = mapped_column()
     activated_at: Mapped[datetime | None] = mapped_column()
+    retired_at: Mapped[datetime | None] = mapped_column()
+    promotion_reason: Mapped[str | None] = mapped_column(String)
 
     __table_args__ = (
         Index("ix_model_registry_symbol_created", "symbol", "created_at"),
@@ -923,6 +929,8 @@ class ModelPrediction(Base):
     label_schema_version: Mapped[str] = mapped_column(String)
     probabilities: Mapped[dict[str, Any]] = mapped_column(Json)
     feature_snapshot: Mapped[dict[str, Any]] = mapped_column(Json)
+    mode: Mapped[str] = mapped_column(String)
+    decision_intelligence: Mapped[dict[str, Any]] = mapped_column(Json)
     actual_outcomes: Mapped[dict[str, Any] | None] = mapped_column(Json)
     reconciled_at: Mapped[datetime | None] = mapped_column()
 
@@ -930,6 +938,29 @@ class ModelPrediction(Base):
         Index("ix_model_predictions_symbol_time", "symbol", "predicted_at"),
         Index("ix_model_predictions_model", "model_id", "predicted_at"),
         UniqueConstraint("model_id", "setup_id", name="uq_model_prediction_setup"),
+    )
+
+
+
+class ModelEvolutionDecision(Base):
+    """Immutable Champion/Challenger governance history."""
+
+    __tablename__ = "model_evolution_decisions"
+
+    decision_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    symbol: Mapped[str] = mapped_column(String)
+    model_id: Mapped[str | None] = mapped_column(String)
+    champion_model_id: Mapped[str | None] = mapped_column(String)
+    action: Mapped[str] = mapped_column(String)
+    reason: Mapped[str] = mapped_column(String)
+    metrics: Mapped[dict[str, Any]] = mapped_column(Json)
+    detail: Mapped[dict[str, Any]] = mapped_column(Json)
+    decided_at: Mapped[datetime] = mapped_column()
+
+    __table_args__ = (
+        Index("ix_evolution_symbol_time", "symbol", "decided_at"),
+        Index("ix_evolution_model_time", "model_id", "decided_at"),
     )
 
 
