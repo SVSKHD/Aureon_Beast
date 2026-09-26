@@ -30,6 +30,7 @@ from aureon.models.base import to_utc
 from aureon.models.enums import Timeframe
 from aureon.services.adaptive_learning import (
     TARGETS,
+    select_loss_control_times,
     test_adaptive_reference,
     train_adaptive_reference,
 )
@@ -202,6 +203,9 @@ def main() -> int:
     parser.add_argument("--hold-bars", type=int, default=12)
     parser.add_argument("--contract-size", type=float, default=None)
     parser.add_argument("--model-threshold", type=float, default=0.50)
+    parser.add_argument("--min-clean-probability", type=float, default=0.55)
+    parser.add_argument("--max-stop-probability", type=float, default=0.35)
+    parser.add_argument("--max-adaptive-trades", type=int, default=10)
     parser.add_argument(
         "--learning-hold-bars", type=int, default=864,
         help="future M5 bars used by adaptive +5/+10/+20/+30/+40 learning (864 = 72 market hours)",
@@ -214,6 +218,12 @@ def main() -> int:
         parser.error("--lot-size and --stop-move must be supplied together")
     if not 0.0 <= args.model_threshold <= 1.0:
         parser.error("--model-threshold must be between 0 and 1")
+    if not 0.0 <= args.min_clean_probability <= 1.0:
+        parser.error("--min-clean-probability must be between 0 and 1")
+    if not 0.0 <= args.max_stop_probability <= 1.0:
+        parser.error("--max-stop-probability must be between 0 and 1")
+    if args.max_adaptive_trades < 0:
+        parser.error("--max-adaptive-trades must be >= 0")
     if args.learning_hold_bars < 12:
         parser.error("--learning-hold-bars must be at least 12")
 
@@ -405,6 +415,8 @@ def main() -> int:
 
     agent20_money = None
     model_money = None
+    adaptive_loss_money = None
+    adaptive_loss_selected_times: set[str] = set()
     money_contract_size = None
     if args.lot_size is not None and args.stop_move is not None:
         money_contract_size = args.contract_size
@@ -433,6 +445,19 @@ def main() -> int:
                 hold_bars=args.hold_bars, lot_size=args.lot_size,
                 contract_size=float(money_contract_size), selected_times=selected_times,
             )
+        if adaptive_test is not None:
+            adaptive_loss_selected_times = select_loss_control_times(
+                adaptive_test,
+                min_clean_probability=args.min_clean_probability,
+                max_stop_probability=args.max_stop_probability,
+                max_trades=args.max_adaptive_trades,
+            )
+            adaptive_loss_money = simulate_money_outcomes(
+                rows, replay_candles, target_move=args.target_move, stop_move=args.stop_move,
+                hold_bars=args.hold_bars, lot_size=args.lot_size,
+                contract_size=float(money_contract_size),
+                selected_times=adaptive_loss_selected_times,
+            )
     target_misses = len(eligible) - len(reached)
     position_summary = {
         "positions": len(eligible),
@@ -449,7 +474,7 @@ def main() -> int:
     }
 
     artifact = {
-        "schema": "AUREON_DECISION_BACKTEST_V1",
+        "schema": "AUREON_DECISION_BACKTEST_V2",
         "historical_reference_only": True,
         "symbol": symbol,
         "timeframe": "M5",
@@ -468,7 +493,14 @@ def main() -> int:
             "currency": "USD" if agent20_money is not None else None,
             "agent20_eligible": agent20_money,
             "saved_model_selected": model_money,
+            "adaptive_loss_control_selected": adaptive_loss_money,
             "model_threshold": args.model_threshold if model_test is not None else None,
+            "loss_control": {
+                "min_clean_probability": args.min_clean_probability,
+                "max_stop_probability": args.max_stop_probability,
+                "max_adaptive_trades": args.max_adaptive_trades,
+                "selected_times": sorted(adaptive_loss_selected_times),
+            },
             "broker_economics": broker_economics,
             "account_currency": account_currency,
         },
@@ -546,6 +578,13 @@ def main() -> int:
         _money_block("MONEY RESULTS - ALL AGENT20 ELIGIBLE", agent20_money)
         if args.test_model:
             _money_block(f"MONEY RESULTS - SAVED MODEL >= {args.model_threshold:.2f}", model_money)
+        if adaptive_test is not None:
+            _money_block(
+                "MONEY RESULTS - ADAPTIVE LOSS CONTROL "
+                f"(clean>={args.min_clean_probability:.2f}, stop<={args.max_stop_probability:.2f}, "
+                f"max {args.max_adaptive_trades})",
+                adaptive_loss_money,
+            )
     if args.train and adaptive_model is not None:
         print("  --- ADAPTIVE FIVE-OUTPUT MODEL ---")
         print(f"  adaptive status      {adaptive_model.get('status')}")
@@ -569,6 +608,24 @@ def main() -> int:
         print(f"  selected >= +5       {adaptive_test.get('selected_for_5')}")
         print(f"  selected >= +10      {adaptive_test.get('selected_for_10')}")
         print(f"  runner >= +20        {adaptive_test.get('runner_candidates_20_plus')}")
+        print(f"  loss gate selected   {len(adaptive_loss_selected_times)}")
+        print(
+            f"  loss gate            clean>={args.min_clean_probability:.2f} | "
+            f"stop<={args.max_stop_probability:.2f} | max {args.max_adaptive_trades}"
+        )
+        loss_metrics = adaptive_test.get("loss_control_metrics") or {}
+        clean_metrics = loss_metrics.get("clean_10_before_stop_15") or {}
+        stop_metrics = loss_metrics.get("stop_15_before_clean_10") or {}
+        if clean_metrics:
+            print(
+                f"  clean +10<-15 test   brier={clean_metrics.get('brier')} | "
+                f"auc={clean_metrics.get('roc_auc')}"
+            )
+        if stop_metrics:
+            print(
+                f"  stop -15<+10 test    brier={stop_metrics.get('brier')} | "
+                f"auc={stop_metrics.get('roc_auc')}"
+            )
         for target in TARGETS:
             key = str(int(target))
             metrics = (adaptive_test.get("metrics_by_target") or {}).get(key)
