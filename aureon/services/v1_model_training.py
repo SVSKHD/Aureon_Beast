@@ -337,3 +337,9 @@ def predict_v1_artifact(
         probabilities[target] = min(previous, probabilities[target])
         previous = probabilities[target]
     return probabilities
+
+
+# Shared with chronological walk-forward validation; kept as explicit aliases so the
+# backtester and trainer use exactly the same target-model semantics.
+fit_v1_target = _fit_target
+predict_v1_target = _predict_target
