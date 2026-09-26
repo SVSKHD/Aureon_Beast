@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import select, update
 
 from aureon.models.ml import (
+    EvolutionDecision,
     ModelBacktest,
     ModelPrediction,
     ModelRegistryEntry,
@@ -23,8 +24,19 @@ class ModelRepository(PostgresRepository):
     runs = tables.ModelTrainingRun.__table__
     backtests = tables.ModelBacktest.__table__
     predictions = tables.ModelPrediction.__table__
+    evolution = tables.ModelEvolutionDecision.__table__
 
     def write_model(self, model: ModelRegistryEntry) -> ModelRegistryEntry:
+        existing = self.get_model(model.model_id)
+        if existing is not None and existing.status == "champion":
+            # Production intelligence is immutable through ordinary writes. Promotion,
+            # retirement and metric updates must use explicit lifecycle methods.
+            if existing.model_dump(mode="json") != model.model_dump(mode="json"):
+                raise RuntimeError(
+                    f"refusing to overwrite Champion {model.model_id}; "
+                    "use explicit lifecycle methods"
+                )
+            return existing
         self._upsert(self._model_row(model), table=self.models)
         return model
 
@@ -64,6 +76,142 @@ class ModelRepository(PostgresRepository):
         )
         rows = self._rows(statement)
         return None if not rows else ModelRegistryEntry.model_validate(self._model_dict(rows[0]))
+
+    def active_champion(self, symbol: str) -> ModelRegistryEntry | None:
+        statement = (
+            select(self.models)
+            .where(self.models.c.symbol == symbol.upper())
+            .where(self.models.c.status == "champion")
+            .order_by(self.models.c.activated_at.desc(), self.models.c.created_at.desc())
+            .limit(1)
+        )
+        rows = self._rows(statement)
+        return None if not rows else ModelRegistryEntry.model_validate(self._model_dict(rows[0]))
+
+    def models_by_status(self, symbol: str, status: str) -> list[ModelRegistryEntry]:
+        statement = (
+            select(self.models)
+            .where(self.models.c.symbol == symbol.upper())
+            .where(self.models.c.status == status)
+            .order_by(self.models.c.created_at.desc())
+        )
+        return [
+            ModelRegistryEntry.model_validate(self._model_dict(row))
+            for row in self._rows(statement)
+        ]
+
+    def set_status(
+        self,
+        model_id: str,
+        status: str,
+        *,
+        at: Any | None = None,
+        promotion_reason: str | None = None,
+    ) -> ModelRegistryEntry:
+        allowed = {"candidate", "challenger", "shadow", "champion", "retired", "rejected"}
+        if status not in allowed:
+            raise ValueError(f"unsupported model status {status!r}")
+        current = self.get_model(model_id)
+        if current is None:
+            raise LookupError(f"no model {model_id}")
+        if current.status == "champion" and status not in {"champion", "retired"}:
+            raise RuntimeError("Champion can only remain Champion or be explicitly retired")
+        values: dict[str, Any] = {"status": status}
+        if status in {"shadow", "champion"} and at is not None:
+            values["activated_at"] = at
+        if status == "retired" and at is not None:
+            values["retired_at"] = at
+        if promotion_reason is not None:
+            values["promotion_reason"] = promotion_reason
+        with self._db.transaction() as connection:
+            connection.execute(
+                update(self.models)
+                .where(self.models.c.model_id == model_id)
+                .values(**values)
+            )
+        refreshed = self.get_model(model_id)
+        if refreshed is None:
+            raise LookupError(f"model {model_id} disappeared after status transition")
+        return refreshed
+
+    def promote_champion(
+        self,
+        model_id: str,
+        *,
+        at: Any,
+        reason: str,
+        allow_bootstrap_candidate: bool = False,
+    ) -> ModelRegistryEntry:
+        """Atomically replace the Champion; ordinary writes cannot do this."""
+        with self._db.transaction() as connection:
+            row = self._row(model_id, table=self.models, connection=connection)
+            if row is None:
+                raise LookupError(f"no model {model_id}")
+            status = str(row["status"])
+            allowed = {"shadow", "challenger"}
+            if allow_bootstrap_candidate:
+                allowed.add("candidate")
+            if status not in allowed:
+                raise RuntimeError(
+                    f"{model_id} is {status}; only {sorted(allowed)} may be promoted"
+                )
+            symbol = str(row["symbol"])
+            status = str(row["status"])
+            if status not in {"candidate", "challenger", "shadow"}:
+                raise RuntimeError(
+                    f"{model_id} is {status}; only candidate/challenger may enter shadow"
+                )
+            connection.execute(
+                update(self.models)
+                .where(self.models.c.symbol == symbol)
+                .where(self.models.c.status == "champion")
+                .where(self.models.c.model_id != model_id)
+                .values(status="retired", retired_at=at)
+            )
+            connection.execute(
+                update(self.models)
+                .where(self.models.c.model_id == model_id)
+                .values(
+                    status="champion",
+                    activated_at=at,
+                    retired_at=None,
+                    promotion_reason=reason,
+                )
+            )
+        refreshed = self.get_model(model_id)
+        if refreshed is None:
+            raise LookupError(f"model {model_id} disappeared after promotion")
+        return refreshed
+
+    def write_evolution_decision(self, decision: EvolutionDecision) -> EvolutionDecision:
+        self._upsert(
+            {
+                "decision_id": decision.decision_id,
+                "schema_version": decision.schema_version,
+                "symbol": decision.symbol,
+                "model_id": decision.model_id,
+                "champion_model_id": decision.champion_model_id,
+                "action": decision.action,
+                "reason": decision.reason,
+                "metrics": decision.metrics,
+                "detail": decision.detail,
+                "decided_at": decision.decided_at,
+            },
+            table=self.evolution,
+        )
+        return decision
+
+    def evolution_for_symbol(self, symbol: str, *, limit: int = 200) -> list[EvolutionDecision]:
+        statement = (
+            select(self.evolution)
+            .where(self.evolution.c.symbol == symbol.upper())
+            .order_by(self.evolution.c.decided_at.desc())
+            .limit(limit)
+        )
+        return [
+            EvolutionDecision.model_validate(dict(row))
+            for row in self._rows(statement)
+        ]
 
     def activate_shadow(self, model_id: str, *, at: Any) -> ModelRegistryEntry:
         with self._db.transaction() as connection:
@@ -211,13 +359,19 @@ class ModelRepository(PostgresRepository):
             "feature_schema_version": model.feature_schema_version,
             "label_schema_version": model.label_schema_version,
             "model_schema_version": model.model_schema_version,
+            "parent_model_id": model.parent_model_id,
+            "hyperparameters": model.hyperparameters,
             "trained_from": model.trained_from,
             "trained_through": model.trained_through,
             "training_samples": model.training_samples,
             "target_metrics": cls._metrics_json(model.target_metrics),
+            "validation_metrics": model.validation_metrics,
+            "shadow_metrics": model.shadow_metrics,
             "artifact": model.artifact,
             "created_at": model.created_at,
             "activated_at": model.activated_at,
+            "retired_at": model.retired_at,
+            "promotion_reason": model.promotion_reason,
         }
 
     @classmethod
@@ -277,6 +431,8 @@ class ModelRepository(PostgresRepository):
             "label_schema_version": prediction.label_schema_version,
             "probabilities": prediction.probabilities,
             "feature_snapshot": prediction.feature_snapshot,
+            "mode": prediction.mode,
+            "decision_intelligence": prediction.decision_intelligence,
             "actual_outcomes": prediction.actual_outcomes,
             "reconciled_at": prediction.reconciled_at,
         }
