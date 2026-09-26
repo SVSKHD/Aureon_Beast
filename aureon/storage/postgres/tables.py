@@ -908,6 +908,7 @@ class ModelBacktest(Base):
     end_market_date: Mapped[str | None] = mapped_column(String)
     folds: Mapped[dict[str, Any]] = mapped_column(Json)
     aggregate_metrics: Mapped[dict[str, Any]] = mapped_column(Json)
+    breakdown_metrics: Mapped[dict[str, Any]] = mapped_column(Json)
     out_of_sample_predictions: Mapped[int] = mapped_column(Integer)
     failure_message: Mapped[str | None] = mapped_column(String)
 
