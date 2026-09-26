@@ -412,6 +412,7 @@ class ModelRepository(PostgresRepository):
             "end_market_date": backtest.end_market_date,
             "folds": {"items": payload["folds"]},
             "aggregate_metrics": cls._metrics_json(backtest.aggregate_metrics),
+            "breakdown_metrics": backtest.breakdown_metrics,
             "out_of_sample_predictions": backtest.out_of_sample_predictions,
             "failure_message": backtest.failure_message,
         }
