@@ -431,9 +431,10 @@ def main() -> int:
     print(f"  positions            {position_summary['positions']}")
     print(f"  target wins          {position_summary['target_wins']}")
     print(f"  target misses        {position_summary['target_misses']}")
+    target_win_rate = position_summary["target_win_rate"]
     print(
         f"  target win rate      "
-        f"{'—' if position_summary['target_win_rate'] is None else f'{position_summary['target_win_rate']:.1%}'}"
+        f"{'—' if target_win_rate is None else format(target_win_rate, '.1%')}"
     )
     print(f"  gross target move    +{position_summary['gross_target_move']:.2f}")
     print("  realized P&L         — (requires deterministic stop/exit rule)")
