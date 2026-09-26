@@ -438,6 +438,9 @@ def simulate_money_outcomes(
     losses = [trade for trade in resolved if trade["result"] == "loss"]
     timeouts = [trade for trade in resolved if trade["result"] == "timeout"]
     ambiguous = [trade for trade in trades if trade["result"] == "ambiguous"]
+    profitable_exits = [trade for trade in resolved if float(trade["usd_pnl"]) > 0]
+    losing_exits = [trade for trade in resolved if float(trade["usd_pnl"]) < 0]
+    flat_exits = [trade for trade in resolved if float(trade["usd_pnl"]) == 0]
     usd_made = sum(max(0.0, float(trade["usd_pnl"])) for trade in resolved)
     usd_lost = -sum(min(0.0, float(trade["usd_pnl"])) for trade in resolved)
     net = sum(float(trade["usd_pnl"]) for trade in resolved)
@@ -449,6 +452,9 @@ def simulate_money_outcomes(
         "losses": len(losses),
         "timeouts": len(timeouts),
         "ambiguous": len(ambiguous),
+        "profitable_exits": len(profitable_exits),
+        "losing_exits": len(losing_exits),
+        "flat_exits": len(flat_exits),
         "usd_made": usd_made,
         "usd_lost": usd_lost,
         "net_usd": net,
