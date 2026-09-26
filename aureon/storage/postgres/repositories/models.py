@@ -333,9 +333,14 @@ class ModelRepository(PostgresRepository):
                 return None
             return sum((probability - actual) ** 2 for probability, actual in pairs) / len(pairs)
 
+        target_names = (
+            "clean_10", "reach_5", "reach_10", "reach_20", "reach_30", "reach_40"
+        )
         return ShadowPredictionSummary(
             predictions=len(rows),
             reconciled=len(reconciled),
+            clean_10_brier=brier("clean_10"),
+            target_brier={name: brier(name) for name in target_names},
             six_brier=brier("six"),
             twenty_brier=brier("twenty"),
             forty_brier=brier("forty"),
