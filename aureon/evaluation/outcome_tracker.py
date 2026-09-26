@@ -85,6 +85,7 @@ class _HorizonState:
     mae_price: float | None = None
     reached: dict[str, bool] = field(default_factory=dict)
     time_to: dict[str, float | None] = field(default_factory=dict)
+    mae_before: dict[str, float | None] = field(default_factory=dict)
     first_favourable_at: datetime | None = None
     first_adverse_at: datetime | None = None
     candles_seen: int = 0
@@ -110,6 +111,7 @@ class _HorizonState:
             mae_price=self.mae_price,
             reached=dict(self.reached),
             time_to=dict(self.time_to),
+            mae_before=dict(self.mae_before),
             path=path,
             path_ambiguous=ambiguous,
             candles_seen=self.candles_seen,
@@ -158,6 +160,7 @@ class OutcomeTracker:
         market_tz: str,
         point: float = 0.01,
         gap_tolerance_timeframes: int = DEFAULT_GAP_TOLERANCE_TIMEFRAMES,
+        gap_guard: object | None = None,
     ) -> None:
         if point <= 0:
             raise ValueError("point must be positive")
@@ -176,6 +179,7 @@ class OutcomeTracker:
             zip(self.rule.threshold_keys, self._thresholds_points, strict=True)
         )
         self.gap_tolerance_timeframes = gap_tolerance_timeframes
+        self.gap_guard = gap_guard
         self._tracked: dict[str, _Tracked] = {}
 
     # ── Intake ────────────────────────────────────────────────────────────────
@@ -201,6 +205,7 @@ class OutcomeTracker:
             for key in self.rule.threshold_keys:
                 state.reached[key] = False
                 state.time_to[key] = None
+                state.mae_before[key] = None
         self._tracked[detection.detection_id] = tracked
         return self._evaluation(tracked)
 
@@ -300,6 +305,12 @@ class OutcomeTracker:
         previous_close = tracked.last_candle_close
         if previous_close is None:
             return False
+        if self.gap_guard is not None:
+            try:
+                if bool(self.gap_guard(previous_close, candle.open_time.utc)):  # type: ignore[operator]
+                    return False
+            except Exception:
+                pass
         gap = (candle.open_time.utc - previous_close).total_seconds()
         return gap > timeframe.seconds * self.gap_tolerance_timeframes
 
@@ -366,6 +377,7 @@ class OutcomeTracker:
             if favourable >= threshold:
                 state.reached[key] = True
                 state.time_to[key] = (seen_at - detected_at).total_seconds()
+                state.mae_before[key] = abs(min(0.0, float(state.mae or 0.0)))
 
         first = self._thresholds_points[0]
         if state.first_favourable_at is None and favourable >= first:
