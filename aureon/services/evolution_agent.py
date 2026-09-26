@@ -297,15 +297,20 @@ class EvolutionAgent:
             latest = self.models.latest_model(symbol)
             new_examples = self._new_example_count(all_examples, latest)
             degradation = self.degradation_signal(symbol)
+            degradation_trigger = max(5, min_new_examples // 3)
             should_train = (
                 latest is None
-                or bool(degradation.get("degraded"))
                 or new_examples >= min_new_examples
+                or (
+                    bool(degradation.get("degraded"))
+                    and new_examples >= degradation_trigger
+                )
             )
             if not should_train:
                 report["reason"] = (
                     f"no retrain trigger: new_examples={new_examples}, "
-                    f"degraded={degradation.get('degraded')}"
+                    f"degraded={degradation.get('degraded')}, "
+                    f"degradation_trigger={degradation_trigger}"
                 )
                 champion = self.models.champion(symbol)
                 report["champion"] = None if champion is None else champion.model_id
