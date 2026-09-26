@@ -295,6 +295,7 @@ def outcome_from_future_candles(
             favourable = max(0.0, entry_price - float(bar.low))
             adverse = max(0.0, float(bar.high) - entry_price)
 
+        prior_adverse = running_adverse
         max_favourable = max(max_favourable, favourable)
         max_adverse = max(max_adverse, adverse)
         running_adverse = max(running_adverse, adverse)
@@ -306,7 +307,10 @@ def outcome_from_future_candles(
 
         if mae_before_10 is None and favourable >= clean_target:
             mae_before_10 = running_adverse
-            if adverse > clean_max_mae:
+            # If adverse > boundary was already seen on an earlier candle, the
+            # clean label is simply false. Ambiguity applies only when +10 and
+            # the first >boundary excursion occur inside this same M5 candle.
+            if prior_adverse <= clean_max_mae and adverse > clean_max_mae:
                 ambiguous_10 = True
 
     clean_10 = bool(
