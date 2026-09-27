@@ -1,0 +1,15 @@
+{
+  "schema": "AUREON_V1_PHASE5_EVIDENCE_INPUT_V1",
+  "gates": {
+    "historical_foundation": {"passed": false, "reason": "Run real XAUUSD M5 2023-01-01 through 2026-01-31 and Phase-1 acceptance."},
+    "unseen_month_learning": {"passed": false, "reason": "Complete February release/learning and March blind score with zero leakage."},
+    "exit_policy_calibration": {"passed": false, "reason": "Select and freeze held-out V1 exit policy from identical-entry comparison."},
+    "mt5_demo_certification": {"passed": false, "reason": "Complete XAUUSD/XAGUSD real MT5 demo and failure/recovery evidence."},
+    "production_lifecycle": {"passed": false, "reason": "Capture one complete request/ticket/log lifecycle through training memory."},
+    "windows_vps_certification": {"passed": false, "reason": "Run main_aureon.py, preflight, supervisor/reconnect/closed-market and weekend proof."},
+    "live_replay_agent_calibration": {"passed": false, "reason": "Validate XAUUSD/XAGUSD live-vs-replay, MTF and versioned agent thresholds."},
+    "final_hardening": {"passed": false, "reason": "Full tests/failure injection/recovery/backup/dependency outage checks and zero critical/high V1 issues."},
+    "acceptance_evidence": {"passed": false, "reason": "Assemble Phase reports, hashes, lineage, MT5/Discord/VPS evidence and reviewed release ledger."},
+    "freeze_preconditions": {"passed": false, "reason": "Clean checkout, matching fingerprints, immutable baseline manifest and v1.0.0 tag pending."}
+  }
+}
