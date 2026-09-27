@@ -205,13 +205,13 @@ class EMASequenceLabeler:
             counter_index = _candidate_index(future, counter.timestamp)
             exhaustion = self._candidate(
                 snapshot, future, observable_states, kind="exhaustion",
-                wanted=snapshot.direction, start_bar=counter_index + 1,
+                wanted=snapshot.direction, start_bar=counter_index + 2,
             )
             if exhaustion is not None:
                 exhaustion_index = _candidate_index(future, exhaustion.timestamp)
                 continuation_candidate = self._candidate(
                     snapshot, future, observable_states, kind="continuation",
-                    wanted=snapshot.direction, start_bar=exhaustion_index,
+                    wanted=snapshot.direction, start_bar=exhaustion_index + 1,
                 ) or exhaustion
 
         counter_outcome = (
