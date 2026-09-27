@@ -79,7 +79,7 @@ def freeze_v1_baseline(
             d.model_dump(mode="json")
             for d in storage.models.evolution_for_symbol(symbol, limit=500)
         ],
-        "latest_walk_forward": _dump(storage.models.latest_backtest(symbol)),
+        "latest_walk_forward": _dump(storage.models.latest_backtest_for_model(champion.model_id)),
         "training_examples": len(
             storage.training_memory.canonical_between(symbol, "0001-01-01", "9999-12-31")
         ),
