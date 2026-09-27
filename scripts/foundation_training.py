@@ -20,8 +20,7 @@ Subcommands (dates are examples, never defaults):
   coverage print the training-coverage table of the Champion (or all examples)
   bias-report  what the frozen daily/session bias preceded (clean_10 / +20 / +30 / +40 rates
            by direction x session x bias, alignment, transitions), sample counts included
-  exits    historical exit-manager validation: fixed +10 TP versus the live
-           DeterministicExitManager under a small policy grid (runners, premature exits,
+  backtest independently score ANY persisted V1 model (including rejected/retired) and\n           report thresholded +10/-7 payoff performance without changing model status\n  exits    historical exit-manager validation: fixed +10 TP versus the live\n           DeterministicExitManager under a small policy grid (runners, premature exits,
            MFE captured, give-back, drawdown, net move)
 
 The sequence FOUNDATION -> ADAPTATION -> FREEZE -> EXAM(Feb) -> SCORE -> RELEASE -> TRAIN ->
@@ -223,6 +222,34 @@ def cmd_bias_report(args, config: AureonConfig) -> int:
     )
     report = bias_evidence_report(examples, min_samples=args.min_samples)
     print(render_bias_evidence(report))
+    if args.output:
+        import json
+
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+        print(f"wrote {args.output}")
+    return 0
+
+
+
+def cmd_backtest(args, config: AureonConfig) -> int:
+    """Evaluate one exact persisted V1 artifact without refitting or changing governance."""
+    from aureon.services.saved_model_backtest import backtest_saved_model, render_saved_model_backtest
+
+    storage = _storage(config)
+    report = backtest_saved_model(
+        models=storage.models,
+        training_memory=storage.training_memory,
+        symbol=args.symbol.upper(),
+        model_id=args.model_id,
+        start_market_date=args.start,
+        end_market_date=args.end,
+        threshold=args.threshold,
+        target_move=args.target_move,
+        stop_move=args.stop_move,
+        usd_per_move=args.usd_per_move,
+    )
+    print(render_saved_model_backtest(report))
     if args.output:
         import json
 
@@ -547,6 +574,21 @@ def main(argv: list[str] | None = None) -> int:
     bias_report.add_argument("--min-samples", type=int, default=30)
     bias_report.add_argument("--output")
 
+
+    backtest = sub.add_parser("backtest")
+    backtest.add_argument("--symbol", required=True)
+    backtest.add_argument("--model-id", required=True)
+    backtest.add_argument("--from", dest="start", required=True)
+    backtest.add_argument("--to", dest="end", required=True)
+    backtest.add_argument("--threshold", type=float, default=0.55)
+    backtest.add_argument("--target-move", type=float, default=10.0)
+    backtest.add_argument("--stop-move", type=float, default=7.0)
+    backtest.add_argument(
+        "--usd-per-move", type=float,
+        help="optional USD value of a $1 XAUUSD price move; e.g. 25 for 0.25 lot when contract size is 100",
+    )
+    backtest.add_argument("--output")
+
     exits = sub.add_parser("exits")
     exits_source = exits.add_mutually_exclusive_group(required=True)
     exits_source.add_argument("--data")
@@ -615,6 +657,7 @@ def main(argv: list[str] | None = None) -> int:
     config = AureonConfig.from_env()
     handlers = {
         "build": cmd_build,
+        "backtest": cmd_backtest,
         "train": cmd_train,
         "freeze": cmd_freeze,
         "exam": cmd_exam,
