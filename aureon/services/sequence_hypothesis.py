@@ -82,16 +82,23 @@ def _movement_summary(records: list[EMASequenceRecord]) -> dict[str, Any]:
     }
 
 
+def _candidate_fields(prefix: str) -> tuple[str, str]:
+    """Resolve candidate/outcome fields without duplicating the candidate suffix."""
+    candidate_field = prefix if prefix.endswith("_candidate") else f"{prefix}_candidate"
+    return candidate_field, f"{candidate_field}_outcome"
+
+
 def _candidate_summary(records: list[EMASequenceRecord], prefix: str) -> dict[str, Any]:
+    candidate_field, outcome_field = _candidate_fields(prefix)
     outcomes = [
-        getattr(row.label, f"{prefix}_outcome")
+        getattr(row.label, outcome_field)
         for row in records
-        if getattr(row.label, f"{prefix}_outcome") is not None
+        if getattr(row.label, outcome_field) is not None
     ]
     candidates = [
-        getattr(row.label, f"{prefix}_candidate")
+        getattr(row.label, candidate_field)
         for row in records
-        if getattr(row.label, f"{prefix}_candidate") is not None
+        if getattr(row.label, candidate_field) is not None
     ]
     return {
         "candidates": len(candidates),
@@ -103,10 +110,11 @@ def _candidate_summary(records: list[EMASequenceRecord], prefix: str) -> dict[st
 
 
 def _evidence_association(records: list[EMASequenceRecord], prefix: str) -> dict[str, Any]:
+    candidate_field, outcome_field = _candidate_fields(prefix)
     rows: dict[str, Counter] = defaultdict(Counter)
     for record in records:
-        candidate = getattr(record.label, f"{prefix}_candidate")
-        outcome = getattr(record.label, f"{prefix}_outcome")
+        candidate = getattr(record.label, candidate_field)
+        outcome = getattr(record.label, outcome_field)
         if candidate is None or outcome is None:
             continue
         success = bool(outcome.targets.reached_6)
