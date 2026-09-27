@@ -82,6 +82,22 @@ def test_report_covers_directions_targets_evidence_and_breakdowns():
     assert report["ml_training_allowed"] is False
 
 
+def test_continuation_candidate_field_resolution_does_not_duplicate_suffix():
+    records = [
+        _record(Direction.BUY, EMASequenceOutcome.PULLBACK_THEN_CONTINUATION),
+        _record(Direction.SELL, EMASequenceOutcome.PULLBACK_THEN_CONTINUATION),
+    ]
+    report = build_phase2_report(
+        records,
+        source={"symbol": "XAUUSD", "from": "2023-01-01", "to": "2026-01-31"},
+        quality={"chronological": True, "duplicate_open_times": 0, "missing_required_horizon": 0, "full_research_period_covered": True, "source_fingerprint": "abc"},
+        gate=EvidenceGate(min_sequences=2, max_ambiguous_fraction=0.5),
+    )
+    assert report["continuation_reentry"]["all"]["candidates"] == 2
+    assert report["continuation_reentry"]["all"]["targets"]["6"]["hits"] == 2
+    assert report["cross_vs_wait_for_reentry"]["confirmed_reentry"]["candidates"] == 2
+
+
 def test_gate_stops_on_bad_quality_or_one_sided_sample():
     report = build_phase2_report(
         [_record(Direction.BUY)],
