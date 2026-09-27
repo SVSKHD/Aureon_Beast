@@ -3,8 +3,8 @@
 
     python main_aureon.py
 
-Loads ``.env`` once, runs the normal preflight, then starts the observer, the position monitor,
-the executor, the Discord bot and the review watcher as five separate child processes. Every
+Loads ``.env`` once, runs the normal preflight, then starts the observer, the position monitor, the executor, the Discord bot, the review watcher,
+and the local learning sidecar as separate child processes. Every
 safety boundary they already had is unchanged: starting this does not enable trading, and the
 executor still refuses a real-money account unless ``AUREON_ALLOW_LIVE_EXECUTION`` is exactly
 ``true`` and ``settings/execution.trading_enabled`` is on.
@@ -50,6 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-executor", action="store_true")
     parser.add_argument("--no-discord", action="store_true")
     parser.add_argument("--no-review", action="store_true")
+    parser.add_argument("--no-learning", action="store_true")
     parser.add_argument(
         "--no-preflight",
         action="store_true",
@@ -118,6 +119,7 @@ def _selected(args: argparse.Namespace, parser: argparse.ArgumentParser) -> tupl
         "executor": args.no_executor,
         "discord": args.no_discord,
         "review": args.no_review,
+        "learning": args.no_learning,
     }
     services = tuple(spec for spec in DEFAULT_SERVICES if not disabled[spec.name])
     if not services:

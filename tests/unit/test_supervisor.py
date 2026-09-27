@@ -92,6 +92,7 @@ def test_default_supervisor_services_are_complete() -> None:
         ("executor", ("main_executor.py",)),
         ("discord", ("main_discord.py",)),
         ("review", ("main_review.py", "watch")),
+        ("learning", ("main_learning.py",)),
     ]
 
 
@@ -119,6 +120,7 @@ def test_the_review_watcher_runs_as_its_own_isolated_process() -> None:
         ("--no-executor", "executor"),
         ("--no-discord", "discord"),
         ("--no-review", "review"),
+        ("--no-learning", "learning"),
     ],
 )
 def test_each_no_flag_removes_exactly_one_service(flag: str, gone: str) -> None:
@@ -152,6 +154,7 @@ def test_disabling_a_service_does_not_reorder_the_rest() -> None:
         "executor",
         "discord",
         "review",
+        "learning",
     ]
 
 
@@ -160,7 +163,7 @@ def test_disabling_every_service_is_refused() -> None:
 
     parser = _parser()
     args = parser.parse_args(
-        ["--no-observer", "--no-monitor", "--no-executor", "--no-discord", "--no-review"]
+        ["--no-observer", "--no-monitor", "--no-executor", "--no-discord", "--no-review", "--no-learning"]
     )
     with pytest.raises(SystemExit):
         main_aureon._selected(args, parser)

@@ -1035,6 +1035,18 @@ class Observer:
 
         analysis = self.engines.for_symbol(symbol)
         read = analysis.indicator_read(symbol, timeframe)
+        # Freeze the actual indicator/reference values the observer owns now.  Do not
+        # depend on a setup/event serializer happening to repeat them later.
+        if read.ema_fast is not None:
+            result["ema_fast"] = read.ema_fast
+        if read.ema_slow is not None:
+            result["ema_slow"] = read.ema_slow
+        if read.rsi is not None:
+            result["rsi"] = read.rsi
+        anchor = getattr(setup, "anchor", None)
+        anchor_price = getattr(anchor, "price", None)
+        if anchor_price is not None:
+            result["reference_price"] = float(anchor_price)
         if read.ema_fast is not None and read.ema_slow is not None:
             result["ema_gap"] = read.ema_fast - read.ema_slow
         if (
@@ -1057,6 +1069,10 @@ class Observer:
         last_wick = state.get("last_wick")
         if isinstance(last_wick, dict):
             result["wick_state"] = last_wick.get("classification")
+            result["wick_direction"] = last_wick.get("direction")
+            strength = last_wick.get("strength") or last_wick.get("score")
+            if strength is not None:
+                result["wick_strength"] = strength
         last_sweep = state.get("last_sweep")
         if isinstance(last_sweep, dict):
             result["liquidity_state"] = last_sweep.get("level_type")
@@ -1066,6 +1082,9 @@ class Observer:
         if isinstance(last_breakout, dict):
             result["breakout_state"] = last_breakout.get("level_type")
             result["breakout_direction"] = last_breakout.get("direction")
+            strength = last_breakout.get("strength") or last_breakout.get("distance_points")
+            if strength is not None:
+                result["breakout_strength"] = strength
         agent_states: dict[str, object] = {}
         confluence = getattr(setup, "agent_confluence", None)
         for vote in getattr(confluence, "votes", ()) or ():
@@ -1089,6 +1108,12 @@ class Observer:
         journey = state.get("market_journey")
         if journey is not None:
             result["market_journey"] = journey
+            if isinstance(journey, dict):
+                result["market_structure_state"] = (
+                    journey.get("structure")
+                    or journey.get("state")
+                    or journey.get("journey_state")
+                )
 
         htf = self._higher_timeframe_reads.get(key)
         if htf is not None:
