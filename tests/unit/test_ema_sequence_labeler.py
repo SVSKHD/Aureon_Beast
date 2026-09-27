@@ -199,7 +199,7 @@ def test_counter_move_and_reentry_are_symmetric(
     labeler = EMASequenceLabeler(EMASequenceConfig(
         horizon_bars=4, continuation_move=6, pullback_min_move=2, failure_move=10
     ))
-    candles = [_bar(i, h, l, close) for i, (h, low, close) in enumerate(bars)]
+    candles = [_bar(i, high, low, close) for i, (high, low, close) in enumerate(bars)]
     states = _states(
         [{"agent": "liquidity", "direction": counter_side}],
         [{"agent": "ema_rsi_eligibility", "direction": counter_side}],
