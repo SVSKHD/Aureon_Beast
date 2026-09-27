@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import sys
+import time as wall_time
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -94,12 +95,49 @@ def _quality(candles, horizon: int) -> dict:
     }
 
 
+
+def _format_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {secs:02d}s"
+    return f"{minutes}m {secs:02d}s"
+
+
+def _progress_line(
+    *, processed: int, total: int, crosses: int, sequences: int,
+    current: datetime | None, started: float,
+) -> str:
+    elapsed = wall_time.monotonic() - started
+    percent = (processed / total * 100.0) if total else 100.0
+    rate = processed / elapsed if elapsed > 0 else 0.0
+    eta = (total - processed) / rate if rate > 0 else 0.0
+    width = 20
+    filled = min(width, int(percent / 100.0 * width))
+    bar = "█" * filled + "░" * (width - filled)
+    stamp = current.isoformat(sep=" ", timespec="minutes") if current else "n/a"
+    return (
+        f"PHASE-2 REPLAY [{bar}] {percent:5.1f}%\n"
+        f"{processed:,} / {total:,} candles\n"
+        f"EMA crosses: {crosses:,}\n"
+        f"Sequences: {sequences:,}\n"
+        f"Current: {stamp}\n"
+        f"Elapsed: {_format_duration(elapsed)}\n"
+        f"ETA: {_format_duration(eta)}"
+    )
+
+
 def replay_sequences(candles, engine, start, end, horizon: int):
     labeler = EMASequenceLabeler(EMASequenceConfig(horizon_bars=horizon))
     snapshot = MarketSnapshot(symbol="XAUUSD")
     detections_by_index = []
     crosses = []
     contexts = []
+    total = len(candles)
+    started = wall_time.monotonic()
+    last_progress = started
+    print(f"Starting Phase-2 production replay: {total:,} candles", flush=True)
 
     for index, candle in enumerate(candles):
         detections = engine.on_closed_candle(candle)
@@ -117,6 +155,23 @@ def replay_sequences(candles, engine, start, end, horizon: int):
             if detection.agent_name == "ema_cross" and start <= detection.detected_at.utc < end:
                 crosses.append((index, detection, context))
 
+        now = wall_time.monotonic()
+        processed = index + 1
+        if processed == total or now - last_progress >= 10.0:
+            print(
+                _progress_line(
+                    processed=processed, total=total, crosses=len(crosses),
+                    sequences=0, current=candle.open_time.utc, started=started,
+                ),
+                flush=True,
+            )
+            last_progress = now
+
+    print(
+        f"Replay scan complete. EMA crosses found: {len(crosses):,}. "
+        "Building labeled sequences...",
+        flush=True,
+    )
     records = []
     missing_horizon = 0
     for index, cross, context in crosses:
@@ -137,6 +192,20 @@ def replay_sequences(candles, engine, start, end, horizon: int):
             future_candles=future,
             observable_states=observable,
         ))
+        if len(records) % 250 == 0 or len(records) == len(crosses):
+            print(
+                f"Sequence labeling: {len(records):,}/{len(crosses):,} "
+                f"(missing horizon: {missing_horizon:,})",
+                flush=True,
+            )
+    print(
+        _progress_line(
+            processed=total, total=total, crosses=len(crosses),
+            sequences=len(records), current=candles[-1].open_time.utc if candles else None,
+            started=started,
+        ),
+        flush=True,
+    )
     return records, missing_horizon
 
 
@@ -230,16 +299,27 @@ def main() -> int:
 
     report = build_phase2_report(records, source=source_meta, quality=quality)
     dataset_path = Path(args.dataset)
+    print(f"Generating sequence dataset: {dataset_path}", flush=True)
     dataset_path.parent.mkdir(parents=True, exist_ok=True)
     dataset_path.write_text(
         "".join(json.dumps(row.model_dump(mode="json"), sort_keys=True) + "\n" for row in records),
         encoding="utf-8",
     )
+    print(f"Sequence dataset ready: {dataset_path} ({len(records):,} sequences)", flush=True)
     output = Path(args.output)
+    print(f"Generating evidence report: {output}", flush=True)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
-    print(json.dumps(report["evidence_gate"], indent=2))
-    print(f"sequences={len(records)} dataset={dataset_path} report={output}")
+    gate = report["evidence_gate"]
+    print("\n✓ REPLAY COMPLETE", flush=True)
+    print(f"✓ SEQUENCE DATASET READY: {dataset_path}", flush=True)
+    print(f"✓ EVIDENCE REPORT READY:  {output}", flush=True)
+    print(f"\nEvidence Gate: {gate['status']}", flush=True)
+    if gate.get("reasons"):
+        print("Gate reasons:", flush=True)
+        for reason in gate["reasons"]:
+            print(f"  - {reason}", flush=True)
+    print(json.dumps(gate, indent=2), flush=True)
     return 0 if report["evidence_gate"]["status"] == "DATA_QUALITY_PASS" else 2
 
 
