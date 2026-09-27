@@ -1,0 +1,36 @@
+{
+  "automated_drills": [
+    {"number": 1, "status": "PENDING"}, {"number": 2, "status": "PENDING"},
+    {"number": 3, "status": "PENDING"}, {"number": 4, "status": "PENDING"},
+    {"number": 5, "status": "PENDING"}, {"number": 6, "status": "PENDING"},
+    {"number": 7, "status": "PENDING"}, {"number": 8, "status": "PENDING"},
+    {"number": 9, "status": "PENDING"}
+  ],
+  "mt5_drills": [
+    {"number": 1, "status": "PENDING"}, {"number": 2, "status": "PENDING"},
+    {"number": 3, "status": "PENDING"}, {"number": 4, "status": "PENDING"},
+    {"number": 6, "status": "PENDING"}, {"number": 9, "status": "PENDING"}
+  ],
+  "manual_drills": {
+    "spread_widening": false,
+    "unknown_outcome_reconnect": false,
+    "cancel_fill_race": false
+  },
+  "lifecycle": {
+    "agents_decision": false,
+    "champion_prediction": false,
+    "discord_alert_with_chart": false,
+    "human_confirmed": false,
+    "execution_guard_passed": false,
+    "mt5_demo_order": false,
+    "position_monitored": false,
+    "exit_management_observed": false,
+    "broker_close_observed": false,
+    "outcome_persisted": false,
+    "learning_memory_persisted": false
+  },
+  "symbols": ["XAUUSD", "XAGUSD"],
+  "launcher_ok": false,
+  "demo_account": true,
+  "environment": "windows/vps"
+}
