@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 
 def _sigmoid(value: float) -> float:
@@ -52,7 +52,7 @@ class BoostedStumpModel:
         }
 
     @classmethod
-    def from_dict(cls, payload: dict) -> "BoostedStumpModel":
+    def from_dict(cls, payload: dict) -> BoostedStumpModel:
         return cls(
             bias=float(payload["bias"]),
             learning_rate=float(payload["learning_rate"]),

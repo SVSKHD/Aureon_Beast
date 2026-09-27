@@ -17,7 +17,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--symbol", default="XAUUSD")
     parser.add_argument("--min-samples", type=int, default=30)
     parser.add_argument("--min-class-samples", type=int, default=5)
-    parser.add_argument("--v1", action="store_true", help="train canonical clean_10 V1 logistic + boosted candidates")
+    parser.add_argument(
+        "--v1",
+        action="store_true",
+        help="train canonical clean_10 V1 logistic + boosted candidates",
+    )
     parser.add_argument("--from", dest="start", default="0001-01-01")
     parser.add_argument("--to", dest="end", default="9999-12-31")
     args = parser.parse_args(argv)

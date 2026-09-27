@@ -65,7 +65,7 @@ class ShadowModelService:
             probabilities[target] = LogisticModel.from_dict(payload).probability(vector)
 
         prediction_id = hashlib.sha256(
-            f"{model.model_id}|{setup.setup_id}|{event.event_id}".encode("utf-8")
+            f"{model.model_id}|{setup.setup_id}|{event.event_id}".encode()
         ).hexdigest()
         prediction = ModelPrediction(
             prediction_id=prediction_id,

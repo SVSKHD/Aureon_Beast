@@ -163,7 +163,11 @@ class SymbolIntelligenceAgent:
             reason=reason,
             tuning_source=("symbol_override+broker_metadata" if reviewed else "none"),
             tuning_version=self.tuning_version,
-            point=float(point) if point is not None else (snapshot.get("point") if snapshot else None),
+            point=(
+                float(point)
+                if point is not None
+                else (snapshot.get("point") if snapshot else None)
+            ),
             digits=int(digits) if digits is not None else None,
             trade_mode=str(trade_mode) if trade_mode is not None else None,
             overridden_fields=overridden,

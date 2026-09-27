@@ -58,7 +58,7 @@ def structure_points(
 
         at = getattr(getattr(here, "open_time", None), "utc", None)
         if at is None:
-            at = getattr(here, "at")
+            at = here.at
 
         if is_high:
             if previous_high is None:

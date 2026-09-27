@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from aureon.models.enums import Timeframe
 from aureon.models.learning_v1 import (
     FEATURE_SCHEMA_V1,
     LABEL_SCHEMA_V1,
@@ -11,7 +12,6 @@ from aureon.models.learning_v1 import (
     ModelLifecycleStatus,
 )
 from aureon.models.ml import ModelBacktest, ModelPrediction, ModelRegistryEntry, TargetMetrics
-from aureon.models.enums import Timeframe
 from aureon.services.evolution_agent import EvolutionAgent
 from aureon.storage.local_database import LocalDatabase
 from aureon.storage.postgres.repositories.models import ModelRepository

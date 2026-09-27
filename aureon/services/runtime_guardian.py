@@ -84,7 +84,7 @@ class RuntimeGuardian:
         repo_root: Path,
         ops: Any | None = None,
         run_preflight: bool = True,
-    ) -> "RuntimeGuardian":
+    ) -> RuntimeGuardian:
         config = AureonConfig.from_env()
         storage = build_storage(
             account_scope=config.account_scope,

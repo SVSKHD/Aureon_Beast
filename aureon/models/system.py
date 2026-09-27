@@ -295,7 +295,9 @@ class SystemState(AureonDocument):
     )
     symbol_intelligence: SymbolIntelligenceReport | None = Field(
         default=None,
-        description="Agent 18 symbol classes, approved tuning provenance and active server symbols.",
+        description=(
+            "Agent 18 symbol classes, approved tuning provenance and active server symbols."
+        ),
     )
     cross_venue_blueprints: dict[str, CrossVenueBlueprint] = Field(
         default_factory=dict,

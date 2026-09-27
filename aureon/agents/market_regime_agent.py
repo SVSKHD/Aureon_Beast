@@ -157,7 +157,11 @@ def classify_market_regime(
     reference = tr.iloc[-needed:-short_bars]
     short_median = float(short.median())
     baseline_median = float(reference.median())
-    if not math.isfinite(short_median) or not math.isfinite(baseline_median) or baseline_median <= 0:
+    if (
+        not math.isfinite(short_median)
+        or not math.isfinite(baseline_median)
+        or baseline_median <= 0
+    ):
         return None
     volatility_ratio = short_median / baseline_median
 
@@ -171,7 +175,9 @@ def classify_market_regime(
 
     signs = deltas.apply(lambda value: 1 if value > 0 else (-1 if value < 0 else 0))
     active = [int(value) for value in signs if int(value) != 0]
-    reversals = sum(1 for left, right in zip(active, active[1:]) if left != right)
+    reversals = sum(
+        1 for left, right in zip(active, active[1:], strict=False) if left != right
+    )
     reversal_rate = 0.0 if len(active) < 2 else reversals / (len(active) - 1)
 
     is_compressed = volatility_ratio <= compression_ratio

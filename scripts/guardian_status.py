@@ -18,8 +18,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from aureon.services.supervisor import EnvFileError, load_env_file  # noqa: E402
 from aureon.services.runtime_guardian import RuntimeGuardian  # noqa: E402
+from aureon.services.supervisor import EnvFileError, load_env_file  # noqa: E402
 
 
 def _render(status: dict[str, object]) -> str:

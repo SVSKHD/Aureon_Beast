@@ -192,8 +192,8 @@ def run_decision_replay(
                 director_state=decision.state.value,
                 director_supporting=decision.supporting,
                 director_opposing=decision.opposing,
-                regime=(current.get("market_regime") or {}).get("regime") if isinstance(current.get("market_regime"), dict) else None,
-                participation=(current.get("volume_participation") or {}).get("state") if isinstance(current.get("volume_participation"), dict) else None,
+                regime=_dict_field(current.get("market_regime"), "regime"),
+                participation=_dict_field(current.get("volume_participation"), "state"),
                 same_candle_agents=same_candle_agents,
                 mfe_1=metrics[1][0], mae_1=metrics[1][1],
                 mfe_3=metrics[3][0], mae_3=metrics[3][1],
@@ -284,7 +284,13 @@ def _replay_context(
     return context
 
 
-def train_reference(rows: list[DecisionReplayRow], *, train_fraction: float = 0.7) -> dict[str, Any]:
+def _dict_field(block: Any, key: str) -> Any:
+    return block.get(key) if isinstance(block, dict) else None
+
+
+def train_reference(
+    rows: list[DecisionReplayRow], *, train_fraction: float = 0.7
+) -> dict[str, Any]:
     eligible = [row for row in rows if row.eligible]
     if len(eligible) < 20:
         return {"status": "insufficient_data", "samples": len(eligible)}
@@ -564,7 +570,9 @@ def simulate_money_outcomes(
         "lot_size": lot_size,
         "contract_size": contract_size,
         "trade_rows": trades,
-        "note": "Ambiguous M5 bars touch TP and SL in the same candle and are excluded from USD P&L.",
+        "note": (
+            "Ambiguous M5 bars touch TP and SL in the same candle and are excluded from USD P&L."
+        ),
     }
 
 def simulate_trailing_outcomes(

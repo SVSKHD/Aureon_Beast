@@ -565,7 +565,6 @@ def _render_chart(
     """
     from aureon.discord.service import (
         _directional_early_ema,
-        _early_ema_status,
         _ema_relation,
         _event_snapshot_float,
         _latest_snapshot_event,
@@ -653,7 +652,8 @@ def _render_chart(
             [
                 f"EMA: {_ema_relation(fast, slow)} · {directional_early}",
                 f"RSI: {_rsi_status(event_list, latest)}",
-                f"setup snapshot trend: {snapshot.get('trend', 'unknown')} · mtf {snapshot.get('mtf_alignment', 'unknown')}",
+                f"setup snapshot trend: {snapshot.get('trend', 'unknown')} · "
+                f"mtf {snapshot.get('mtf_alignment', 'unknown')}",
             ]
         )
 

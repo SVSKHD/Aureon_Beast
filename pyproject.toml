@@ -48,6 +48,7 @@ markers = [
     "mt5: requires a live MetaTrader5 terminal (Windows only)",
     "boundary: architectural boundary guards that must never be skipped",
     "postgres: requires a local PostgreSQL server (AUREON_DATABASE_URL or AUREON_TEST_ADMIN_URL)",
+    "emulator: requires the Firestore emulator (FIRESTORE_EMULATOR_HOST); make test-emulator",
 ]
 
 [tool.ruff]

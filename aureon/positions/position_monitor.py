@@ -761,7 +761,9 @@ class PositionMonitor:
             return {}
 
         ema = None
-        if getattr(state, "ema_fast", None) is not None and getattr(state, "ema_slow", None) is not None:
+        ema_fast = getattr(state, "ema_fast", None)
+        ema_slow = getattr(state, "ema_slow", None)
+        if ema_fast is not None and ema_slow is not None:
             ema = (
                 state.ema_fast > state.ema_slow
                 if direction is Direction.BUY

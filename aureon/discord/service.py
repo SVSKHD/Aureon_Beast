@@ -45,9 +45,9 @@ from aureon.models.enums import (
     MarketState,
     OrderType,
     PriceAlertStatus,
+    SessionName,
     SleepPhase,
     TradeRequestStatus,
-    SessionName,
 )
 from aureon.models.identity import new_alert_id
 from aureon.models.market import QuoteSnapshot, SymbolInfo
@@ -61,6 +61,14 @@ log = logging.getLogger(__name__)
 #: What a field with no value renders as, everywhere a human reads one. A blank would be
 #: indistinguishable from a zero at a glance, and a zero is a price.
 UNKNOWN = "—"
+
+
+def _eligibility_label(value: object) -> str:
+    if value is True:
+        return "ELIGIBLE"
+    if value is False:
+        return "NOT ELIGIBLE"
+    return UNKNOWN
 
 #: Appended to every volume-profile line a human reads (11A, F-5).
 #:
@@ -1828,7 +1836,7 @@ def build_live_panel(state: Any) -> LivePanel:
             "Agent20 EMA/RSI "
             f"{(state.last_ema_rsi_eligibility or {}).get('event') or UNKNOWN} · "
             f"RSI {_fmt((state.last_ema_rsi_eligibility or {}).get('rsi'), digits=1)} · "
-            f"{'ELIGIBLE' if (state.last_ema_rsi_eligibility or {}).get('eligible') is True else 'NOT ELIGIBLE' if (state.last_ema_rsi_eligibility or {}).get('eligible') is False else UNKNOWN}"
+            f"{_eligibility_label((state.last_ema_rsi_eligibility or {}).get('eligible'))}"
         ),
         f"last sweep {_event(state.last_sweep, 'direction', 'level_type')} at "
         f"{_fmt_at((state.last_sweep or {}).get('at'))}",
@@ -1939,7 +1947,8 @@ def _m5_execution_gate_lines(state: Any) -> list[str]:
 
     return [
         f"M5 execution {verdict} · {direction.upper()} · {why}",
-        "plan immediate M5 entry only after Risk ALLOW · primary +10 · exit/runner handled by Agents 14/16",
+        "plan immediate M5 entry only after Risk ALLOW · primary +10 · "
+        "exit/runner handled by Agents 14/16",
     ]
 
 

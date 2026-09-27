@@ -4,7 +4,8 @@
 Examples:
   python main_backtest.py --data data/xau_m5.csv --from 2026-01-01 --to 2026-06-30
   python main_backtest.py --data data/xau_m5.parquet --from 2026-01-01 --to 2026-06-30 --train
-  python main_backtest.py --data-dir data/live_candles --symbol XAUUSD --from 2026-07-01 --to 2026-07-31 --train
+  python main_backtest.py --data-dir data/live_candles --symbol XAUUSD \
+      --from 2026-07-01 --to 2026-07-31 --train
   python main_backtest.py --mt5 --symbol XAUUSD --from 2026-07-01 --to 2026-07-31 --train
 
 Date-only bounds are interpreted in AUREON_MARKET_TZ. --to is inclusive for a date-only value.
@@ -17,8 +18,8 @@ import argparse
 import json
 import sys
 from datetime import date, datetime, time, timedelta
-from time import perf_counter
 from pathlib import Path
+from time import perf_counter
 from zoneinfo import ZoneInfo
 
 from aureon.config import AureonConfig
@@ -34,7 +35,6 @@ from aureon.services.adaptive_learning import (
     test_adaptive_reference,
     train_adaptive_reference,
 )
-from aureon.services.learning_contract import canonical_examples_from_replay
 from aureon.services.decision_backtest import (
     run_decision_replay,
     simulate_money_outcomes,
@@ -42,8 +42,9 @@ from aureon.services.decision_backtest import (
     test_reference_model,
     train_reference,
 )
-from aureon.services.v1_model_training import evaluate_v1_artifact
+from aureon.services.learning_contract import canonical_examples_from_replay
 from aureon.services.symbol_intelligence_agent import SymbolIntelligenceAgent
+from aureon.services.v1_model_training import evaluate_v1_artifact
 from main_observer import default_agents
 
 
@@ -205,7 +206,10 @@ def main() -> int:
     parser.add_argument("--train", action="store_true", help="fit chronological reference model")
     parser.add_argument(
         "--test-model",
-        help="load a prior main_backtest JSON artifact and score this date range without retraining",
+        help=(
+            "load a prior main_backtest JSON artifact and score this date range without "
+            "retraining"
+        ),
     )
     parser.add_argument("--target-move", type=float, default=10.0)
     parser.add_argument("--clean-target", type=float, default=10.0)
@@ -226,11 +230,26 @@ def main() -> int:
         "--learning-hold-bars", type=int, default=864,
         help="future M5 bars used by adaptive +5/+10/+20/+30/+40 learning (864 = 72 market hours)",
     )
-    parser.add_argument("--persist-training", action="store_true", help="write canonical V1 examples to local training memory")
-    parser.add_argument("--walk-forward", action="store_true", help="run V1 chronological walk-forward validation after replay")
+    parser.add_argument(
+        "--persist-training",
+        action="store_true",
+        help="write canonical V1 examples to local training memory",
+    )
+    parser.add_argument(
+        "--walk-forward",
+        action="store_true",
+        help="run V1 chronological walk-forward validation after replay",
+    )
     v1_saved = parser.add_mutually_exclusive_group()
-    v1_saved.add_argument("--v1-model-id", help="score an exact saved V1 registry model on this range without refitting")
-    v1_saved.add_argument("--v1-champion", action="store_true", help="score the current V1 Champion on this range without refitting")
+    v1_saved.add_argument(
+        "--v1-model-id",
+        help="score an exact saved V1 registry model on this range without refitting",
+    )
+    v1_saved.add_argument(
+        "--v1-champion",
+        action="store_true",
+        help="score the current V1 Champion on this range without refitting",
+    )
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
     if args.train and args.test_model:
@@ -492,7 +511,10 @@ def main() -> int:
             raise ValueError("saved artifact has no reference_model block")
         model_test = test_reference_model(rows, reference_model)
         saved_adaptive = model_artifact.get("adaptive_model")
-        if isinstance(saved_adaptive, dict) and saved_adaptive.get("status") == "adaptive_reference_only":
+        if (
+            isinstance(saved_adaptive, dict)
+            and saved_adaptive.get("status") == "adaptive_reference_only"
+        ):
             adaptive_test = test_adaptive_reference(
                 rows,
                 replay_candles,
@@ -518,11 +540,15 @@ def main() -> int:
         if money_contract_size is None and broker_economics:
             money_contract_size = broker_economics.get("contract_size")
         if not money_contract_size:
-            raise ValueError("money simulation needs broker contract size; use --mt5 or --contract-size")
+            raise ValueError(
+                "money simulation needs broker contract size; use --mt5 or --contract-size"
+            )
         if broker_economics:
             profit_currency = str(broker_economics.get("currency_profit") or "").upper()
             if profit_currency and profit_currency != "USD":
-                raise ValueError(f"USD output requested but broker profit currency is {profit_currency}")
+                raise ValueError(
+                    f"USD output requested but broker profit currency is {profit_currency}"
+                )
         if account_currency and str(account_currency).upper() != "USD":
             raise ValueError(f"USD output requested but MT5 account currency is {account_currency}")
         agent20_money = simulate_money_outcomes(
@@ -789,7 +815,10 @@ def main() -> int:
             print(f"  biggest peak move    ${summary['max_peak_move']:.2f}")
             print(f"  worst adverse move   ${summary['max_mae_before_exit']:.2f}")
 
-        print(f"  money assumptions    {args.lot_size:g} lot | TP +${args.target_move:g} | SL -${args.stop_move:g} | max {args.hold_bars} M5 bars")
+        print(
+            f"  money assumptions    {args.lot_size:g} lot | TP +${args.target_move:g} | "
+            f"SL -${args.stop_move:g} | max {args.hold_bars} M5 bars"
+        )
         _money_block("MONEY RESULTS - ALL AGENT20 ELIGIBLE", agent20_money)
         _trail_money_block(
             f"TRAILING - ALL AGENT20 (+{args.trail_activation_move:g} activates, no fixed TP)",
@@ -812,7 +841,8 @@ def main() -> int:
     if args.train and adaptive_model is not None:
         print("  --- ADAPTIVE FIVE-OUTPUT MODEL ---")
         print(f"  adaptive status      {adaptive_model.get('status')}")
-        print(f"  learning horizon     {adaptive_model.get('horizon_bars', args.learning_hold_bars)} M5 bars")
+        horizon = adaptive_model.get("horizon_bars", args.learning_hold_bars)
+        print(f"  learning horizon     {horizon} M5 bars")
         for target in TARGETS:
             key = str(int(target))
             block = (adaptive_model.get("target_models") or {}).get(key, {})
@@ -854,7 +884,10 @@ def main() -> int:
             key = str(int(target))
             metrics = (adaptive_test.get("metrics_by_target") or {}).get(key)
             if metrics:
-                print(f"  P(+{key}) test        brier={metrics.get('brier')} | auc={metrics.get('roc_auc')}")
+                print(
+                    f"  P(+{key}) test        brier={metrics.get('brier')} | "
+                    f"auc={metrics.get('roc_auc')}"
+                )
     if args.train:
         model = artifact["reference_model"] or {}
         print(f"  reference model      {model.get('status', 'unknown')}")

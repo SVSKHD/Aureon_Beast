@@ -37,7 +37,7 @@ def _blueprint():
 
 
 def test_blueprint_is_deterministic_and_has_no_target_volume() -> None:
-    agent = CrossVenueReplicationAgent()
+    CrossVenueReplicationAgent()
     first = _blueprint()
     second = _blueprint()
 

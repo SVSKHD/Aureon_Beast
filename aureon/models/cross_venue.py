@@ -84,7 +84,7 @@ class CrossVenueBlueprint(AureonModel):
     metadata: dict[str, object] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _zone_ordered(self) -> "CrossVenueBlueprint":
+    def _zone_ordered(self) -> CrossVenueBlueprint:
         if (
             self.preferred_zone_low is not None
             and self.preferred_zone_high is not None

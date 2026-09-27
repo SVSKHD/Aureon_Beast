@@ -5,7 +5,10 @@ from datetime import UTC, datetime
 import pytest
 
 from aureon.models.learning_v1 import (
-    FEATURE_SCHEMA_V1, LABEL_SCHEMA_V1, MODEL_SCHEMA_V1, ModelLifecycleStatus,
+    FEATURE_SCHEMA_V1,
+    LABEL_SCHEMA_V1,
+    MODEL_SCHEMA_V1,
+    ModelLifecycleStatus,
 )
 from aureon.models.ml import ModelRegistryEntry, TargetMetrics
 from aureon.storage.local_database import LocalDatabase
