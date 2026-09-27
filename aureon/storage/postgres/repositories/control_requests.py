@@ -313,6 +313,7 @@ class ControlRequestRepository(PostgresRepository):
             "target": request.target,
             "symbol": request.symbol,
             "volume": request.volume,
+            "stop_loss": request.stop_loss,
             "requested_by": request.requested_by,
             "requested_at": request.requested_at,
             "completed_at": request.completed_at,

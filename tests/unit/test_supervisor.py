@@ -23,9 +23,9 @@ from aureon.services.supervisor import (
     DEFAULT_SERVICES,
     DEFAULT_SHUTDOWN_GRACE_SECONDS,
     ENV_FILE_VAR,
+    PLANNED_RESTART_EXIT_CODE,
     AureonSupervisor,
     EnvFileError,
-    PLANNED_RESTART_EXIT_CODE,
     ServiceSpec,
     StartupFailed,
     _grace_from_env,
@@ -163,7 +163,14 @@ def test_disabling_every_service_is_refused() -> None:
 
     parser = _parser()
     args = parser.parse_args(
-        ["--no-observer", "--no-monitor", "--no-executor", "--no-discord", "--no-review", "--no-learning"]
+        [
+            "--no-observer",
+            "--no-monitor",
+            "--no-executor",
+            "--no-discord",
+            "--no-review",
+            "--no-learning",
+        ]
     )
     with pytest.raises(SystemExit):
         main_aureon._selected(args, parser)

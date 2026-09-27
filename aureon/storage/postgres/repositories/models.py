@@ -6,7 +6,12 @@ from typing import Any
 
 from sqlalchemy import select, update
 
-from aureon.models.learning_v1 import EvolutionDecision, ModelLifecycleStatus
+from aureon.models.learning_v1 import (
+    EvolutionDecision,
+    LearningExam,
+    LearningExamStatus,
+    ModelLifecycleStatus,
+)
 from aureon.models.ml import (
     ModelBacktest,
     ModelPrediction,
@@ -17,6 +22,23 @@ from aureon.models.ml import (
 )
 from aureon.storage.postgres import tables
 from aureon.storage.postgres.repositories.base import PostgresRepository
+
+
+def classify_outcome(decision: str | None, clean_10: Any) -> str | None:
+    """true/false positive/negative on clean_10 relative to the recorded decision."""
+    if clean_10 is None:
+        return None
+    if decision is None:
+        return None
+    entered = str(decision).upper() in {"ENTER", "ML_SUPPORT"}
+    clean = bool(clean_10)
+    if entered and clean:
+        return "true_positive"
+    if entered and not clean:
+        return "false_positive"
+    if not entered and clean:
+        return "false_negative"
+    return "true_negative"
 
 
 class ModelRepository(PostgresRepository):
@@ -327,13 +349,117 @@ class ModelRepository(PostgresRepository):
         outcomes: dict[str, bool | float | None],
         at: Any,
     ) -> None:
+        """Score a prediction made earlier. Never touches ``probabilities`` or ``decision``.
+
+        ``outcome_class`` is derived from the recorded decision and the actual clean_10, so
+        a false positive (ENTER, not clean) and a false negative (REJECT/WAIT, clean) are
+        preserved as first-class experiences a Challenger can learn from.
+        """
         with self._db.transaction() as connection:
+            existing = connection.execute(
+                select(self.predictions)
+                .where(self.predictions.c.model_id == model_id)
+                .where(self.predictions.c.setup_id == setup_id)
+            ).mappings().first()
+            if existing is None:
+                return
+            if existing.get("reconciled_at") is not None:
+                # Already scored: a second outcome for the same setup is a replay, and
+                # rewriting the score would let a later run edit history.
+                return
+            decision = existing.get("decision")
             connection.execute(
                 update(self.predictions)
                 .where(self.predictions.c.model_id == model_id)
                 .where(self.predictions.c.setup_id == setup_id)
-                .values(actual_outcomes=outcomes, reconciled_at=at)
+                .values(
+                    actual_outcomes=outcomes,
+                    reconciled_at=at,
+                    outcome_class=classify_outcome(decision, outcomes.get("clean_10")),
+                )
             )
+
+    def experience_summary(self, model_id: str) -> dict[str, int]:
+        """Counts of scored experiences by outcome class, failures included."""
+        statement = (
+            select(self.predictions.c.outcome_class)
+            .where(self.predictions.c.model_id == model_id)
+            .where(self.predictions.c.reconciled_at.is_not(None))
+        )
+        counts: dict[str, int] = {
+            "true_positive": 0,
+            "false_positive": 0,
+            "false_negative": 0,
+            "true_negative": 0,
+            "unscored": 0,
+        }
+        for row in self._rows(statement):
+            key = row[0] if not hasattr(row, "keys") else dict(row).get("outcome_class")
+            counts[key if key in counts else "unscored"] += 1
+        return counts
+
+    def evolution_for_symbol(self, symbol: str, *, limit: int = 50) -> list[EvolutionDecision]:
+        statement = (
+            select(self.evolution)
+            .where(self.evolution.c.symbol == symbol.upper())
+            .order_by(self.evolution.c.created_at.desc())
+            .limit(limit)
+        )
+        return [EvolutionDecision.model_validate(dict(row)) for row in self._rows(statement)]
+
+    def models_for_symbol(self, symbol: str) -> list[ModelRegistryEntry]:
+        statement = (
+            select(self.models)
+            .where(self.models.c.symbol == symbol.upper())
+            .order_by(self.models.c.created_at)
+        )
+        return [
+            ModelRegistryEntry.model_validate(self._model_dict(row))
+            for row in self._rows(statement)
+        ]
+
+    # ── Learning exams (unseen-month workflow) ────────────────────────────────
+
+    exams = tables.LearningExam.__table__
+
+    def write_exam(self, exam: LearningExam) -> LearningExam:
+        payload = exam.model_dump(mode="json")
+        self._upsert(
+            {
+                "exam_id": exam.exam_id,
+                "schema_version": exam.schema_version,
+                "symbol": exam.symbol,
+                "period_from": exam.period_from,
+                "period_to": exam.period_to,
+                "frozen_model_id": exam.frozen_model_id,
+                "status": exam.status.value,
+                "created_at": exam.created_at,
+                "scored_at": exam.scored_at,
+                "released_at": exam.released_at,
+                "metrics": payload["metrics"],
+            },
+            table=self.exams,
+        )
+        return exam
+
+    def get_exam(self, exam_id: str) -> LearningExam | None:
+        row = self._row(exam_id, table=self.exams)
+        return None if row is None else LearningExam.model_validate(dict(row))
+
+    def exams_for(self, symbol: str) -> list[LearningExam]:
+        statement = (
+            select(self.exams)
+            .where(self.exams.c.symbol == symbol.upper())
+            .order_by(self.exams.c.period_from)
+        )
+        return [LearningExam.model_validate(dict(row)) for row in self._rows(statement)]
+
+    def unreleased_exams(self, symbol: str) -> list[LearningExam]:
+        return [
+            exam
+            for exam in self.exams_for(symbol)
+            if exam.status is not LearningExamStatus.RELEASED
+        ]
 
     def shadow_summary(self, symbol: str, *, limit: int = 500) -> ShadowPredictionSummary:
         model = self.active_shadow(symbol)
@@ -388,6 +514,7 @@ class ModelRepository(PostgresRepository):
             "label_schema_version": model.label_schema_version,
             "model_schema_version": model.model_schema_version,
             "parent_model_id": model.parent_model_id,
+            "generation": model.generation,
             "hyperparameters": model.hyperparameters,
             "trained_from": model.trained_from,
             "trained_through": model.trained_through,
@@ -458,13 +585,18 @@ class ModelRepository(PostgresRepository):
             "label_schema_version": prediction.label_schema_version,
             "probabilities": prediction.probabilities,
             "feature_snapshot": prediction.feature_snapshot,
+            "decision": prediction.decision,
             "actual_outcomes": prediction.actual_outcomes,
             "reconciled_at": prediction.reconciled_at,
+            "outcome_class": prediction.outcome_class,
         }
 
     @staticmethod
     def _model_dict(row: Any) -> dict[str, Any]:
-        return dict(row)
+        data = dict(row)
+        if data.get("generation") is None:
+            data["generation"] = 0
+        return data
 
     @staticmethod
     def _run_dict(row: Any) -> dict[str, Any]:

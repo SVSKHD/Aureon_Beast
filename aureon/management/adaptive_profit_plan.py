@@ -42,7 +42,8 @@ def adaptive_profit_plan(
     else:
         mode = "NO_MODEL_EDGE"
 
-    # Once +5 has been available, the plan recommends trailing rather than a fixed TP; it never recommends giving the whole
+    # Once +5 has been available, the plan recommends trailing rather than a fixed TP; it
+    # never recommends giving the whole
     # move back. The actual executable stop still belongs to Agent 16 and the
     # management execution safety gates.
     if secure_ready and current_move < minimum_secure_move:

@@ -7,7 +7,9 @@ from aureon.models.agent_decision import DirectorState, HtfState
 from aureon.models.enums import Direction, Timeframe
 
 
-def _state(*, director_state=DirectorState.READY, direction=Direction.BUY, htf_state=HtfState.BULLISH):
+def _state(
+    *, director_state=DirectorState.READY, direction=Direction.BUY, htf_state=HtfState.BULLISH
+):
     return SimpleNamespace(
         timeframe=Timeframe.M5,
         market_director=SimpleNamespace(

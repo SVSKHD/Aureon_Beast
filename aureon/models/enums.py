@@ -249,10 +249,46 @@ class TradeStatus(StrEnum):
 
 
 class TradeSource(StrEnum):
-    """Where a trade came from. External trades are imported, never managed (§52)."""
+    """Where a trade came from. External trades are imported, never managed (§52).
+
+    ``EXTERNAL_MT5`` covers every position Aureon did not open: a MANUAL trade placed in
+    the terminal or a mobile app, or one opened by another EA. Aureon observes, analyses
+    and displays them; it never moves their stop, trails, closes or modifies them, and
+    never learns from them as its own execution result.
+    """
 
     AUREON = "aureon"
     EXTERNAL_MT5 = "external_mt5"
+
+    @property
+    def aureon_managed(self) -> bool:
+        return self is TradeSource.AUREON
+
+
+class ManagementPhase(StrEnum):
+    """Deterministic live exit-management lifecycle of an Aureon-owned position.
+
+    OPEN -> PROTECTION_PENDING (favourable movement short of the activation move) ->
+    PROTECTED (the +5 protection stop is set) -> TRAILING (the stop ratchets behind the
+    peak) -> EXIT_PENDING (a deterministic exit was decided and requested) -> CLOSED.
+    Hard risk or structural invalidation may jump straight to EXIT_PENDING.
+    """
+
+    OPEN = "open"
+    PROTECTION_PENDING = "protection_pending"
+    PROTECTED = "protected"
+    TRAILING = "trailing"
+    EXIT_PENDING = "exit_pending"
+    CLOSED = "closed"
+
+
+class ExitPriority(StrEnum):
+    """Why an exit-management action was taken; the order IS the priority."""
+
+    HARD_RISK = "hard_risk"
+    STRUCTURAL_INVALIDATION = "structural_invalidation"
+    PROFIT_PROTECTION = "profit_protection"
+    NONE = "none"
 
 
 class LinkType(StrEnum):
@@ -346,6 +382,12 @@ class FailureCode(StrEnum):
     INSUFFICIENT_MARGIN = "insufficient_margin"
     MAX_OPEN_POSITIONS = "max_open_positions"
     MAX_DAILY_TRADES = "max_daily_trades"
+    #: V1 allows exactly one autonomous Aureon position per symbol; manual trades do not count.
+    MAX_AUREON_POSITIONS = "max_aureon_positions"
+    #: The broker could not say what is open, so a position limit cannot be verified.
+    POSITIONS_UNKNOWN = "positions_unknown"
+    #: An autonomous action targeted a position Aureon does not own (§52).
+    NOT_AUREON_OWNED = "not_aureon_owned"
 
     # Broker outcomes
     BROKER_REJECTED = "broker_rejected"
@@ -365,6 +407,10 @@ class ControlRequestKind(StrEnum):
 
     CANCEL = "cancel"
     CLOSE = "close"
+    #: Move a live position's stop-loss. Issued by the deterministic exit manager for an
+    #: Aureon-owned position, or by a human; the executor refuses it on any external one
+    #: when the requester is autonomous (§52).
+    MODIFY_STOP = "modify_stop"
 
 
 class ControlRequestStatus(StrEnum):
@@ -633,6 +679,35 @@ TRADE_TRANSITIONS: Mapping[TradeStatus, frozenset[TradeStatus]] = {
     TradeStatus.CLOSED: frozenset(),
 }
 
+MANAGEMENT_TRANSITIONS: Mapping[ManagementPhase, frozenset[ManagementPhase]] = {
+    # A single candle can gap straight through the activation move, so OPEN and
+    # PROTECTION_PENDING may reach TRAILING directly; protection is still recorded as
+    # activated on that same tick, so nothing is skipped in the audit trail.
+    ManagementPhase.OPEN: frozenset(
+        {
+            ManagementPhase.PROTECTION_PENDING,
+            ManagementPhase.PROTECTED,
+            ManagementPhase.TRAILING,
+            ManagementPhase.EXIT_PENDING,
+            ManagementPhase.CLOSED,
+        }
+    ),
+    ManagementPhase.PROTECTION_PENDING: frozenset(
+        {
+            ManagementPhase.PROTECTED,
+            ManagementPhase.TRAILING,
+            ManagementPhase.EXIT_PENDING,
+            ManagementPhase.CLOSED,
+        }
+    ),
+    ManagementPhase.PROTECTED: frozenset(
+        {ManagementPhase.TRAILING, ManagementPhase.EXIT_PENDING, ManagementPhase.CLOSED}
+    ),
+    ManagementPhase.TRAILING: frozenset({ManagementPhase.EXIT_PENDING, ManagementPhase.CLOSED}),
+    ManagementPhase.EXIT_PENDING: frozenset({ManagementPhase.CLOSED}),
+    ManagementPhase.CLOSED: frozenset(),
+}
+
 HORIZON_TRANSITIONS: Mapping[HorizonStatus, frozenset[HorizonStatus]] = {
     HorizonStatus.PENDING: frozenset({HorizonStatus.COMPLETE, HorizonStatus.INVALID}),
     # A COMPLETE horizon is frozen: re-running the tracker must not change it.
@@ -709,6 +784,11 @@ def assert_trade_request_transition(
 def assert_trade_transition(current: TradeStatus, new: TradeStatus) -> None:
     """Gate a ``trades`` status change (§49-§53)."""
     assert_transition(current, new, TRADE_TRANSITIONS, label="trade")
+
+
+def assert_management_transition(current: ManagementPhase, new: ManagementPhase) -> None:
+    """Gate a live exit-management phase change."""
+    assert_transition(current, new, MANAGEMENT_TRANSITIONS, label="management")
 
 
 def assert_horizon_transition(current: HorizonStatus, new: HorizonStatus) -> None:

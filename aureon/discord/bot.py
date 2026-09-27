@@ -38,8 +38,8 @@ import asyncio
 import functools
 import io
 import logging
-from pathlib import Path
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any, TypeVar
 
 import discord
@@ -47,9 +47,9 @@ from discord import app_commands
 
 from aureon.discord.context import BotContext
 from aureon.discord.embeds import notice_embed
-from aureon.services.restart_notice import clear_restart_notice, read_restart_notice
 from aureon.discord.notifier import Notifier
 from aureon.discord.service import NotAuthorized, authorize, discord_cadences
+from aureon.services.restart_notice import clear_restart_notice, read_restart_notice
 
 log = logging.getLogger(__name__)
 

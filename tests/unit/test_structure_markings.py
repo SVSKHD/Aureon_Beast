@@ -6,7 +6,6 @@ from aureon.models.enums import Timeframe
 from aureon.models.market import Candle
 from aureon.services.market_day_builder import build_frame
 
-
 TZ = "Europe/Athens"
 START = datetime(2026, 9, 23, 8, 0, tzinfo=UTC)
 
@@ -29,7 +28,9 @@ def sample() -> list[Candle]:
     # strength=2 pivots: high at 2, lower high at 6; low at 4, lower low at 8.
     highs = [10, 12, 16, 13, 11, 12, 15, 12, 10, 11, 9]
     lows =  [ 7,  8, 11,  8,  5,  8, 10,  7,  3,  6, 4]
-    return [candle(i, h, l) for i, (h, l) in enumerate(zip(highs, lows))]
+    return [
+        candle(i, high, low) for i, (high, low) in enumerate(zip(highs, lows, strict=True))
+    ]
 
 
 def test_structure_labels_highs_and_lows_against_previous_swings() -> None:

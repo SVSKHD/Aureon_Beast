@@ -112,7 +112,10 @@ def test_shadow_prediction_only_persists_intelligence() -> None:
     intelligence = service.predict_shadow(setup, event)
 
     assert intelligence is not None
-    assert intelligence.decision == "ML_SUPPORT"
+    assert intelligence.decision == "ENTER"
+    assert intelligence.probability_clean_10 == 0.72
+    assert intelligence.training_coverage.status == "UNKNOWN"
+    assert models.writes[0].decision == "ENTER"
     assert intelligence.recommended_target == 20
     assert len(models.writes) == 1
     # The fake repository exposes no broker/execution method. If PredictionService tried to

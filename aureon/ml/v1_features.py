@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 from aureon.models.enums import Direction
 from aureon.models.learning_v1 import FeatureSnapshotV1
+
+
+def _tri(value: bool | None) -> float:
+    """+1 aligned, -1 opposed, 0 unknown/undirected."""
+    if value is None:
+        return 0.0
+    return 1.0 if value else -1.0
 
 
 def _alignment(value: str | None) -> float:
@@ -43,6 +51,12 @@ def raw_v1_features(
         "wick_strength": float(snapshot.wick_strength or 0.0),
         "breakout_strength": float(snapshot.breakout_strength or 0.0),
         "liquidity_sweep": 1.0 if snapshot.liquidity_sweep else 0.0,
+        # Daily/session context strengths (0 when the bias agent was absent at freeze).
+        "daily_bias_strength": float(snapshot.daily_bias_strength_at_entry or 0.0),
+        "session_bias_strength": float(snapshot.session_bias_strength_at_entry or 0.0),
+        "opportunity_quality": float(snapshot.opportunity_quality_at_entry or 0.0),
+        "entry_aligned_with_daily_bias": _tri(snapshot.entry_aligned_with_daily_bias),
+        "entry_aligned_with_session_bias": _tri(snapshot.entry_aligned_with_session_bias),
     }
     categorical: dict[str, str] = {
         "cross_direction": str(snapshot.cross_direction or "unknown"),
@@ -59,6 +73,14 @@ def raw_v1_features(
         "breakout_direction": str(snapshot.breakout_direction or "unknown"),
         "participation_state": str(snapshot.participation_state or "unknown"),
         "market_structure_state": str(snapshot.market_structure_state or "unknown"),
+        "daily_bias": str(snapshot.daily_bias_at_entry or "unknown"),
+        "session_bias": str(snapshot.session_bias_at_entry or "unknown"),
+        "preferred_direction": str(snapshot.preferred_direction_at_entry or "unknown"),
+        "trend_quality": str(snapshot.trend_quality_at_entry or "unknown"),
+        "volatility_state": str(snapshot.volatility_state_at_entry or "unknown"),
+        "reversal_risk": str(snapshot.reversal_risk_at_entry or "unknown"),
+        "previous_session_bias": str(snapshot.previous_session_bias or "unknown"),
+        "session_transition_state": str(snapshot.session_transition_state or "unknown"),
     }
 
     for name, state in sorted(snapshot.agents.items()):
@@ -82,7 +104,7 @@ class V1FeatureEncoder:
     def fit(
         cls,
         rows: Iterable[tuple[dict[str, float], dict[str, str]]],
-    ) -> "V1FeatureEncoder":
+    ) -> V1FeatureEncoder:
         rows = list(rows)
         if not rows:
             raise ValueError("cannot fit V1 feature encoder without rows")
@@ -158,7 +180,7 @@ class V1FeatureEncoder:
         }
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "V1FeatureEncoder":
+    def from_dict(cls, payload: dict[str, Any]) -> V1FeatureEncoder:
         return cls(
             numeric_names=tuple(payload.get("numeric_names", ())),
             categorical_values={

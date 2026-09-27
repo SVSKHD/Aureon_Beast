@@ -12,13 +12,13 @@ from datetime import datetime
 
 from pydantic import Field, model_validator
 
-from aureon.models.agent_highway import AgentHealth
 from aureon.models.agent_decision import (
     DirectorDecision,
     ExpansionOpportunity,
     HigherTimeframeAssessment,
     RiskAssessment,
 )
+from aureon.models.agent_highway import AgentHealth
 from aureon.models.assessment import TrendRead
 from aureon.models.base import AureonDocument, AureonModel, UtcDatetime, to_utc, utc_now
 from aureon.models.cross_venue import CrossVenueBlueprint
@@ -31,6 +31,7 @@ from aureon.models.enums import (
     Timeframe,
 )
 from aureon.models.market import QuoteSnapshot
+from aureon.models.market_bias import DailyMarketBiasSnapshot
 from aureon.models.mtf import MtfContext
 from aureon.models.profile import ProfileSummary, VolatilityContext
 from aureon.models.symbol_intelligence import SymbolIntelligenceReport
@@ -240,6 +241,12 @@ class SymbolState(AureonModel):
         default=None,
         description="Latest relative-volume, VWAP and participation context.",
     )
+    #: The Daily Market Bias Agent's latest frozen snapshot (V1). Display and health only;
+    #: the value a setup learns from is the one frozen with that setup, never this one.
+    daily_bias: DailyMarketBiasSnapshot | None = Field(
+        default=None,
+        description="Chronological daily/session bias as of the last closed candle.",
+    )
 
     @model_validator(mode="after")
     def _derive_display_values(self) -> SymbolState:
@@ -288,7 +295,9 @@ class SystemState(AureonDocument):
     )
     symbol_intelligence: SymbolIntelligenceReport | None = Field(
         default=None,
-        description="Agent 18 symbol classes, approved tuning provenance and active server symbols.",
+        description=(
+            "Agent 18 symbol classes, approved tuning provenance and active server symbols."
+        ),
     )
     cross_venue_blueprints: dict[str, CrossVenueBlueprint] = Field(
         default_factory=dict,

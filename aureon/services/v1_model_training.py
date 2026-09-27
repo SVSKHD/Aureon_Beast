@@ -10,23 +10,58 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from aureon.ml.boosted_stumps import BoostedStumpModel, fit_boosted_stumps
 from aureon.ml.logistic import LogisticModel, binary_metrics, fit_logistic
 from aureon.ml.v1_features import V1FeatureEncoder, raw_v1_features
 from aureon.models.base import to_utc, utc_now
 from aureon.models.learning_v1 import (
-    CanonicalTrainingExample,
     FEATURE_SCHEMA_V1,
     LABEL_SCHEMA_V1,
     MODEL_SCHEMA_V1,
+    CanonicalTrainingExample,
     ModelLifecycleStatus,
 )
 from aureon.models.ml import ModelRegistryEntry, TargetMetrics
 
 V1_TARGETS = ("clean_10", "reach_5", "reach_10", "reach_20", "reach_30", "reach_40")
+
+
+class SchemaContractError(ValueError):
+    """Raised when non-canonical rows reach V1 training.
+
+    Legacy +6/EOD rows stay readable for research, but the V1 trainer never converts
+    them. Failing loudly is the guarantee that a "+6 success" cannot become a
+    "clean_10 success" by accident.
+    """
+
+
+def assert_canonical_examples(examples: list[Any], *, what: str = "V1 training") -> None:
+    """Fail clearly if any supplied example is not AUREON_FEATURES_V1/AUREON_CLEAN_MOVE_V1."""
+    offenders: dict[str, int] = defaultdict(int)
+    for example in examples:
+        feature_schema = getattr(example, "feature_schema", None)
+        label_schema = getattr(example, "label_schema", None)
+        features = getattr(example, "features", None)
+        outcome = getattr(example, "outcome", None)
+        inner_feature = getattr(features, "feature_schema", feature_schema)
+        inner_label = getattr(outcome, "label_schema", label_schema)
+        if (
+            feature_schema != FEATURE_SCHEMA_V1
+            or label_schema != LABEL_SCHEMA_V1
+            or inner_feature != FEATURE_SCHEMA_V1
+            or inner_label != LABEL_SCHEMA_V1
+        ):
+            offenders[f"{feature_schema}/{label_schema}"] += 1
+    if offenders:
+        detail = ", ".join(f"{key} x{count}" for key, count in sorted(offenders.items()))
+        raise SchemaContractError(
+            f"{what} accepts only {FEATURE_SCHEMA_V1}/{LABEL_SCHEMA_V1}; "
+            f"refusing incompatible examples: {detail}"
+        )
 
 
 def target_value(example: CanonicalTrainingExample, target: str) -> bool:
@@ -163,19 +198,26 @@ def fit_v1_bundle(
     train_fraction: float = 0.8,
     min_samples: int = 30,
 ) -> V1Bundle:
-    usable = [
-        example
-        for example in examples
-        if example.feature_schema == FEATURE_SCHEMA_V1
-        and example.label_schema == LABEL_SCHEMA_V1
-    ]
-    usable.sort(key=lambda one: (one.features.timestamp, one.setup_id))
+    assert_canonical_examples(list(examples), what="fit_v1_bundle")
+    usable = sorted(examples, key=lambda one: (one.features.timestamp, one.setup_id))
     if len(usable) < min_samples:
         raise ValueError(f"need at least {min_samples} canonical examples; have {len(usable)}")
 
     split = max(20, min(len(usable) - 5, int(len(usable) * train_fraction)))
-    train = usable[:split]
     validation = usable[split:]
+    # Purge: a training example whose outcome resolved after the first validation
+    # setup was frozen would carry future information into the fit.
+    validation_start = validation[0].features.timestamp
+    train = [
+        one
+        for one in usable[:split]
+        if one.outcome.resolved_at is None or one.outcome.resolved_at <= validation_start
+    ]
+    if len(train) < min(20, min_samples):
+        raise ValueError(
+            f"only {len(train)} training examples resolve before the validation slice; "
+            "not enough leak-free history to fit"
+        )
     raw_train = [raw_v1_features(example.features) for example in train]
     encoder = V1FeatureEncoder.fit(raw_train)
     train_vectors = [encoder.transform(*raw) for raw in raw_train]
@@ -236,6 +278,7 @@ def refit_v1_artifact(
     algorithm: str,
 ) -> dict[str, Any]:
     """Refit deployment artifact on all past examples after validation is frozen."""
+    assert_canonical_examples(list(examples), what="refit_v1_artifact")
     ordered = sorted(
         examples, key=lambda one: (one.features.timestamp, one.setup_id)
     )
@@ -266,13 +309,8 @@ def evaluate_v1_artifact(
     examples: list[CanonicalTrainingExample],
 ) -> dict[str, Any]:
     """Score an exact saved V1 model on frozen examples without refitting."""
-    usable = [
-        example
-        for example in examples
-        if example.feature_schema == FEATURE_SCHEMA_V1
-        and example.label_schema == LABEL_SCHEMA_V1
-    ]
-    usable.sort(key=lambda one: (one.features.timestamp, one.setup_id))
+    assert_canonical_examples(list(examples), what="evaluate_v1_artifact")
+    usable = sorted(examples, key=lambda one: (one.features.timestamp, one.setup_id))
     scored = []
     labels_by_target: dict[str, list[int]] = {target: [] for target in V1_TARGETS}
     probs_by_target: dict[str, list[float]] = {target: [] for target in V1_TARGETS}
@@ -346,9 +384,18 @@ class V1ModelTrainer:
         )
         if not examples:
             raise ValueError(f"{symbol}: no canonical V1 training examples")
+        assert_canonical_examples(examples, what=f"{symbol} V1 candidate training")
+        # Programmatic leakage guard: an unreleased exam period never enters training.
+        from aureon.services.foundation_pipeline import assert_no_exam_leakage
+
+        assert_no_exam_leakage(self.models, symbol, examples, what=f"{symbol} V1 training")
+        from aureon.services.training_coverage import coverage_report
+
+        coverage = coverage_report(examples, min_samples=min_samples)
 
         parent = self.models.champion(symbol)
         parent_id = parent.model_id if parent is not None else None
+        generation = int(getattr(parent, "generation", 0) or 0) + 1 if parent is not None else 0
         trained_from = min(example.market_date for example in examples)
         trained_through = max(example.market_date for example in examples)
         created_at = to_utc(self._now())
@@ -369,6 +416,13 @@ class V1ModelTrainer:
                 ).encode("utf-8")
             ).hexdigest()[:20]
             model_id = f"{symbol.lower()}_entry_{algorithm.split('_')[0]}_{digest}"
+            existing = self.models.get_model(model_id)
+            if existing is not None:
+                # The id is a content hash: identical data trains an identical model. A
+                # registry row already carrying that id may be shadow, champion, retired or
+                # rejected, and re-writing it as a candidate would rewind governance.
+                entries.append(existing)
+                continue
             entry = ModelRegistryEntry(
                 model_id=model_id,
                 symbol=symbol,
@@ -378,6 +432,7 @@ class V1ModelTrainer:
                 label_schema_version=LABEL_SCHEMA_V1,
                 model_schema_version=MODEL_SCHEMA_V1,
                 parent_model_id=parent_id,
+                generation=generation,
                 hyperparameters={
                     "train_fraction": 0.8,
                     "min_samples": min_samples,
@@ -386,7 +441,7 @@ class V1ModelTrainer:
                 trained_through=trained_through,
                 training_samples=len(examples),
                 target_metrics=bundle.metrics,
-                validation_metrics=bundle.validation_metrics,
+                validation_metrics={**bundle.validation_metrics, "training_coverage": coverage},
                 artifact=artifact,
                 created_at=created_at,
             )

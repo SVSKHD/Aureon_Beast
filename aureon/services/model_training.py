@@ -225,6 +225,6 @@ class ModelTrainer:
     @staticmethod
     def _id(kind: str, symbol: str, at: datetime) -> str:
         digest = hashlib.sha256(
-            f"{kind}|{symbol}|{at.isoformat()}".encode("utf-8")
+            f"{kind}|{symbol}|{at.isoformat()}".encode()
         ).hexdigest()[:20]
         return f"{kind}_{symbol.lower()}_{digest}"

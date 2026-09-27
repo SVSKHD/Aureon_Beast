@@ -264,6 +264,7 @@ def test_the_card_shows_frozen_ema_cross_and_rsi_status() -> None:
 
 def _state_with_mtf(*biases: tuple[Timeframe, TrendBias]):
     from types import SimpleNamespace
+
     from aureon.models.mtf import MtfContext, TimeframeRead
 
     reads = tuple(

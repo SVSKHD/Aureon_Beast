@@ -420,6 +420,7 @@ class Trade(Base):
     excursion: Mapped[dict[str, Any]] = mapped_column(Json)
     management: Mapped[dict[str, Any] | None] = mapped_column(Json)
     guardian: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    management_state: Mapped[dict[str, Any] | None] = mapped_column(Json)
     last_reconciled_at: Mapped[datetime | None] = mapped_column()
     last_synced_at: Mapped[datetime | None] = mapped_column()
 
@@ -453,6 +454,12 @@ class TradeManagementEvent(Base):
     exit_price: Mapped[float | None] = mapped_column(Float)
     realized_move: Mapped[float | None] = mapped_column(Float)
     exit_reason: Mapped[str | None] = mapped_column(String)
+    phase: Mapped[str | None] = mapped_column(String)
+    previous_phase: Mapped[str | None] = mapped_column(String)
+    priority: Mapped[str | None] = mapped_column(String)
+    current_stop: Mapped[float | None] = mapped_column(Float)
+    previous_stop: Mapped[float | None] = mapped_column(Float)
+    detail: Mapped[str | None] = mapped_column(String)
 
     __table_args__ = (
         Index("ix_trade_management_trade_time", "trade_id", "observed_at"),
@@ -477,6 +484,7 @@ class ControlRequest(Base):
     target: Mapped[str] = mapped_column(String)
     symbol: Mapped[str | None] = mapped_column(String)
     volume: Mapped[float | None] = mapped_column(Float)
+    stop_loss: Mapped[float | None] = mapped_column(Float)
 
     requested_by: Mapped[str] = mapped_column(String)
     requested_at: Mapped[datetime] = mapped_column()
@@ -936,6 +944,7 @@ class ModelRegistry(Base):
     label_schema_version: Mapped[str] = mapped_column(String)
     model_schema_version: Mapped[str] = mapped_column(String)
     parent_model_id: Mapped[str | None] = mapped_column(String)
+    generation: Mapped[int | None] = mapped_column(Integer)
     hyperparameters: Mapped[dict[str, Any]] = mapped_column(Json)
     trained_from: Mapped[str] = mapped_column(String)
     trained_through: Mapped[str] = mapped_column(String)
@@ -1014,8 +1023,10 @@ class ModelPrediction(Base):
     label_schema_version: Mapped[str] = mapped_column(String)
     probabilities: Mapped[dict[str, Any]] = mapped_column(Json)
     feature_snapshot: Mapped[dict[str, Any]] = mapped_column(Json)
+    decision: Mapped[str | None] = mapped_column(String)
     actual_outcomes: Mapped[dict[str, Any] | None] = mapped_column(Json)
     reconciled_at: Mapped[datetime | None] = mapped_column()
+    outcome_class: Mapped[str | None] = mapped_column(String)
 
     __table_args__ = (
         Index("ix_model_predictions_symbol_time", "symbol", "predicted_at"),
@@ -1193,3 +1204,23 @@ class SyncBatch(Base):
     failure_message: Mapped[str | None] = mapped_column(String)
 
     __table_args__ = (Index("ix_sync_batches_started", "started_at"),)
+
+
+class LearningExam(Base):
+    """A held-out period the frozen Champion is examined on before it may be learned from."""
+
+    __tablename__ = "learning_exams"
+
+    exam_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    symbol: Mapped[str] = mapped_column(String)
+    period_from: Mapped[str] = mapped_column(String)
+    period_to: Mapped[str] = mapped_column(String)
+    frozen_model_id: Mapped[str | None] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column()
+    scored_at: Mapped[datetime | None] = mapped_column()
+    released_at: Mapped[datetime | None] = mapped_column()
+    metrics: Mapped[dict[str, Any]] = mapped_column(Json)
+
+    __table_args__ = (Index("ix_learning_exams_symbol", "symbol", "period_from"),)

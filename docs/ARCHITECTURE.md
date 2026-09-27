@@ -209,7 +209,7 @@ declared in `aureon/storage/ownership.py` and checked against that registry in b
 | `{prefix}_alerts` | price levels a human asked to be told about. Discord arms them; the observer sees the quote cross one and fires it once (9C) | discord, observer | discord, observer |
 | `{prefix}_assessments` | a measured cohort readout for one detection shape, with what was dropped to reach it and where its history came from (9D, 11C) | discord | discord, review |
 | `{prefix}_audit_logs` | every state change that moved money or permission, written beside the change itself | executor, monitor, discord | discord, tools |
-| `{prefix}_control_requests` | close / modify / cancel asked for by a human, performed by the executor under a lease | discord, executor | discord, executor |
+| `{prefix}_control_requests` | close / modify / cancel asked for by a human, or a stop move / exit decided by the monitor's deterministic exit manager for an Aureon-owned position, performed by the executor under a lease | discord, executor, monitor | discord, executor |
 | `{prefix}_daily_reviews` | one aggregation per broker day, re-runnable for any past day | review | discord, tools |
 | `{prefix}_detection_evaluations` | what happened after a detection, per frozen rule and horizon (§21, §22). Separate from the detection because a detection may never carry future information | observer | discord, review, tools |
 | `{prefix}_detections` | one immutable row per agent event at a candle close; the id is a hash over seven components including agent_version (§12) | observer | discord, review, tools |
@@ -226,7 +226,7 @@ declared in `aureon/storage/ownership.py` and checked against that registry in b
 | `{prefix}_system_state` | the observer's current view, one document per symbol and timeframe (9A). A derived snapshot, never an authority | observer | discord |
 | `{prefix}_trade_notes` | what a human wrote down about a trade or a detection | discord | discord, review |
 | `{prefix}_trade_requests` | the only route to execution. Discord writes REQUESTED and CONFIRMED; the executor claims one with a lease and writes every state after that (§25, §41) | discord, executor, monitor | discord, monitor, review |
-| `{prefix}_trades` | what the broker actually did, reconciled from its own deals. MT5 is the truth here; Aureon only records it (§58, §77) | monitor | discord, review |
+| `{prefix}_trades` | what the broker actually did, reconciled from its own deals. MT5 is the truth here; Aureon only records it (§58, §77). The observer reads it only to know whether an Aureon position is already open (V1 one-position rule) | monitor | discord, review, observer |
 | `{prefix}_weekly_reviews` | one aggregation per ISO week, including the scorecard that grades its own readouts | review | discord, tools |
 
 <!-- END GENERATED: ownership -->

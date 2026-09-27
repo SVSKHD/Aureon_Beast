@@ -220,6 +220,14 @@ class AureonConfig(AureonModel):
     #: a terminal that will not say what it is logged into has not said it is a demo.
     allow_live_execution: bool = False
 
+    # ── V1 autonomous management (§52, GAP 2-4) ────────────────────────────────
+    #: Off by default. When False the deterministic exit manager only RECORDS its
+    #: decisions on the trade; when True the monitor hands them to the executor as
+    #: control requests (stop moves and exits) for Aureon-owned positions only.
+    autonomous_management_enabled: bool = False
+    #: Where the Daily Market Bias Agent keeps its chronological state across restarts.
+    daily_bias_state_path: str = "data/daily_bias_state.json"
+
     # ── 11A F-15: ops event thresholds ────────────────────────────────────────
     #: How many closed-candle intervals may pass with nothing arriving, while the market is
     #: OPEN, before `observer_stale` fires. Two rather than one: a single missed interval is a
@@ -358,6 +366,10 @@ class AureonConfig(AureonModel):
             alert_channel_id=int(channel) if channel else None,
             notify_window_seconds=_env_float("AUREON_NOTIFY_WINDOW_SECONDS", 120.0),
             allow_live_execution=_env_true("AUREON_ALLOW_LIVE_EXECUTION"),
+            autonomous_management_enabled=_env_true("AUREON_AUTONOMOUS_MANAGEMENT_ENABLED"),
+            daily_bias_state_path=_env_str(
+                "AUREON_DAILY_BIAS_STATE_PATH", "data/daily_bias_state.json"
+            ),
             ops_observer_stale_intervals=_env_float(
                 "AUREON_OPS_OBSERVER_STALE_INTERVALS", 2.0
             ),

@@ -39,7 +39,7 @@ class AgentHighway:
         *,
         failure_threshold: int = 3,
         probe_after_invocations: int = 5,
-    ) -> "AgentBridge":
+    ) -> AgentBridge:
         existing = self._bridges.get(agent_name)
         if existing is not None:
             return existing

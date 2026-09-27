@@ -86,7 +86,7 @@ class ExpansionOpportunityAgent:
         threshold = self._threshold(inputs)
         lows = frame["low"].astype(float)
         highs = frame["high"].astype(float)
-        closes = frame["close"].astype(float)
+        frame["close"].astype(float)  # validates the column before the reads below
         anchor = float(lows.min()) if direction is Direction.BUY else float(highs.max())
         move = (inputs.price - anchor) * direction.sign
 
@@ -145,7 +145,12 @@ class ExpansionOpportunityAgent:
 
         # If price has already run most of the threshold without an entry candidate,
         # explicitly mark it missed rather than encouraging a chase.
-        if move >= threshold * 0.75 and earliest is None and confirmation is None and pullback is None:
+        if (
+            move >= threshold * 0.75
+            and earliest is None
+            and confirmation is None
+            and pullback is None
+        ):
             phase = ExpansionPhase.MISSED
             blockers.append("move already extended; do not manufacture a late entry")
 

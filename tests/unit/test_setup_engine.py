@@ -32,6 +32,7 @@ from aureon.models.enums import (
     DirectionContext,
     MtfAlignment,
     SessionName,
+    SetupAnchorKind,
     SetupEventType,
     SetupFamily,
     SetupState,

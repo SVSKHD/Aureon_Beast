@@ -41,18 +41,27 @@ spec cannot be read is left unmeasured rather than measured wrongly.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from aureon.execution.broker_interface import BrokerInterface
+from aureon.management.exit_manager import DeterministicExitManager, ExitDecision, ExitPolicy
 from aureon.models.base import MarketTime, to_utc, utc_now
 from aureon.models.broker import BrokerDeal, BrokerPosition
-from aureon.management.profit_guardian import ProfitGuardianAgent
-from aureon.management.trade_manager import TradeManagementAgent
-from aureon.models.enums import Direction, TradeRequestStatus, TradeSource, TradeStatus, TrendBias
-from aureon.models.trade import Trade
+from aureon.models.control import AUTONOMOUS_REQUESTER_PREFIX, ControlRequest
+from aureon.models.enums import (
+    ControlRequestKind,
+    Direction,
+    ManagementPhase,
+    TradeRequestStatus,
+    TradeSource,
+    TradeStatus,
+    TrendBias,
+)
+from aureon.models.trade import Trade, TradeManagementEvent, TradeManagementState
 from aureon.positions.deal_reconciler import PositionOutcome, summarise_position
 from aureon.positions.excursion_tracker import ExcursionTracker
 from aureon.positions.pending_order_monitor import PendingOrderMonitor
@@ -114,6 +123,10 @@ class PositionMonitor:
         pace: object | None = None,
         market_context_provider: object | None = None,
         deal_overlap_seconds: float = DEAL_OVERLAP_SECONDS,
+        exit_policy: ExitPolicy | None = None,
+        controls: object | None = None,
+        autonomous_management: bool = False,
+        structural_invalidation_provider: object | None = None,
     ) -> None:
         self.trades = trades
         self.requests = requests
@@ -136,10 +149,19 @@ class PositionMonitor:
         self.market_context_provider = market_context_provider
         self.deal_overlap_seconds = deal_overlap_seconds
 
-        # Agents 14 and 16 never call the broker themselves. The monitor supplies quotes
-        # and persists their proposed management state; execution remains a separate boundary.
-        self.trade_manager = TradeManagementAgent(primary_target_move=5.0, protect_after_move=5.0, protect_fraction=0.80)
-        self.profit_guardian = ProfitGuardianAgent(primary_target_move=5.0, minimum_lock=4.0)
+        # The deterministic exit manager wraps Agents 14 and 16. It never calls the broker:
+        # the monitor persists its state and, only when autonomous management is enabled,
+        # asks the EXECUTOR to move a stop or close through a control request under the
+        # same claim/lease discipline a human's /close uses.
+        self.exit_manager = DeterministicExitManager(exit_policy)
+        self.trade_manager = self.exit_manager.trade_manager
+        self.profit_guardian = self.exit_manager.guardian
+        #: ``ControlRequestRepository`` (or None). Without one, decisions are recorded only.
+        self.controls = controls
+        #: Off by default: recording decisions is always safe; acting on them is opt-in.
+        self.autonomous_management = autonomous_management
+        #: ``callable(trade) -> str | None`` naming a structural invalidation, if any.
+        self.structural_invalidation_provider = structural_invalidation_provider
 
         #: symbol -> tick, from the broker's own spec. Cached: it does not change within a
         #: session, and one lookup per new symbol is cheaper than one per poll.
@@ -283,6 +305,10 @@ class PositionMonitor:
                 magic=position.magic,
                 status=TradeStatus.OPEN,
             )
+            if not external:
+                trade = trade.model_copy(
+                    update={"management_state": self._initial_management(trade, now)}
+                )
             self.trades.upsert_open(trade)
             self.excursions.track(trade)
             (result.imported_external if external else result.opened).append(trade_id)
@@ -329,6 +355,10 @@ class PositionMonitor:
             magic=entry.magic,
             status=TradeStatus.OPEN,
         )
+        if trade.aureon_managed:
+            trade = trade.model_copy(
+                update={"management_state": self._initial_management(trade, entry.executed_at)}
+            )
         self.trades.upsert_open(trade)
         result.opened.append(trade_id)
 
@@ -406,7 +436,20 @@ class PositionMonitor:
     ) -> None:
         final = self.excursions.release(trade.trade_id) or trade.excursion
         closed_volume = min(outcome.closed_volume, trade.volume)
+        exit_time = outcome.exit_deals[-1].executed_at
+        management_state = None
+        if trade.aureon_managed:
+            # The exit experience is derived once, from broker truth, and frozen with the
+            # closed trade: exit price/time/reason, realised move, profit given back.
+            base = trade.management_state or self._initial_management(trade, trade.open_time.utc)
+            management_state = self.exit_manager.close(
+                base,
+                exit_price=outcome.close_price,
+                exit_time=exit_time,
+                exit_reason=outcome.close_reason,
+            )
         updates = {
+            "management_state": management_state,
             "closed_volume": round(closed_volume, 8),
             "close_price": outcome.close_price,
             "close_time": MarketTime.from_utc(
@@ -426,6 +469,16 @@ class PositionMonitor:
             updates=updates,
             reason=f"closed by {outcome.close_reason}",
         )
+        if management_state is not None:
+            self._record_event(
+                trade.trade_id,
+                action="closed",
+                state=management_state,
+                previous_phase=(trade.management_state.phase if trade.management_state else None),
+                observed_at=exit_time,
+                exit_price=outcome.close_price,
+                detail=f"broker close reason {outcome.close_reason}",
+            )
         result.closed.append(trade.trade_id)
         log.info(
             "trade %s CLOSED at %s (%s), P&L %.2f",
@@ -527,46 +580,169 @@ class PositionMonitor:
                 result.excursions_updated += 1
             self._update_management_state(trade_id, position, quote)
 
+    def _initial_management(self, trade: Trade, at: datetime | None) -> TradeManagementState:
+        return self.exit_manager.open(
+            entry_price=trade.open_price,
+            direction=trade.direction,
+            initial_stop=trade.sl,
+            now=at,
+        )
+
     def _update_management_state(self, trade_id: str, position, quote) -> None:
-        """Run Agents 14/16 for an Aureon-owned position from broker truth + observer context."""
+        """Advance the deterministic exit manager for an AUREON-OWNED position (§52).
+
+        An external/manual position is observed and displayed but never managed: it
+        returns before any state is touched. The state persisted on the trade is the
+        restart record -- a monitor that comes back up continues from the ratcheted stop
+        it left, never from scratch.
+        """
 
         try:
             trade = self.trades.get(trade_id)
         except Exception:  # noqa: BLE001
             log.exception("could not load %s for management", trade_id)
             return
-        if trade is None or trade.source is not TradeSource.AUREON:
+        if trade is None or not trade.aureon_managed:
+            return
+        if trade.status is TradeStatus.CLOSED:
             return
 
         current_price = quote.bid if trade.direction is Direction.BUY else quote.ask
-        excursion = self.excursions.current(trade_id) or trade.excursion
-        peak_price = excursion.mfe_price if excursion.mfe_price is not None else current_price
-
-        management = self.trade_manager.assess(
-            direction=trade.direction,
-            entry_price=trade.open_price,
-            current_price=current_price,
-            peak_price=peak_price,
-        )
-
-        guardian = None
-        if management.target_reached:
-            guardian = self.profit_guardian.assess(
-                direction=trade.direction,
-                entry_price=trade.open_price,
+        state = trade.management_state or self._initial_management(trade, trade.open_time.utc)
+        if state.is_terminal:
+            return
+        structural = None
+        if self.structural_invalidation_provider is not None:
+            try:
+                structural = self.structural_invalidation_provider(trade)  # type: ignore[operator]
+            except Exception:  # noqa: BLE001 - a broken provider is "no invalidation known"
+                log.debug("structural invalidation provider failed", exc_info=True)
+        try:
+            advanced, decision = self.exit_manager.assess(
+                state,
                 current_price=current_price,
-                peak_price=peak_price,
                 market_health=self._market_health(trade.symbol, trade.direction),
+                structural_invalidation=structural,
+                now=quote.captured_at if getattr(quote, "captured_at", None) else None,
             )
+        except Exception:  # noqa: BLE001 - management must never stop reconciliation
+            log.exception("exit manager failed for %s", trade_id)
+            return
+
+        request_id = None
+        if decision.actionable and self.autonomous_management and self.controls is not None:
+            request_id = self._request_management_action(trade, advanced, decision)
+            if request_id and decision.exit_requested:
+                advanced = advanced.model_copy(update={"exit_request_id": request_id})
 
         try:
             self.trades.update_management(
                 trade_id,
-                management=management,
-                guardian=guardian,
+                management=decision.management,
+                guardian=decision.guardian,
+                management_state=advanced,
             )
         except Exception:  # noqa: BLE001 - management context must never stop reconciliation
             log.exception("could not persist management state for %s", trade_id)
+            return
+        if decision.phase_changed or decision.stop_changed or decision.exit_requested:
+            self._record_event(
+                trade_id,
+                action=decision.action.value,
+                state=advanced,
+                previous_phase=decision.previous_phase,
+                observed_at=advanced.updated_at or utc_now(),
+                priority=decision.priority.value,
+                previous_stop=decision.previous_stop,
+                detail=decision.reason + (f"; control {request_id}" if request_id else ""),
+            )
+
+    def _request_management_action(
+        self, trade: Trade, state: TradeManagementState, decision: ExitDecision
+    ) -> str | None:
+        """Hand a decision to the executor as a control request. Idempotent by content.
+
+        The id is a hash of trade, kind and stop level, so the same decision reached again
+        after a restart maps to the same request and the repository's create() returns the
+        existing row instead of a second one. An exit already requested is never repeated.
+        """
+        if state.exit_request_id and decision.exit_requested:
+            return state.exit_request_id
+        if decision.exit_requested:
+            kind = ControlRequestKind.CLOSE
+            stop = None
+        elif decision.stop_changed and decision.new_stop is not None:
+            kind = ControlRequestKind.MODIFY_STOP
+            stop = round(decision.new_stop, 5)
+        else:
+            return None
+        digest = hashlib.sha256(
+            f"{trade.trade_id}|{kind.value}|{stop}".encode()
+        ).hexdigest()[:16]
+        request = ControlRequest(
+            control_id=f"mgmt-{digest}",
+            kind=kind,
+            target=str(trade.mt5_position_id),
+            symbol=trade.symbol,
+            stop_loss=stop,
+            requested_by=f"{AUTONOMOUS_REQUESTER_PREFIX}exit_manager",
+        )
+        try:
+            created = self.controls.create(request)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 - a lost request is retried on the next quote
+            log.exception("could not write management control request for %s", trade.trade_id)
+            return None
+        return created.control_id
+
+    def _record_event(
+        self,
+        trade_id: str,
+        *,
+        action: str,
+        state: TradeManagementState,
+        previous_phase: ManagementPhase | None,
+        observed_at: datetime,
+        priority: str | None = None,
+        previous_stop: float | None = None,
+        exit_price: float | None = None,
+        detail: str | None = None,
+    ) -> None:
+        append = getattr(self.trades, "append_management_event", None)
+        if append is None:
+            return
+        moment = to_utc(observed_at)
+        digest = hashlib.sha256(
+            f"{trade_id}|{action}|{state.phase.value}|{state.current_stop}|{moment.isoformat()}".encode()
+        ).hexdigest()[:24]
+        event = TradeManagementEvent(
+            event_id=f"mgmt_{digest}",
+            trade_id=trade_id,
+            observed_at=moment,
+            source="exit_manager",
+            action=action,
+            current_move=state.current_move,
+            peak_move=state.mfe,
+            giveback=max(0.0, state.mfe - state.current_move),
+            protected_move=(
+                None
+                if state.current_stop is None
+                else (state.current_stop - state.entry_price) * state.direction.sign
+            ),
+            trail_price=state.current_stop,
+            exit_price=exit_price if exit_price is not None else state.exit_price,
+            realized_move=state.realized_move,
+            exit_reason=state.exit_reason,
+            phase=state.phase.value,
+            previous_phase=None if previous_phase is None else previous_phase.value,
+            priority=priority or state.exit_priority.value,
+            current_stop=state.current_stop,
+            previous_stop=previous_stop,
+            detail=detail,
+        )
+        try:
+            append(event)
+        except Exception:  # noqa: BLE001 - the audit row must never stop reconciliation
+            log.exception("could not append management event for %s", trade_id)
 
     def _market_health(self, symbol: str, direction: Direction) -> dict[str, bool | None]:
         """Translate observer state into the Guardian's named health checks.
@@ -585,7 +761,9 @@ class PositionMonitor:
             return {}
 
         ema = None
-        if getattr(state, "ema_fast", None) is not None and getattr(state, "ema_slow", None) is not None:
+        ema_fast = getattr(state, "ema_fast", None)
+        ema_slow = getattr(state, "ema_slow", None)
+        if ema_fast is not None and ema_slow is not None:
             ema = (
                 state.ema_fast > state.ema_slow
                 if direction is Direction.BUY

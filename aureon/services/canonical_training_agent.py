@@ -7,7 +7,6 @@ future-candle horizon is actually available.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from aureon.models.base import to_utc, utc_now

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from datetime import datetime
 
 from aureon.execution.broker_interface import BrokerError, BrokerInterface
@@ -61,9 +62,14 @@ class ControlWorker:
         executor_id: str,
         lease_seconds: float = 60.0,
         poll_seconds: float = 2.0,
+        trade_lookup: Callable[[int], object | None] | None = None,
     ) -> None:
         self.repository = repository
         self.broker = broker
+        #: ``position_id -> Trade | None`` from Aureon's own record. Used to refuse an
+        #: AUTONOMOUS request on a position Aureon did not open (§52). A human's explicit
+        #: request is not filtered here: the human decides about the human's trades.
+        self.trade_lookup = trade_lookup
         self.executor_id = executor_id
         self.lease_seconds = lease_seconds
         self.poll_seconds = poll_seconds
@@ -124,12 +130,43 @@ class ControlWorker:
         )
 
     def _perform(self, request: ControlRequest):
+        refusal = self._ownership_refusal(request)
+        if refusal is not None:
+            return refusal
         mismatch = self._symbol_mismatch(request)
         if mismatch is not None:
             return mismatch
         if request.kind is ControlRequestKind.CANCEL:
             return self.broker.cancel_order(int(request.target))
+        if request.kind is ControlRequestKind.MODIFY_STOP:
+            return self.broker.modify_position(int(request.target), sl=request.stop_loss)
         return self.broker.close_position(int(request.target), request.volume)
+
+    def _ownership_refusal(self, request: ControlRequest) -> BrokerOrderResult | None:
+        """Aureon may only autonomously modify or close what Aureon opened (§52).
+
+        Fails closed: an autonomous request whose position cannot be found in Aureon's
+        own record is refused too, because "unknown" is not "ours".
+        """
+        if not request.autonomous or request.kind is ControlRequestKind.CANCEL:
+            return None
+        trade = None
+        if self.trade_lookup is not None:
+            try:
+                trade = self.trade_lookup(int(request.target))
+            except Exception:  # noqa: BLE001 - an unreadable record is not ownership
+                log.exception("trade lookup failed for control %s", request.control_id)
+                trade = None
+        if trade is None or not getattr(trade, "aureon_managed", False):
+            return BrokerOrderResult(
+                ok=False,
+                failure_code=FailureCode.NOT_AUREON_OWNED,
+                message=(
+                    f"position {request.target} is not an Aureon-owned position; "
+                    "autonomous management never touches a manual/external trade"
+                ),
+            )
+        return None
 
     def _symbol_mismatch(self, request: ControlRequest) -> BrokerOrderResult | None:
         """A refusal when the live target is not the symbol the request names (9A).

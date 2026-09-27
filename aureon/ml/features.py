@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 from aureon.models.enums import DirectionContext
 from aureon.models.training import TrainingExample
@@ -120,7 +121,7 @@ class FeatureEncoder:
     def fit(
         cls,
         rows: Iterable[tuple[dict[str, float], dict[str, str]]],
-    ) -> "FeatureEncoder":
+    ) -> FeatureEncoder:
         rows = list(rows)
         numeric_names = sorted({key for numeric, _ in rows for key in numeric})
         categorical_values = {
@@ -181,7 +182,7 @@ class FeatureEncoder:
         }
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "FeatureEncoder":
+    def from_dict(cls, payload: dict[str, Any]) -> FeatureEncoder:
         return cls(
             numeric_names=tuple(payload.get("numeric_names", ())),
             categorical_values={

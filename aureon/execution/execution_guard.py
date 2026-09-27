@@ -59,6 +59,12 @@ class BrokerSnapshot:
     open_positions: int = 0
     trades_today: int = 0
     margin_required: float | None = None
+    #: True when the broker could not list positions. Every position limit then fails
+    #: closed instead of treating "unknown" as "none".
+    positions_unknown: bool = False
+    #: Aureon-owned (our magic) open positions on the request's symbol. Manual trades
+    #: never count toward V1's one-position rule.
+    aureon_positions_on_symbol: int = 0
 
 
 @dataclass(frozen=True)
@@ -426,6 +432,29 @@ def rule_margin_sufficient(ctx: GuardContext) -> GuardResult | None:
     return None
 
 
+def rule_positions_known(ctx: GuardContext) -> GuardResult | None:
+    if ctx.broker.positions_unknown:
+        return GuardResult.block(
+            "positions_known",
+            FailureCode.POSITIONS_UNKNOWN,
+            "the broker could not list open positions; position limits cannot be verified",
+        )
+    return None
+
+
+def rule_within_aureon_position_limit(ctx: GuardContext) -> GuardResult | None:
+    """V1: one autonomous Aureon position per symbol. Manual positions do not count."""
+    limit = ctx.settings.max_aureon_positions_per_symbol
+    if ctx.broker.aureon_positions_on_symbol >= limit:
+        return GuardResult.block(
+            "within_aureon_position_limit",
+            FailureCode.MAX_AUREON_POSITIONS,
+            f"Aureon already holds {ctx.broker.aureon_positions_on_symbol} position(s) on "
+            f"{ctx.request.symbol} (limit {limit}); V1 never pyramids",
+        )
+    return None
+
+
 def rule_within_open_position_limit(ctx: GuardContext) -> GuardResult | None:
     if ctx.broker.open_positions >= ctx.settings.max_open_positions:
         return GuardResult.block(
@@ -470,6 +499,8 @@ RULES: tuple[Rule, ...] = (
     rule_stops_valid,
     rule_pending_entry_valid,
     rule_margin_sufficient,
+    rule_positions_known,
+    rule_within_aureon_position_limit,
     rule_within_open_position_limit,
     rule_within_daily_trade_limit,
 )

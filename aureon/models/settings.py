@@ -199,6 +199,8 @@ class ExecutionSettings(AureonDocument):
     max_deviation_points: int = Field(default=20, ge=0)
     max_open_positions: int = Field(default=5, ge=0)
     max_daily_trades: int = Field(default=20, ge=0)
+    #: V1: one autonomous Aureon-owned position per symbol. Manual trades never count.
+    max_aureon_positions_per_symbol: int = Field(default=1, ge=0)
 
     confirmation_ttl_seconds: float = Field(default=60.0, gt=0)
     quote_ttl_seconds: float = Field(default=15.0, gt=0)

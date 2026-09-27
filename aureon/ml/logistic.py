@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 
 def _sigmoid(value: float) -> float:
@@ -25,7 +25,7 @@ class LogisticModel:
         return {"weights": list(self.weights), "bias": self.bias}
 
     @classmethod
-    def from_dict(cls, payload: dict) -> "LogisticModel":
+    def from_dict(cls, payload: dict) -> LogisticModel:
         return cls(
             weights=tuple(float(value) for value in payload["weights"]),
             bias=float(payload["bias"]),

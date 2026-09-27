@@ -83,6 +83,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="run exactly one local learning/governance/backup cycle and exit",
     )
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="print the consolidated V1 health report and exit",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -94,6 +99,20 @@ def main(argv: list[str] | None = None) -> int:
         account_scope=config.account_scope,
         state_heartbeat_seconds=config.state_heartbeat_seconds,
     )
+
+    if args.status:
+        from aureon.services.v1_health import build_v1_health_report, render_health
+
+        report = build_v1_health_report(
+            storage,
+            symbols=config.symbols,
+            timeframe=config.timeframes[0],
+            backup_root=os.getenv("AUREON_BACKUP_ROOT", "backups"),
+            autonomous_management_enabled=config.autonomous_management_enabled,
+            restart_notice_path=Path("data") / "runtime_restart_notice.json",
+        )
+        print(render_health(report))
+        return 0
 
     backtest_dir = Path("data/backtests")
     assets: list[Path] = [local_db_path()]

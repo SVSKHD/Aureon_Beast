@@ -38,8 +38,8 @@ from aureon.storage.postgres.repositories.sessions import SessionRepository
 from aureon.storage.postgres.repositories.setup_evaluations import SetupEvaluationRepository
 from aureon.storage.postgres.repositories.setups import SetupRepository
 from aureon.storage.postgres.repositories.trade_requests import TradeRequestRepository
-from aureon.storage.postgres.repositories.training import TrainingMemoryRepository
 from aureon.storage.postgres.repositories.trades import TradeRepository
+from aureon.storage.postgres.repositories.training import TrainingMemoryRepository
 
 
 class SetupReadAdapter:

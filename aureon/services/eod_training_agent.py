@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
-from statistics import median
 from datetime import datetime
+from statistics import median
 from typing import Any
 
 from aureon.models.base import to_utc, utc_now
@@ -115,7 +115,7 @@ class EodTrainingAgent:
             six_reached = None
 
         tracking_snapshot = getattr(tracking, "context_snapshot", {}) or {}
-        reached_snapshot = getattr(reached, "context_snapshot", {}) or {}
+        getattr(reached, "context_snapshot", {})  # kept for parity with the live path
         reference_price = self._float(tracking_snapshot.get("reference_price"))
         threshold_price = self._float(
             tracking_snapshot.get("threshold_6")

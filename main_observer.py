@@ -68,14 +68,13 @@ from aureon.engine.market_engine import MarketEngine
 from aureon.engine.symbol_engines import SymbolEngines
 from aureon.evaluation.outcome_tracker import OutcomeTracker
 from aureon.evaluation.rules import get_rule
+from aureon.models.agent_decision import DirectorState, ExpansionPhase
 from aureon.models.base import to_utc, utc_now
 from aureon.models.detection import AgentEvidence, Detection, IndicatorSnapshot
-from aureon.models.agent_decision import ExpansionPhase
 from aureon.models.enums import (
     MarketState,
     MtfAlignment,
     SetupEventType,
-    SetupState,
     Timeframe,
     TrendBias,
 )
@@ -86,12 +85,17 @@ from aureon.outbox.local_outbox import LocalOutbox
 from aureon.outbox.outbox_worker import OutboxWorker
 from aureon.services.agent_highway import AgentHighway
 from aureon.services.alert_watcher import AlertWatcher, build_snapshot, minutes_since
-from aureon.services.heartbeat_service import HeartbeatService
 from aureon.services.cross_venue_replication_agent import CrossVenueReplicationAgent
+from aureon.services.daily_market_bias import (
+    DailyBiasInputs,
+    DailyBiasStateStore,
+    DailyMarketBiasAgent,
+)
 from aureon.services.expansion_opportunity_agent import (
     ExpansionInputs,
     ExpansionOpportunityAgent,
 )
+from aureon.services.heartbeat_service import HeartbeatService
 from aureon.services.higher_timeframe_agent import HigherTimeframeAgent
 from aureon.services.market_director import DirectorInputs, MarketDirector
 from aureon.services.market_snapshot import MarketSnapshot
@@ -283,6 +287,12 @@ class Observer:
         self._higher_timeframe_reads: dict[tuple[str, Timeframe], object] = {}
         self._director_decisions: dict[tuple[str, Timeframe], object] = {}
         self._expansion_reads: dict[tuple[str, Timeframe], object] = {}
+        #: V1 Daily Market Bias Agent: chronological, deterministic, restart-safe. Its
+        #: snapshot is frozen into every setup's V1 features and published in system_state.
+        self.daily_bias_agent = DailyMarketBiasAgent()
+        self._daily_bias_reads: dict[tuple[str, Timeframe], object] = {}
+        #: Set by ``build_observer``; a test observer keeps its bias state in memory only.
+        self.daily_bias_store: DailyBiasStateStore | None = None
 
     # ── Detection sink ────────────────────────────────────────────────────────
 
@@ -532,6 +542,8 @@ class Observer:
             for d in detections
             if d.direction is not None
         )
+
+        self._update_daily_bias(candle, snapshot, current, read, htf)
 
         expansion_bridge = self.agent_highway.bridge(
             f"{self.expansion_agent.agent_name}:{candle.symbol}:{candle.timeframe.value}"
@@ -1025,6 +1037,70 @@ class Observer:
                 except Exception:  # noqa: BLE001 - shadow inference must never stop observation
                     log.exception("shadow prediction failed for setup %s", event.setup_id)
 
+    def _update_daily_bias(
+        self, candle: Candle, snapshot: MarketSnapshot, current: dict, read, htf
+    ) -> None:
+        """Advance the Daily Market Bias Agent on this closed candle (V1).
+
+        Consumes only what the observer already computed for the candle: the indicator
+        read, the context agents' snapshots, the HTF read and the live session trend. The
+        result is cached for the setup path and published; the agent's state is saved so a
+        restart resumes the day where it left off.
+        """
+        key = (candle.symbol, candle.timeframe)
+        bridge = self.agent_highway.bridge(
+            f"{self.daily_bias_agent.agent_name}:{candle.symbol}:{candle.timeframe.value}"
+        )
+        last_wick = current.get("last_wick")
+        last_sweep = current.get("last_sweep")
+        last_breakout = current.get("last_breakout")
+        inputs = DailyBiasInputs(
+            symbol=candle.symbol,
+            timeframe=candle.timeframe.value,
+            at=candle.close_time,
+            market_date=candle.open_time.market.date().isoformat(),
+            session=session_for(candle.open_time.market),
+            open=candle.open,
+            high=candle.high,
+            low=candle.low,
+            close=candle.close,
+            ema_fast=read.ema_fast,
+            ema_slow=read.ema_slow,
+            previous_ema_fast=read.previous_ema_fast,
+            rsi=read.rsi,
+            previous_rsi=read.previous_rsi,
+            atr=read.atr,
+            regime=_dict_or_none(current.get("market_regime")),
+            journey=_dict_or_none(current.get("market_journey")),
+            htf_trend=(
+                getattr(getattr(htf, "dominant_bias", None), "value", None)
+                if htf is not None
+                else None
+            ),
+            session_live_trend=self._live_session_trend(candle.symbol, snapshot),
+            wick=last_wick if isinstance(last_wick, dict) else None,
+            sweep=last_sweep if isinstance(last_sweep, dict) else None,
+            breakout=last_breakout if isinstance(last_breakout, dict) else None,
+            participation=_dict_or_none(current.get("volume_participation")),
+        )
+        result, bias = bridge.call(self.daily_bias_agent.observe, inputs)
+        if not result.ok or bias is None:
+            return
+        self._daily_bias_reads[key] = bias
+        self.agent_highway.publish(
+            topic="context.daily_bias",
+            source_agent=self.daily_bias_agent.agent_name,
+            symbol=candle.symbol,
+            timeframe=candle.timeframe.value,
+            observed_at=candle.close_time,
+            payload=bias.model_dump(mode="json"),
+        )
+        if self.daily_bias_store is not None:
+            try:
+                self.daily_bias_store.save(self.daily_bias_agent.state_dict())
+            except Exception:  # noqa: BLE001 - losing the file means re-deriving, not stopping
+                log.exception("could not save daily bias state")
+
     def _learning_context(
         self, symbol: str, timeframe: Timeframe, *, setup: object | None = None
     ) -> dict[str, object]:
@@ -1032,6 +1108,11 @@ class Observer:
         key = (symbol, timeframe)
         state = self._snapshot(symbol, timeframe).as_state()
         result: dict[str, object] = {}
+        # The daily/session bias frozen WITH the setup. Read from the cache filled on this
+        # same candle's close; never recomputed later, never from a later candle.
+        bias = self._daily_bias_reads.get(key)
+        if bias is not None:
+            result.update(bias.as_feature_context())
 
         analysis = self.engines.for_symbol(symbol)
         read = analysis.indicator_read(symbol, timeframe)
@@ -1802,6 +1883,7 @@ class Observer:
                         expansion_opportunity=self._expansion_reads.get(
                             (symbol, timeframe)
                         ),
+                        daily_bias=self._daily_bias_reads.get((symbol, timeframe)),
                         cross_venue_blueprint=self._cross_venue_blueprints.get(symbol.upper()),
                     )
                 )
@@ -2257,6 +2339,10 @@ def _rosters(
     return {symbol: default_agents(config, symbol=symbol) for symbol in config.symbols}
 
 
+def _dict_or_none(value: object) -> dict | None:
+    return value if isinstance(value, dict) else None
+
+
 def default_agents(
     config: AureonConfig,
     *,
@@ -2396,13 +2482,21 @@ def build_observer(config: AureonConfig) -> Observer:
     # 11D, and assigned the same way for the same reason: a test of observation should not
     # have to stand up a day cache to watch a candle close.
     observer.market_days = storage.market_days
+    from aureon.services.learning_memory import LearningMemoryService
     from aureon.services.prediction_service import PredictionService
     from aureon.services.shadow_model import ShadowModelService
 
-    from aureon.services.learning_memory import LearningMemoryService
-
-    observer.champion_model = PredictionService(storage.models)
+    # V1 one-position rule: the Champion still analyses every setup while Aureon holds a
+    # position, but answers HOLD_EXISTING_POSITION. The observer only READS trades here.
+    observer.champion_model = PredictionService(
+        storage.models,
+        position_provider=lambda symbol: bool(storage.trades.open_aureon_trades(symbol)),
+    )
     observer.shadow_model = ShadowModelService(storage.models)
+    observer.daily_bias_store = DailyBiasStateStore(config.daily_bias_state_path)
+    restored = observer.daily_bias_agent.restore(observer.daily_bias_store.load())
+    if restored:
+        log.info("daily bias state restored for %d stream(s)", restored)
     observer.learning_memory = LearningMemoryService(
         storage.training_memory,
         models=storage.models,

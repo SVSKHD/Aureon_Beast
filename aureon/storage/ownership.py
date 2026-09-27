@@ -125,14 +125,17 @@ OWNERSHIP: tuple[Ownership, ...] = (
     Ownership(
         paths.TRADES,
         "what the broker actually did, reconciled from its own deals. MT5 is the truth here; "
-        "Aureon only records it (§58, §77)",
+        "Aureon only records it (§58, §77). The observer reads it only to know whether an "
+        "Aureon position is already open (V1 one-position rule)",
         writers=(MONITOR,),
-        readers=(DISCORD, REVIEW),
+        readers=(DISCORD, REVIEW, OBSERVER),
     ),
     Ownership(
         paths.CONTROL_REQUESTS,
-        "close / modify / cancel asked for by a human, performed by the executor under a lease",
-        writers=(DISCORD, EXECUTOR),
+        "close / modify / cancel asked for by a human, or a stop move / exit decided by the "
+        "monitor's deterministic exit manager for an Aureon-owned position, performed by "
+        "the executor under a lease",
+        writers=(DISCORD, EXECUTOR, MONITOR),
         readers=(DISCORD, EXECUTOR),
     ),
     Ownership(

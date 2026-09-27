@@ -49,6 +49,7 @@ class Executor:
         repository: TradeRequestRepository,
         *,
         controls: object | None = None,
+        trade_lookup: object | None = None,
         settings_provider: object,
         market_state_provider: object | None = None,
         heartbeat: HeartbeatService | None = None,
@@ -111,6 +112,7 @@ class Executor:
                 executor_id=self.worker.executor_id,
                 lease_seconds=config.executor_lease_seconds,
                 poll_seconds=config.executor_poll_seconds,
+                trade_lookup=trade_lookup,  # type: ignore[arg-type]
             )
             if controls is not None
             else None
@@ -241,6 +243,8 @@ def build_executor(config: AureonConfig) -> Executor:
         broker,
         storage.trade_requests,
         controls=storage.controls,
+        # §52: an autonomous close or stop move is refused unless Aureon owns the position.
+        trade_lookup=storage.trades.get_by_position,
         settings_provider=settings_repository.read_or_default,
         market_state_provider=lambda symbol: market_state.state_for(symbol).state,
         # The same schedule object AND the same clock the state service uses, so the two

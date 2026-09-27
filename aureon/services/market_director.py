@@ -14,7 +14,7 @@ from aureon.models.agent_decision import (
     HigherTimeframeAssessment,
     HtfState,
 )
-from aureon.models.enums import Direction, TrendBias
+from aureon.models.enums import Direction
 
 
 @dataclass(frozen=True)
@@ -149,7 +149,11 @@ class MarketDirector:
         )
 
         if blockers:
-            state = DirectorState.WATCH if supporting >= self.forming_support else DirectorState.WAIT
+            state = (
+                DirectorState.WATCH
+                if supporting >= self.forming_support
+                else DirectorState.WAIT
+            )
             trigger = blockers[0]
         elif supporting >= self.ready_support and has_structure_trigger:
             state = DirectorState.READY
@@ -214,7 +218,8 @@ def _field(block: dict[str, object] | None, name: str, default: str) -> str:
 def _journey_direction(block: dict[str, object] | None) -> Direction | None:
     if not block:
         return None
-    above_asia = (block.get("flags") or {}).get("above_asia_open") if isinstance(block.get("flags"), dict) else None
+    flags = block.get("flags")
+    above_asia = flags.get("above_asia_open") if isinstance(flags, dict) else None
     above_close = (
         (block.get("flags") or {}).get("above_previous_close")
         if isinstance(block.get("flags"), dict)

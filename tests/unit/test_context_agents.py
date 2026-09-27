@@ -10,14 +10,14 @@ from aureon.agents.volume_participation_agent import (
     VolumeParticipationAgent,
     participation_snapshot,
 )
+from aureon.config import AureonConfig
+from aureon.discord.service import build_live_panel
 from aureon.models.base import MarketTime
 from aureon.models.detection import CandleContext, SessionContext
 from aureon.models.enums import SessionName, Timeframe
-from main_observer import default_agents
-from aureon.config import AureonConfig
-from aureon.discord.service import build_live_panel
 from aureon.models.system import SymbolState
 from aureon.services.market_snapshot import MarketSnapshot
+from main_observer import default_agents
 
 MARKET_TZ = "Europe/Athens"
 

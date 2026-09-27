@@ -62,6 +62,8 @@ class Monitor:
         market_context_provider: object | None = None,
         schedule: object | None = None,
         now: Callable[[], datetime] = utc_now,
+        controls: object | None = None,
+        exit_policy: object | None = None,
     ) -> None:
         self.config = config
         self.broker = broker
@@ -111,6 +113,16 @@ class Monitor:
             parked=lambda: self.gate.parked,
             pace=self.gate.pace,
             market_context_provider=market_context_provider,
+            exit_policy=exit_policy,  # type: ignore[arg-type]
+            controls=controls,
+            autonomous_management=config.autonomous_management_enabled,
+            structural_invalidation_provider=(
+                lambda trade: structural_invalidation_for(
+                    trade, market_context_provider(trade.symbol)
+                )
+                if market_context_provider is not None
+                else None
+            ),
         )
 
     def startup(self, *, now: datetime | None = None) -> None:
@@ -230,6 +242,39 @@ class Monitor:
         flushed(paths.SERVICE_MONITOR, reconciliations=self.closing_reconciliations)
 
 
+def structural_invalidation_for(trade: object, state: object) -> str | None:
+    """Name a structural invalidation from the observer's PUBLISHED state, or None.
+
+    Deterministic and deliberately narrow: the setup's structure is treated as failed when
+    the observer has seen an opposite EMA cross AND the in-progress session now trends
+    against the position. Either alone is noise; both together is the market having said
+    no. No model is consulted. Missing state is "nothing known", never an exit.
+    """
+    if state is None:
+        return None
+    direction = getattr(trade, "direction", None)
+    if direction is None:
+        return None
+    wants = "bullish" if direction.value == "buy" else "bearish"
+    against = "bearish" if wants == "bullish" else "bullish"
+    cross = getattr(state, "last_cross", None) or {}
+    cross_direction = str(cross.get("direction") or "").lower() if isinstance(cross, dict) else ""
+    opened = getattr(trade, "open_time", None)
+    opened_utc = getattr(opened, "utc", None)
+    cross_at = getattr(state, "last_cross_at", None)
+    if cross_direction != against:
+        return None
+    if opened_utc is not None and cross_at is not None and cross_at <= opened_utc:
+        return None  # the cross predates the position; it is context, not invalidation
+    session = getattr(state, "session_live_trend", None)
+    if session not in {"up", "down"}:
+        return None
+    session_against = (session == "down") if wants == "bullish" else (session == "up")
+    if not session_against:
+        return None
+    return f"opposite EMA cross ({cross_direction}) with session trend {session}"
+
+
 def build_monitor(config: AureonConfig) -> Monitor:
     """Assemble a live monitor from configuration."""
     from aureon.data.mt5_provider import MT5DataProvider
@@ -253,11 +298,15 @@ def build_monitor(config: AureonConfig) -> Monitor:
     # three processes cannot hold three opinions about when the week ends (11B).
     market_state = MarketStateService(provider)
 
+    from aureon.management.exit_manager import ExitPolicy
+
     return Monitor(
         config,
         broker,
         storage.trades,
         storage.trade_requests,
+        controls=storage.controls,
+        exit_policy=ExitPolicy.from_env(),
         candle_provider=provider,
         heartbeat=HeartbeatService(storage.heartbeats, paths.SERVICE_MONITOR),
         market_state_provider=lambda symbol: market_state.state_for(symbol).state,
