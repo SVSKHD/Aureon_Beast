@@ -69,7 +69,7 @@ def test_report_covers_directions_targets_evidence_and_breakdowns():
     report = build_phase2_report(
         records,
         source={"symbol": "XAUUSD", "from": "2023-01-01", "to": "2026-01-31"},
-        quality={"chronological": True, "duplicate_open_times": 0, "missing_required_horizon": 0},
+        quality={"chronological": True, "duplicate_open_times": 0, "missing_required_horizon": 0, "full_research_period_covered": True, "source_fingerprint": "abc"},
         gate=EvidenceGate(min_sequences=2, max_ambiguous_fraction=0.5),
     )
     assert report["direction_counts"] == {"buy": 1, "sell": 1}
@@ -77,7 +77,7 @@ def test_report_covers_directions_targets_evidence_and_breakdowns():
     assert report["continuation_reentry"]["all"]["targets"]["10"]["hit_rate"] == 1
     assert report["counter_move"]["agent_evidence"]["liquidity"]["reached_6_rate"] == 1
     assert "london" in report["breakdowns"]["session"]
-    assert report["evidence_gate"]["status"] == "PASS"
+    assert report["evidence_gate"]["status"] == "DATA_QUALITY_PASS"
     assert report["evidence_gate"]["phase3_approved"] is False
     assert report["ml_training_allowed"] is False
 
@@ -86,7 +86,7 @@ def test_gate_stops_on_bad_quality_or_one_sided_sample():
     report = build_phase2_report(
         [_record(Direction.BUY)],
         source={},
-        quality={"chronological": False, "duplicate_open_times": 1, "missing_required_horizon": 2},
+        quality={"chronological": False, "duplicate_open_times": 1, "missing_required_horizon": 2, "full_research_period_covered": False, "source_fingerprint": ""},
         gate=EvidenceGate(min_sequences=1),
     )
     assert report["evidence_gate"]["status"] == "STOP"
@@ -102,7 +102,7 @@ def test_ambiguous_fraction_can_close_gate():
     ]
     report = build_phase2_report(
         records, source={},
-        quality={"chronological": True, "duplicate_open_times": 0, "missing_required_horizon": 0},
+        quality={"chronological": True, "duplicate_open_times": 0, "missing_required_horizon": 0, "full_research_period_covered": True, "source_fingerprint": "abc"},
         gate=EvidenceGate(min_sequences=2, max_ambiguous_fraction=0.25),
     )
     assert report["evidence_gate"]["status"] == "STOP"
