@@ -14,8 +14,10 @@ that already has a manifest is refused. Tag the commit afterwards:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +27,9 @@ if str(REPO_ROOT) not in sys.path:
 from aureon.config import AureonConfig  # noqa: E402
 from aureon.management.exit_manager import ExitPolicy  # noqa: E402
 from aureon.services.backup_service import verify_manifest  # noqa: E402
+from aureon.services.session_evidence import git_commit, git_dirty  # noqa: E402
 from aureon.services.v1_baseline import freeze_v1_baseline  # noqa: E402
+from aureon.services.v1_release import new_ledger, release_context  # noqa: E402
 from aureon.storage.runtime import build_storage  # noqa: E402
 
 
@@ -34,11 +38,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--symbol", required=True)
     parser.add_argument("--tag", required=True, help="e.g. v1.0.0")
     parser.add_argument("--root", default=os.getenv("AUREON_BASELINE_ROOT", "baselines"))
+    parser.add_argument("--evidence", type=Path, help="reviewed release evidence ledger")
+    parser.add_argument("--prepare-evidence", type=Path, help="write pending ledger; do not freeze")
     parser.add_argument("--include", action="append", default=[], help="result file to copy")
     parser.add_argument("--clean-threshold", type=float, default=0.55)
     parser.add_argument("--wait-threshold", type=float, default=0.45)
     args = parser.parse_args(argv)
 
+    commit = git_commit(cwd=REPO_ROOT)
+    if not commit or git_dirty(cwd=REPO_ROOT) is not False:
+        parser.error("release evidence requires a clean, committed checkout")
     config = AureonConfig.from_env()
     storage = build_storage(
         account_scope=config.account_scope,
@@ -73,13 +82,72 @@ def main(argv: list[str] | None = None) -> int:
         },
         "one_aureon_position_per_symbol": 1,
     }
+    from aureon.config.sessions import (
+        SESSION_CONFIG_VERSION,
+        SESSION_PRECEDENCE,
+        SESSION_WINDOWS,
+    )
+    from aureon.config.symbol_tuning import setup_tuning, tuning_for
+    from aureon.models.enums import SetupFamily
+    from aureon.services.daily_market_bias import AGENT_VERSION, DailyBiasPolicy
+    from main_observer import default_agents
+
+    safe_config["evaluation_rule_id"] = config.evaluation_rule_id
+    safe_config["evaluation_rules"] = dict(config.evaluation_rules)
+    safe_config["mtf_m5_bars"] = config.mtf_m5_bars
+    safe_config["session_config_version"] = SESSION_CONFIG_VERSION
+    safe_config["session_precedence"] = [name.value for name in SESSION_PRECEDENCE]
+    safe_config["sessions"] = {
+        name.value: {"start": window.start.isoformat(), "end": window.end.isoformat()}
+        for name, window in SESSION_WINDOWS.items()
+    }
+    safe_config["daily_bias"] = {"version": AGENT_VERSION, "policy": DailyBiasPolicy().as_dict()}
+    thresholds["symbol_tuning"] = {symbol: asdict(tuning_for(symbol)) for symbol in config.symbols}
+    thresholds["setups"] = {
+        symbol: {
+            family.value: setup_tuning(symbol, family.value).snapshot() for family in SetupFamily
+        }
+        for symbol in config.symbols
+    }
+    thresholds["agents"] = {
+        symbol: [
+            {
+                "name": agent.agent_name,
+                "version": agent.agent_version,
+                "params": agent.params_snapshot(),
+            }
+            for agent in default_agents(config, symbol=symbol)
+        ]
+        for symbol in config.symbols
+    }
+    exit_policy = ExitPolicy.from_env().as_dict()
+    if args.prepare_evidence:
+        champion = storage.models.champion(args.symbol.upper())
+        if champion is None or not champion.artifact:
+            parser.error("train, validate and promote a Champion before preparing release evidence")
+        context = release_context(
+            commit=commit,
+            champion=champion,
+            config=safe_config,
+            thresholds=thresholds,
+            exit_policy=exit_policy,
+        )
+        args.prepare_evidence.parent.mkdir(parents=True, exist_ok=True)
+        with args.prepare_evidence.open("x", encoding="utf-8") as handle:
+            json.dump(new_ledger(context), handle, indent=2, sort_keys=True)
+        print(f"pending evidence ledger: {args.prepare_evidence}; no baseline frozen")
+        return 0
+    if args.evidence is None:
+        parser.error("--evidence is required; use --prepare-evidence to start a pending ledger")
     target = freeze_v1_baseline(
         root=args.root,
         tag=args.tag,
         symbol=args.symbol,
         storage=storage,
         config_snapshot=safe_config,
-        exit_policy=ExitPolicy.from_env().as_dict(),
+        exit_policy=exit_policy,
+        evidence=args.evidence,
+        commit=commit,
         thresholds=thresholds,
         extra_files=args.include,
     )
@@ -91,4 +159,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (ValueError, OSError) as exc:
+        print(f"freeze refused: {exc}", file=sys.stderr)
+        sys.exit(2)

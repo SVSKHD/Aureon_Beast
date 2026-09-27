@@ -189,3 +189,11 @@ training cannot leak hindsight into detections.
   only be done by hand.
 - `docs/evidence/` — one generated, committed file per session. Nothing here is written by
   hand.
+
+## V1 real-run acceptance
+
+Follow `docs/V1_RELEASE_RUNBOOK.md` for the gold/silver sessions, demo drills, Windows
+supervision, calibration, foundation training, unseen-month exams, exit comparison,
+replay/MTF and weekend evidence sequence. `scripts/v1_release.py` tracks explicit operator
+reviews and artifact checksums. Final baseline freeze now requires all eleven evidence gates
+and binds them to the current commit, Champion and configuration; fixtures do not prove a run.
