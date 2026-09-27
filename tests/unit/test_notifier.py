@@ -804,10 +804,14 @@ def test_a_neutral_setup_has_no_execute_button(context: BotContext, firestore) -
     offer, and inventing one is the guess this whole design refuses."""
     from aureon.discord.views.setup_view import SetupView
 
-    directional = SetupView(context, symbol=SYMBOL, setup_id="x", side="buy")
-    neutral = SetupView(context, symbol=SYMBOL, setup_id="x", side=None)
+    directional = SetupView(context, symbol=SYMBOL, setup_id="x", side="buy", cleared=True)
+    uncleared = SetupView(context, symbol=SYMBOL, setup_id="x", side="buy", cleared=False)
+    neutral = SetupView(context, symbol=SYMBOL, setup_id="x", side=None, cleared=True)
     labels = lambda view: {item.label for item in view.children}  # noqa: E731
     assert "Execute" in labels(directional)
+    # A side alone is not enough: Execute also needs the review surface to have cleared
+    # the setup, so a raw or MTF-conflicted setup stays monitor-only.
+    assert "Execute" not in labels(uncleared)
     assert "Execute" not in labels(neutral)
     assert "Monitor" in labels(neutral)
 

@@ -77,6 +77,27 @@ class DetectionRepository:
         query = query.order_by("detected_at.utc", direction="DESCENDING").limit(limit)
         return [Detection.model_validate(doc.to_dict()) for doc in query.stream()]
 
+    def for_market_date(self, symbol: str, market_date: str) -> list[Detection]:
+        """One broker day's detections for one symbol, oldest first (§8's index).
+
+        The same question the SQL repository answers. A broker day is not a UTC day, so
+        the date is derived from each detection's own ``detected_at`` in its own market
+        zone rather than from a UTC range at the call site; the setup card's chart asks
+        for exactly this and must not lose the hour either side of midnight.
+        """
+        found: list[Detection] = []
+        query = self._client.collection(paths.DETECTIONS).where("symbol", "==", symbol)
+        for doc in query.stream():
+            try:
+                detection = Detection.model_validate(doc.to_dict() or {})
+            except Exception:  # noqa: BLE001 - one bad document must not lose the day
+                log.exception("unreadable detection %s", doc.id)
+                continue
+            if detection.detected_at.market.date().isoformat() == market_date:
+                found.append(detection)
+        found.sort(key=lambda detection: detection.detected_at.utc)
+        return found
+
     def in_period(self, start: datetime, end: datetime) -> list[Detection]:
         """Detections whose ``detected_at`` falls in ``[start, end)``.
 

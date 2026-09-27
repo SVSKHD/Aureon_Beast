@@ -65,8 +65,12 @@ MAX_LINKED_DETECTIONS = 20
 
 #: How many key/value pairs a context snapshot may carry, and how long a value may be. A snapshot
 #: is a handful of numbers that were true at one candle close; a cap is what stops it becoming a
-#: place to dump whatever was in scope.
-MAX_CONTEXT_KEYS = 20
+#: place to dump whatever was in scope. Forty rather than twenty because every event now freezes
+#: the six-agent read beside the indicators (eight indicator keys, the confidence, and a stance,
+#: alignment and observation per roster agent -- 27 -- plus a watch event's own detail), which
+#: the V1 feature builder reads back by key; and rather than a hundred because a snapshot that
+#: could hold a hundred keys is a dump, not a summary.
+MAX_CONTEXT_KEYS = 40
 MAX_CONTEXT_VALUE_CHARS = 120
 
 

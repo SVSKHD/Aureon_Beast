@@ -219,7 +219,8 @@ def test_every_named_condition_is_the_closed_set_it_claims_to_be() -> None:
 
     An exact set rather than a count: a count passes when one condition is renamed and
     another added, which is how a runbook comes to document a name nothing posts. 11A named
-    ten; 12 T-1 added ``supervisor_stack_down``, which the launcher owns.
+    ten; 12 T-1 added ``supervisor_stack_down``, which the launcher owns; the runtime guardian
+    added ``market_holiday`` so expected weekend silence is named rather than restarted.
     """
     assert set(BY_NAME) == {
         "observer_stale",
@@ -230,6 +231,7 @@ def test_every_named_condition_is_the_closed_set_it_claims_to_be() -> None:
         "reconciliation_ambiguous",
         "archive_write_failed",
         "symbol_feed_stale",
+        "market_holiday",
         "mt5_reconnect",
         "live_account_detected",
         "supervisor_stack_down",

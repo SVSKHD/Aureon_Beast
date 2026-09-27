@@ -742,18 +742,35 @@ def build(
             va="top",
         )
         panel_lines = overlays.analysis_lines[:18]
-        if len(overlays.analysis_lines) > len(panel_lines):
-            panel_lines = (*panel_lines[:-1], "… more context on Discord card")
+        truncated = len(overlays.analysis_lines) > len(panel_lines)
+        if truncated:
+            panel_lines = panel_lines[:-1]
+        panel_font = 7.8
+        panel_spacing = 1.30
         figure.text(
             0.735,
             0.845,
             "\n".join(panel_lines),
-            fontsize=7.8,
+            fontsize=panel_font,
             color="#333333",
             va="top",
-            linespacing=1.30,
+            linespacing=panel_spacing,
             family="monospace",
         )
+        if truncated:
+            # Its own text rather than the panel's last line: it is a pointer, not context,
+            # and a reader (or a test) should find it as a distinct string.
+            line_height = panel_font * panel_spacing / 72.0 / figure.get_figheight()
+            figure.text(
+                0.735,
+                0.845 - line_height * (len(panel_lines) + 0.4),
+                "… more context on Discord card",
+                fontsize=panel_font,
+                style="italic",
+                color="#666666",
+                va="top",
+                family="monospace",
+            )
 
     # ── the tick-volume panel, named honestly ─────────────────────────────────
     volume.bar(
@@ -775,7 +792,10 @@ def build(
     price.grid(color=GRID_COLOUR, linewidth=0.5)
     price.tick_params(axis="x", labelbottom=False)
     price.tick_params(axis="y", labelsize=8)
-    if overlays.ema_fast or overlays.ema_slow:
+    # A key for every labelled path: the EMAs, and the dashed swing-high / swing-low
+    # structure lines, which would otherwise be two unexplained dashed lines.
+    handles, _labels = price.get_legend_handles_labels()
+    if handles:
         price.legend(loc="upper left", fontsize=7, framealpha=0.8)
 
     ticks, labels = _time_ticks(times)

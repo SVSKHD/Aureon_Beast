@@ -186,7 +186,10 @@ def test_default_roster_contains_agents_9_11() -> None:
         "market_regime",
         "volume_participation",
     ]
-    assert len(names) == 9
+    # Agent 20 (EMA-RSI eligibility) joined the roster beside the six detectors and the
+    # three context agents; the context agents still close the list.
+    assert "ema_rsi_eligibility" in names
+    assert len(names) == 10
 
 
 def test_context_agents_publish_into_live_status_panel() -> None:

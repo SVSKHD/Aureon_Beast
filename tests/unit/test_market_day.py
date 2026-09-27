@@ -438,7 +438,8 @@ def test_the_agent_version_moved_for_the_new_field() -> None:
     is the thing D-1 put ``agent_version`` back into the id to prevent."""
     from aureon.agents.ema_cross_agent import EmaCrossAgent
 
-    assert EmaCrossAgent(fast_period=20, slow_period=50).agent_version == "2.2.0"
+    # 11D took ema_cross to 2.2.0; the normalized evidence contract took it to 2.3.0.
+    assert EmaCrossAgent(fast_period=20, slow_period=50).agent_version == "2.3.0"
 
 
 def test_every_agent_bumped_together() -> None:
@@ -457,7 +458,8 @@ def test_every_agent_bumped_together() -> None:
         SessionTrendAgent().agent_version,
         WickAgent().agent_version,
     }
-    assert versions == {"1.2.0"}, versions
+    # 11D took the five to 1.2.0; the normalized evidence contract took them to 1.3.0.
+    assert versions == {"1.3.0"}, versions
 
 
 # ── On the status panel ──────────────────────────────────────────────────────

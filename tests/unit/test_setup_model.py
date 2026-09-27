@@ -429,7 +429,7 @@ def test_live_context_refresh_updates_confidence_without_inventing_an_event(repo
     )
     context = SetupContextSummary(
         session=SessionName.LONDON,
-        mtf_alignment=MtfAlignment.BULLISH,
+        mtf_alignment=MtfAlignment.ALIGNED,
         volatility_regime="normal",
     )
 
