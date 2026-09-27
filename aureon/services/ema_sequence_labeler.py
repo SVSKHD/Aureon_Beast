@@ -17,6 +17,8 @@ from aureon.models.sequence_v1 import (
     EMASequenceOutcome,
     EMASequenceRecord,
     EMASequenceSnapshot,
+    ObservableCandidateSnapshot,
+    CandidateOutcome,
     TargetLadder,
 )
 
@@ -56,6 +58,7 @@ class EMASequenceLabeler:
         cross_detection: Any,
         frozen_context: dict[str, Any],
         future_candles: list[Any],
+        observable_states: list[dict[str, Any]] | None = None,
     ) -> EMASequenceRecord:
         if getattr(cross_detection, "agent_name", None) != "ema_cross":
             raise ValueError("EMASequenceLabeler requires an ema_cross detection")
@@ -68,7 +71,7 @@ class EMASequenceLabeler:
         if first_future < snapshot.timestamp:
             raise ValueError("future candles precede the frozen cross timestamp")
 
-        label = self._label_path(snapshot, future)
+        label = self._label_path(snapshot, future, observable_states or [])
         return EMASequenceRecord(snapshot=snapshot, label=label)
 
     def _snapshot(self, detection: Any, context: dict[str, Any]) -> EMASequenceSnapshot:
@@ -128,7 +131,7 @@ class EMASequenceLabeler:
         )
 
     def _label_path(
-        self, snapshot: EMASequenceSnapshot, future: list[Any]
+        self, snapshot: EMASequenceSnapshot, future: list[Any], observable_states: list[dict[str, Any]]
     ) -> EMASequenceLabel:
         favourable_moves: list[float] = []
         adverse_moves: list[float] = []
@@ -192,6 +195,33 @@ class EMASequenceLabeler:
         continuation_values = favourable_moves[continuation_start:]
         counter_values = adverse_moves[: first_cont or len(adverse_moves)]
 
+        counter = self._candidate(
+            snapshot, future, observable_states, kind="counter_move",
+            wanted=_opposite(snapshot.direction), start_bar=first_pull or 1,
+        )
+        exhaustion = None
+        continuation_candidate = None
+        if counter is not None:
+            counter_index = _candidate_index(future, counter.timestamp)
+            exhaustion = self._candidate(
+                snapshot, future, observable_states, kind="exhaustion",
+                wanted=snapshot.direction, start_bar=counter_index + 2,
+            )
+            if exhaustion is not None:
+                exhaustion_index = _candidate_index(future, exhaustion.timestamp)
+                continuation_candidate = self._candidate(
+                    snapshot, future, observable_states, kind="continuation",
+                    wanted=snapshot.direction, start_bar=exhaustion_index + 1,
+                ) or exhaustion
+
+        counter_outcome = (
+            _candidate_outcome(counter, future) if counter is not None else None
+        )
+        continuation_outcome = (
+            _candidate_outcome(continuation_candidate, future)
+            if continuation_candidate is not None else None
+        )
+
         return EMASequenceLabel(
             outcome=outcome,
             horizon_bars=self.config.horizon_bars,
@@ -202,6 +232,11 @@ class EMASequenceLabeler:
             max_adverse_move=max_adverse,
             continuation=_ladder(continuation_values),
             counter_move=_ladder(counter_values),
+            counter_move_candidate=counter,
+            counter_move_outcome=counter_outcome,
+            exhaustion_candidate=exhaustion,
+            continuation_candidate=continuation_candidate,
+            continuation_candidate_outcome=continuation_outcome,
             path_ambiguous=ambiguous,
             diagnostics={
                 "first_continuation_bar": first_cont,
@@ -216,6 +251,42 @@ class EMASequenceLabeler:
             },
         )
 
+
+
+    def _candidate(
+        self, snapshot: EMASequenceSnapshot, future: list[Any],
+        states: list[dict[str, Any]], *, kind: str, wanted: Direction, start_bar: int,
+    ) -> ObservableCandidateSnapshot | None:
+        """First independently supported candidate using only that candle's state."""
+        for index in range(max(0, start_bar - 1), min(len(future), len(states))):
+            state = states[index] or {}
+            evidence = state.get("detections") or []
+            supporting = [
+                item for item in evidence
+                if _direction_value(item.get("direction")) is wanted
+                and item.get("agent") != "ema_cross"
+            ]
+            # A price move alone is deliberately insufficient. At least one
+            # independent deterministic directional observation is required.
+            if not supporting:
+                continue
+            bar = future[index]
+            timestamp = to_utc(bar.open_time.utc)
+            entry = float(getattr(bar, "close"))
+            cid = hashlib.sha256(
+                f"{snapshot.sequence_id}|{kind}|{timestamp.isoformat()}|{wanted.value}|{entry:.8f}".encode()
+            ).hexdigest()[:24]
+            safe_context = {
+                key: value for key, value in state.items()
+                if key not in {"future", "outcome", "mfe", "mae", "targets"}
+            }
+            return ObservableCandidateSnapshot(
+                candidate_id=cid, timestamp=timestamp, entry_price=entry,
+                direction=wanted, candidate_type=kind,
+                evidence_agents=sorted({str(item.get("agent")) for item in supporting}),
+                evidence={"detections": supporting}, context=safe_context,
+            )
+        return None
 
 def _first_reach(values: list[float], threshold: float) -> int | None:
     if threshold <= 0:
@@ -255,6 +326,48 @@ def _same_bar_can_hit_both(
     if direction is Direction.BUY:
         return float(bar.high) >= entry + continuation and float(bar.low) <= entry - pullback
     return float(bar.low) <= entry - continuation and float(bar.high) >= entry + pullback
+
+
+
+def _opposite(direction: Direction) -> Direction:
+    return Direction.SELL if direction is Direction.BUY else Direction.BUY
+
+
+def _direction_value(value: Any) -> Direction | None:
+    text = str(getattr(value, "value", value)).lower()
+    if text in {"buy", "bullish", "long"}:
+        return Direction.BUY
+    if text in {"sell", "bearish", "short"}:
+        return Direction.SELL
+    return None
+
+
+def _candidate_index(future: list[Any], timestamp: Any) -> int:
+    at = to_utc(timestamp)
+    for index, bar in enumerate(future):
+        if to_utc(bar.open_time.utc) == at:
+            return index
+    raise ValueError("candidate timestamp is outside the sequence horizon")
+
+
+def _candidate_outcome(candidate: ObservableCandidateSnapshot, future: list[Any]) -> CandidateOutcome:
+    start = _candidate_index(future, candidate.timestamp) + 1
+    bars = future[start:]
+    favourable: list[float] = []
+    adverse: list[float] = []
+    for bar in bars:
+        if candidate.direction is Direction.BUY:
+            favourable.append(max(0.0, float(bar.high) - candidate.entry_price))
+            adverse.append(max(0.0, candidate.entry_price - float(bar.low)))
+        else:
+            favourable.append(max(0.0, candidate.entry_price - float(bar.low)))
+            adverse.append(max(0.0, float(bar.high) - candidate.entry_price))
+    return CandidateOutcome(
+        mfe=max(favourable, default=0.0),
+        mae=max(adverse, default=0.0),
+        targets=_ladder(favourable),
+        bars_observed=len(bars),
+    )
 
 
 def _float(value: Any) -> float | None:
