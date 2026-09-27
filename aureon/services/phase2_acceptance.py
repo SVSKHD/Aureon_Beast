@@ -58,7 +58,11 @@ def build_phase2_acceptance(
         status=None if feb is None else feb.status.value,
         metrics={} if feb is None else feb.metrics,
     )
-    feb_model = None if feb is None or not feb.frozen_model_id else storage.models.get_model(feb.frozen_model_id)
+    feb_model = (
+        None
+        if feb is None or not feb.frozen_model_id
+        else storage.models.get_model(feb.frozen_model_id)
+    )
     add(
         "january_champion_was_frozen_before_february",
         feb_model is not None and feb_model.trained_through < feb_from,
@@ -89,8 +93,13 @@ def build_phase2_acceptance(
         frozen_model_id=None if march is None else march.frozen_model_id,
         status=None if march is None else march.status.value,
     )
-    fixed = next((s for s in exit_summaries if str(s.get("label", "")).startswith("fixed_tp_10")), None)
-    managed = [s for s in exit_summaries if not str(s.get("label", "")).startswith("fixed_tp_10")]
+    fixed = next(
+        (s for s in exit_summaries if str(s.get("label", "")).startswith("fixed_tp_10")),
+        None,
+    )
+    managed = [
+        s for s in exit_summaries if not str(s.get("label", "")).startswith("fixed_tp_10")
+    ]
     same_samples = bool(fixed) and bool(managed) and all(
         int(s.get("samples", -1)) == int(fixed.get("samples", -2)) for s in managed
     )

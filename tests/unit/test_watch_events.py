@@ -141,19 +141,22 @@ def test_a_lifecycle_event_cannot_be_wrapped_as_an_observation() -> None:
         )
 
 
-def test_every_named_watch_event_is_reachable_from_this_module() -> None:
-    """T-8 names seventeen. A value in the enum that nothing emits is a name in the runbook and
-    in no history, which is exactly the drift the ops register's closed set exists to prevent."""
+def test_every_named_watch_event_is_reachable_from_an_emitter() -> None:
+    """T-8 names seventeen observations, and the setup outcome agent adds the four favourable-
+    move milestones ($6 tracking, $6, $20 and $40 reached). A value in the enum that nothing
+    emits is a name in the runbook and in no history, which is exactly the drift the ops
+    register's closed set exists to prevent."""
     import inspect
 
     from aureon.engine import watch_events
+    from aureon.services import six_dollar_move_agent
 
-    source = inspect.getsource(watch_events)
+    source = inspect.getsource(watch_events) + inspect.getsource(six_dollar_move_agent)
     missing = sorted(
         event.name for event in WATCH_EVENT_TYPES if event.name not in source
     )
     assert not missing, f"no code path emits these: {missing}"
-    assert len(WATCH_EVENT_TYPES) == 17
+    assert len(WATCH_EVENT_TYPES) == 21
 
 
 # ── proximity ─────────────────────────────────────────────────────────────────

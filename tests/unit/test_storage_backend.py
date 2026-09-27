@@ -179,12 +179,35 @@ def test_the_repr_does_not_leak_the_password() -> None:
 
 
 def test_an_unreachable_error_message_is_redacted() -> None:
-    """§27's exception travels into logs and ops events; it carries the URL."""
-    database = Database(f"{DRIVER}://aureon:secret@127.0.0.1:1/aureon_test")
+    """§27's exception travels into logs and ops events; it carries the URL.
+
+    The refusal comes from a stand-in engine rather than a real socket: the default suite
+    runs without the postgres driver installed, and what is under test is the wrapping and
+    the redaction, not the driver's own connect.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    url = f"{DRIVER}://aureon:secret@127.0.0.1:1/aureon_test"
+
+    class RefusingEngine:
+        def connect(self):
+            raise OperationalError(
+                "SELECT 1",
+                {},
+                ConnectionRefusedError(
+                    'connection to server at "127.0.0.1", port 1 failed: Connection refused'
+                ),
+            )
+
+        def dispose(self) -> None:
+            pass
+
+    database = Database(url, engine_factory=lambda *args, **kwargs: RefusingEngine())
     try:
         with pytest.raises(DatabaseUnavailable) as raised:
             database.probe()
         assert "secret" not in str(raised.value)
+        assert "127.0.0.1:1" in str(raised.value)
     finally:
         database.dispose()
 

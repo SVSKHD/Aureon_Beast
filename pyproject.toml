@@ -35,6 +35,9 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.3",
     "pyarrow>=15.0",
+    # The schema-revision tests walk the real migration chain; the local SQLite runtime
+    # never imports alembic, so it stays out of the core dependencies.
+    "alembic>=1.13",
 ]
 
 [tool.setuptools.packages.find]

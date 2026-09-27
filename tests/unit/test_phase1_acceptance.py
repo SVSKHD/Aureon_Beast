@@ -9,8 +9,8 @@ import pytest
 from aureon.models.learning_v1 import ModelLifecycleStatus
 from aureon.models.ml import BacktestFold, ModelBacktest
 from aureon.services.phase1_acceptance import (
-    build_phase1_acceptance,
     bootstrap_champion_from_historical_shadow,
+    build_phase1_acceptance,
 )
 from tests.unit.v1_fixtures import constant_model, examples
 

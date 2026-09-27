@@ -1466,7 +1466,7 @@ re-derives exactly the token it stamped.
 Phase 13 (plan §2). MT5 remains broker truth, parquet remains the candle archive,
 and the SQLite outbox remains local durability.
 
-Schema revision **0007** (`alembic_version`). `python
+Schema revision **0008** (`alembic_version`). `python
 scripts/migrate.py check` FAILS when the database is behind this OR ahead of it:
 an older build against a newer schema writes NULL into every column it does not
 know about, silently (C-7).

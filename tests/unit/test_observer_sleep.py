@@ -108,6 +108,9 @@ class Wired:
         self.provider = FakeLiveProvider(candles)
         self.outbox = LocalOutbox(self.config.outbox_path)
         self.delivered: list[dict] = []
+        #: When set, the sink refuses every payload, so a detection stays queued the way it
+        #: would when the local store is briefly unavailable between two worker passes.
+        self.refuse_delivery = False
         self.worker = OutboxWorker(self.outbox, self._deliver)
         self.observer = Observer(
             self.config,
@@ -125,6 +128,8 @@ class Wired:
             )
 
     def _deliver(self, payload: dict) -> None:
+        if self.refuse_delivery:
+            raise RuntimeError("sink unavailable")
         self.delivered.append(payload)
 
     def poll_at(self, moment: datetime) -> None:
@@ -206,13 +211,17 @@ def test_the_outbox_is_drained_at_the_close(
 ) -> None:
     """A queued detection is one nobody has seen, and the weekend is two days long."""
     wired = Wired(tmp_path, before_the_close(candles), seed_hours=None)
-    # The worker's thread is never started here, so detections pile up in the queue
-    # exactly as they would between two passes of a live one.
+    # The observer delivers each batch synchronously as it is queued, so the only way a
+    # detection is still in the outbox at the close is a delivery that failed and was left
+    # for the next pass. The sink refuses everything through the week, then recovers just
+    # before the close.
+    wired.refuse_delivery = True
     wired.poll_at(FRIDAY_CLOSE - timedelta(hours=1))
     held = wired.outbox.pending_count()
     assert held >= 1, "the week produced a detection that is still queued"
     assert wired.delivered == []
 
+    wired.refuse_delivery = False
     sleep_it(wired)
     assert wired.outbox.pending_count() == 0
     assert len(wired.delivered) == held

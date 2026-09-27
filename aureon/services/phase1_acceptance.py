@@ -19,7 +19,6 @@ from typing import Any
 from aureon.models.learning_v1 import ModelLifecycleStatus
 from aureon.services.evolution_agent import EvolutionAgent
 
-
 PHASE1_REPORT_SCHEMA = "AUREON_PHASE1_FOUNDATION_REPORT_V1"
 
 

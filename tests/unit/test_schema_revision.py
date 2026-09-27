@@ -39,6 +39,19 @@ EXPECTED_TABLES = {
     "market_days",
     "market_day_frames",
     "sync_batches",
+    # 12 T-6 / V1: the training memory, the model registry and its lifecycle, and the
+    # trade-management history. Eleven more, each pinned here on the day it was added.
+    "training_examples",
+    "canonical_training_examples",
+    "daily_training_status",
+    "pending_learning_setups",
+    "learning_exams",
+    "model_registry",
+    "model_training_runs",
+    "model_backtests",
+    "model_predictions",
+    "model_evolution_log",
+    "trade_management_events",
 }
 
 #: C-7's four: additive-only, no destructive downgrade, ever.
@@ -60,11 +73,11 @@ def test_every_table_the_plan_names_exists() -> None:
     assert set(Base.metadata.tables) == EXPECTED_TABLES
 
 
-def test_there_are_exactly_twenty_four() -> None:
+def test_there_are_exactly_thirty_five() -> None:
     """Stated as a number too, because a set comparison passes if BOTH sides drift."""
     import aureon.storage.postgres.tables  # noqa: F401
 
-    assert len(Base.metadata.tables) == 24
+    assert len(Base.metadata.tables) == 35
 
 
 def test_every_table_has_a_primary_key() -> None:
