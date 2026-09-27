@@ -169,16 +169,17 @@ def test_every_agents_version_moved_so_the_populations_are_separable() -> None:
     documents of different shapes would share an id and nothing would distinguish them.
 
     9B took ema_cross to 2.1.0 and the rest to 1.1.0; 11D added ``mtf`` to every detection and
-    took them to 2.2.0 and 1.2.0 (decision 238).
+    took them to 2.2.0 and 1.2.0 (decision 238); the normalized evidence contract changed
+    the document again and took them to 2.3.0 and 1.3.0.
     """
     versions = {a.agent_name: a.agent_version for a in default_agents(CONFIG)}
-    assert versions["ema_cross"] == "2.2.0"
-    assert versions["liquidity"] == "1.2.0"
-    assert versions["breakout"] == "1.2.0"
-    assert versions["wick"] == "1.2.0"
-    # Not only the four 9B listed: these gained the same fields, in both phases.
-    assert versions["rsi"] == "1.2.0"
-    assert versions["session_trend"] == "1.2.0"
+    assert versions["ema_cross"] == "2.3.0"
+    assert versions["liquidity"] == "1.3.0"
+    assert versions["breakout"] == "1.3.0"
+    assert versions["wick"] == "1.3.0"
+    # Not only the four 9B listed: these gained the same fields, in every phase.
+    assert versions["rsi"] == "1.3.0"
+    assert versions["session_trend"] == "1.3.0"
 
 
 def test_the_id_changes_with_the_version(candles) -> None:

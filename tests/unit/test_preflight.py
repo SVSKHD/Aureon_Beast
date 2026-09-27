@@ -567,6 +567,7 @@ def test_a_clean_run_is_ready_and_exits_zero(tmp_path) -> None:
     report = build(tmp_path).run()
     assert [r.name for r in report.results] == [
         "config",
+        "code_contract",
         "outbox",
         "archive_dir",
         "local_storage",

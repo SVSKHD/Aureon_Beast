@@ -237,7 +237,7 @@ def setup_embed(screen: Any) -> Any:
 
     section(
         "1 · SETUP",
-        ("State", "Timeframe", "Anchor", "Invalidation", "Context", "Events"),
+        ("State", "Timeframe", "Anchor", "Invalidation", "Context", "Move ladder", "Events"),
     )
     section(
         "2 · TREND",
@@ -264,7 +264,7 @@ def setup_embed(screen: Any) -> Any:
     section("6 · TRACE", ("Linked detections",))
 
     known = {
-        "State", "Timeframe", "Anchor", "Invalidation", "Context", "Events",
+        "State", "Timeframe", "Anchor", "Invalidation", "Context", "Move ladder", "Events",
         "Present trend", "Asia trend", "London trend", "Trend evidence",
         "EMA20 / EMA50", "EMA cross status", "Early EMA status", "RSI status",
         "Setup trend @ event", "Agent confidence", "6-agent read",

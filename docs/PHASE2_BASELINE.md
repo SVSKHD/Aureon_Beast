@@ -29,7 +29,7 @@ Gaps (weekend discontinuity):
 
 | property | value |
 |---|---|
-| agent | `ema_cross` v2.2.0 |
+| agent | `ema_cross` v2.3.0 |
 | fast / slow EMA | 20 / 50 |
 | RSI period | 14 (context only, never a gate) |
 | warm-up bars | 150 (slow × 3) |
@@ -75,12 +75,12 @@ alone -- adding an agent never changes another's output.
 
 | agent | version | window | detections |
 |---|---|---|---|
-| `ema_cross` | 2.2.0 | 151 | 29 |
-| `rsi` | 1.2.0 | 44 | 110 |
-| `session_trend` | 1.2.0 | 98 | 19 |
-| `wick` | 1.2.0 | 1 | 235 |
-| `liquidity` | 1.2.0 | 583 | 528 |
-| `breakout` | 1.2.0 | 583 | 251 |
+| `ema_cross` | 2.3.0 | 151 | 29 |
+| `rsi` | 1.3.0 | 44 | 110 |
+| `session_trend` | 1.3.0 | 98 | 19 |
+| `wick` | 1.3.0 | 1 | 235 |
+| `liquidity` | 1.3.0 | 583 | 528 |
+| `breakout` | 1.3.0 | 583 | 251 |
 
 ### Crosses, sweeps and breakouts per session
 
@@ -483,42 +483,46 @@ how much each roster selects, and how often each rule's own thresholds were reac
 
 ## Detections
 
-1063 detections from the whole roster.
+2461 detections from the whole roster.
 
 | agent | detections |
 |---|---|
 | `breakout` | 237 |
 | `ema_cross` | 28 |
+| `ema_rsi_eligibility` | 29 |
 | `liquidity` | 435 |
+| `market_journey` | 71 |
+| `market_regime` | 213 |
 | `rsi` | 101 |
 | `session_trend` | 19 |
+| `volume_participation` | 1085 |
 | `wick` | 243 |
 
 ### By session
 
 | session | detections |
 |---|---|
-| asia | 270 |
-| london | 456 |
-| new_york | 221 |
-| off | 116 |
+| asia | 753 |
+| london | 935 |
+| new_york | 499 |
+| off | 274 |
 
 ### By broker trading day
 
 | market date | detections |
 |---|---|
-| 2026-09-14 | 150 |
-| 2026-09-15 | 161 |
-| 2026-09-16 | 204 |
-| 2026-09-17 | 156 |
-| 2026-09-18 | 160 |
-| 2026-09-21 | 151 |
-| 2026-09-22 | 81 |
+| 2026-09-14 | 270 |
+| 2026-09-15 | 392 |
+| 2026-09-16 | 423 |
+| 2026-09-17 | 372 |
+| 2026-09-18 | 394 |
+| 2026-09-21 | 369 |
+| 2026-09-22 | 241 |
 
 ## Detection outcomes — `XAG_OUTCOME_V1`
 
-1063 detections, 700 evaluated, 697 with at least
-one COMPLETE horizon. 363 carry `direction=None` and have no
+2461 detections, 707 evaluated, 704 with at least
+one COMPLETE horizon. 1754 carry `direction=None` and have no
 favourable side to measure (§16, decision 48).
 
 Every column is read exactly as gold's is: horizon counts rather than detection
@@ -609,6 +613,41 @@ fixture's weekend gap.
 | **all** | `day_close` | 22 | 5 | 1 | 15/22 (68%) | 9/22 (41%) | 5/22 (23%) | 0/22 (0%) | 0/22 (0%) | +0.18 | -0.13 | 195m (n=15) | 13 | 5 | 0 |
 | **all** | `opposite_cross` | 26 | 1 | 1 | 11/26 (42%) | 8/26 (31%) | 3/26 (12%) | 0/26 (0%) | 0/26 (0%) | +0.06 | -0.04 | 100m (n=11) | 11 | 1 | 0 |
 
+### `ema_rsi_eligibility` — XAG_OUTCOME_V1
+
+29 detections, 7 evaluated, 7 with at least one COMPLETE horizon (22 context-only, no direction to measure)
+
+| session | horizon | complete | pending | invalid | reach $0.1 | reach $0.2 | reach $0.3 | reach $0.5 | reach $1 | median MFE (price) | median MAE (price) | median t→$0.1 | MFE_FIRST | MAE_FIRST | ambiguous |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `asia` | `c5` | 5 | 0 | 0 | 0/5 (0%) | 0/5 (0%) | 0/5 (0%) | 0/5 (0%) | 0/5 (0%) | +0.01 | -0.03 | — (n=0) | 0 | 0 | 0 |
+| `asia` | `c10` | 5 | 0 | 0 | 0/5 (0%) | 0/5 (0%) | 0/5 (0%) | 0/5 (0%) | 0/5 (0%) | +0.01 | -0.04 | — (n=0) | 0 | 0 | 0 |
+| `asia` | `c20` | 5 | 0 | 0 | 1/5 (20%) | 0/5 (0%) | 0/5 (0%) | 0/5 (0%) | 0/5 (0%) | +0.04 | -0.04 | 100m (n=1) | 1 | 0 | 0 |
+| `asia` | `m60` | 5 | 0 | 0 | 0/5 (0%) | 0/5 (0%) | 0/5 (0%) | 0/5 (0%) | 0/5 (0%) | +0.02 | -0.04 | — (n=0) | 0 | 0 | 0 |
+| `asia` | `session_close` | 5 | 0 | 0 | 0/5 (0%) | 0/5 (0%) | 0/5 (0%) | 0/5 (0%) | 0/5 (0%) | +0.03 | -0.04 | — (n=0) | 0 | 0 | 0 |
+| `asia` | `day_close` | 4 | 1 | 0 | 4/4 (100%) | 2/4 (50%) | 2/4 (50%) | 0/4 (0%) | 0/4 (0%) | +0.30 | -0.11 | 285m (n=4) | 4 | 0 | 0 |
+| `asia` | `opposite_cross` | 0 | 3 | 2 | — | — | — | — | — | — | — | — (n=0) | 0 | 0 | 0 |
+| `london` | `c5` | 1 | 0 | 0 | 1/1 (100%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | +0.15 | -0.01 | 25m (n=1) | 1 | 0 | 0 |
+| `london` | `c10` | 1 | 0 | 0 | 1/1 (100%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | +0.15 | -0.01 | 25m (n=1) | 1 | 0 | 0 |
+| `london` | `c20` | 1 | 0 | 0 | 1/1 (100%) | 1/1 (100%) | 1/1 (100%) | 0/1 (0%) | 0/1 (0%) | +0.33 | -0.01 | 25m (n=1) | 1 | 0 | 0 |
+| `london` | `m60` | 1 | 0 | 0 | 1/1 (100%) | 1/1 (100%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | +0.23 | -0.01 | 25m (n=1) | 1 | 0 | 0 |
+| `london` | `session_close` | 1 | 0 | 0 | 1/1 (100%) | 1/1 (100%) | 1/1 (100%) | 0/1 (0%) | 0/1 (0%) | +0.40 | -0.01 | 25m (n=1) | 1 | 0 | 0 |
+| `london` | `day_close` | 1 | 0 | 0 | 1/1 (100%) | 1/1 (100%) | 1/1 (100%) | 0/1 (0%) | 0/1 (0%) | +0.40 | -0.01 | 25m (n=1) | 1 | 0 | 0 |
+| `london` | `opposite_cross` | 0 | 1 | 0 | — | — | — | — | — | — | — | — (n=0) | 0 | 0 | 0 |
+| `off` | `c5` | 1 | 0 | 0 | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | +0.02 | -0.02 | — (n=0) | 0 | 0 | 0 |
+| `off` | `c10` | 1 | 0 | 0 | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | +0.05 | -0.02 | — (n=0) | 0 | 0 | 0 |
+| `off` | `c20` | 1 | 0 | 0 | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | +0.09 | -0.02 | — (n=0) | 0 | 0 | 0 |
+| `off` | `m60` | 1 | 0 | 0 | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | +0.07 | -0.02 | — (n=0) | 0 | 0 | 0 |
+| `off` | `session_close` | 1 | 0 | 0 | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | +0.09 | -0.02 | — (n=0) | 0 | 0 | 0 |
+| `off` | `day_close` | 1 | 0 | 0 | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | 0/1 (0%) | +0.05 | -0.02 | — (n=0) | 0 | 0 | 0 |
+| `off` | `opposite_cross` | 0 | 1 | 0 | — | — | — | — | — | — | — | — (n=0) | 0 | 0 | 0 |
+| **all** | `c5` | 7 | 0 | 0 | 1/7 (14%) | 0/7 (0%) | 0/7 (0%) | 0/7 (0%) | 0/7 (0%) | +0.01 | -0.02 | 25m (n=1) | 1 | 0 | 0 |
+| **all** | `c10` | 7 | 0 | 0 | 1/7 (14%) | 0/7 (0%) | 0/7 (0%) | 0/7 (0%) | 0/7 (0%) | +0.02 | -0.04 | 25m (n=1) | 1 | 0 | 0 |
+| **all** | `c20` | 7 | 0 | 0 | 2/7 (29%) | 1/7 (14%) | 1/7 (14%) | 0/7 (0%) | 0/7 (0%) | +0.05 | -0.04 | 62m (n=2) | 2 | 0 | 0 |
+| **all** | `m60` | 7 | 0 | 0 | 1/7 (14%) | 1/7 (14%) | 0/7 (0%) | 0/7 (0%) | 0/7 (0%) | +0.02 | -0.04 | 25m (n=1) | 1 | 0 | 0 |
+| **all** | `session_close` | 7 | 0 | 0 | 1/7 (14%) | 1/7 (14%) | 1/7 (14%) | 0/7 (0%) | 0/7 (0%) | +0.06 | -0.04 | 25m (n=1) | 1 | 0 | 0 |
+| **all** | `day_close` | 6 | 1 | 0 | 5/6 (83%) | 3/6 (50%) | 3/6 (50%) | 0/6 (0%) | 0/6 (0%) | +0.28 | -0.03 | 155m (n=5) | 5 | 0 | 0 |
+| **all** | `opposite_cross` | 0 | 5 | 2 | — | — | — | — | — | — | — | — (n=0) | 0 | 0 | 0 |
+
 ### `liquidity` — XAG_OUTCOME_V1
 
 435 detections, 435 evaluated, 434 with at least one COMPLETE horizon
@@ -651,6 +690,14 @@ fixture's weekend gap.
 | **all** | `day_close` | 341 | 35 | 59 | 195/341 (57%) | 122/341 (36%) | 66/341 (19%) | 1/341 (0%) | 0/341 (0%) | +0.16 | -0.20 | 295m (n=195) | 132 | 169 | 0 |
 | **all** | `opposite_cross` | 417 | 3 | 15 | 26/417 (6%) | 3/417 (1%) | 3/417 (1%) | 1/417 (0%) | 0/417 (0%) | +0.03 | -0.03 | 40m (n=26) | 26 | 78 | 0 |
 
+### `market_journey` — no outcomes
+
+71 detections, none evaluable: this agent emits `direction=None`, so there is no favourable side to measure (§16, decision 48).
+
+### `market_regime` — no outcomes
+
+213 detections, none evaluable: this agent emits `direction=None`, so there is no favourable side to measure (§16, decision 48).
+
 ### `rsi` — no outcomes
 
 101 detections, none evaluable: this agent emits `direction=None`, so there is no favourable side to measure (§16, decision 48).
@@ -658,6 +705,10 @@ fixture's weekend gap.
 ### `session_trend` — no outcomes
 
 19 detections, none evaluable: this agent emits `direction=None`, so there is no favourable side to measure (§16, decision 48).
+
+### `volume_participation` — no outcomes
+
+1085 detections, none evaluable: this agent emits `direction=None`, so there is no favourable side to measure (§16, decision 48).
 
 ### `wick` — no outcomes
 
@@ -670,11 +721,11 @@ sense in which the two rules' distances can be compared:
 
 | rung | XAGUSD | % of price | reached | XAUUSD | % of price | reached |
 |---|---|---|---|---|---|---|
-| 1 | $0.1 | 0.33% | 1005/4679 (21.5%) | $3 | 0.13% | 1905/5313 (35.9%) |
-| 2 | $0.2 | 0.67% | 390/4679 (8.3%) | $5 | 0.21% | 996/5313 (18.7%) |
-| 3 | $0.3 | 1.00% | 163/4679 (3.5%) | $10 | 0.42% | 250/5313 (4.7%) |
-| 4 | $0.5 | 1.67% | 3/4679 (0.1%) | $15 | 0.63% | 134/5313 (2.5%) |
-| 5 | $1 | 3.33% | 0/4679 (0.0%) | $20 | 0.83% | 80/5313 (1.5%) |
+| 1 | $0.1 | 0.33% | 1016/4720 (21.5%) | $3 | 0.13% | 1905/5313 (35.9%) |
+| 2 | $0.2 | 0.67% | 396/4720 (8.4%) | $5 | 0.21% | 996/5313 (18.7%) |
+| 3 | $0.3 | 1.00% | 168/4720 (3.6%) | $10 | 0.42% | 250/5313 (4.7%) |
+| 4 | $0.5 | 1.67% | 3/4720 (0.1%) | $15 | 0.63% | 134/5313 (2.5%) |
+| 5 | $1 | 3.33% | 0/4720 (0.0%) | $20 | 0.83% | 80/5313 (1.5%) |
 
 Both `reached` columns are COMPLETE horizons only, whole roster, whole fixture week.
 
@@ -699,13 +750,13 @@ beside it — and most rows here are far too small to read as anything but anecd
 
 | tag | with | without |
 |---|---|---|
-| `cross_at_lvn` | — (0/0) ⚠︎ | 2% (13/697) |
-| `cross_at_poc` | 1% (1/154) | 2% (12/543) |
-| `price_above_asia_va` | 3% (5/174) | 2% (8/523) |
-| `price_below_asia_va` | 3% (2/67) | 2% (11/630) |
-| `volatility_regime_high` | 0% (0/4) ⚠︎ | 2% (13/693) |
-| `volatility_regime_low` | 2% (8/419) | 2% (5/278) |
-| `volatility_regime_normal` | 1% (2/180) | 2% (11/517) |
+| `cross_at_lvn` | — (0/0) ⚠︎ | 2% (14/704) |
+| `cross_at_poc` | 1% (1/158) | 2% (13/546) |
+| `price_above_asia_va` | 3% (5/176) | 2% (9/528) |
+| `price_below_asia_va` | 3% (2/67) | 2% (12/637) |
+| `volatility_regime_high` | 0% (0/5) | 2% (14/699) |
+| `volatility_regime_low` | 2% (9/423) | 2% (5/281) |
+| `volatility_regime_normal` | 1% (2/182) | 2% (12/522) |
 
 ⚠︎ marks a split with too few COMPLETE horizons on one side to compare at all.
 
