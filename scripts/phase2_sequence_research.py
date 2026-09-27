@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime, time, timedelta
@@ -74,9 +75,9 @@ def _state_context(candle, engine, snapshot, detections) -> dict:
 def _quality(candles, horizon: int) -> dict:
     opens = [candle.open_time.utc for candle in candles]
     duplicates = len(opens) - len(set(opens))
-    chronological = all(left < right for left, right in zip(opens, opens[1:]))
+    chronological = all(left < right for left, right in zip(opens, opens[1:], strict=False))
     gaps = []
-    for left, right in zip(opens, opens[1:]):
+    for left, right in zip(opens, opens[1:], strict=False):
         delta = (right - left).total_seconds() / 60
         if delta > 5 and delta < 60 * 24:
             gaps.append(delta)
@@ -88,6 +89,8 @@ def _quality(candles, horizon: int) -> dict:
         "max_intraday_gap_minutes": max(gaps, default=0),
         "horizon_bars": horizon,
         "missing_required_horizon": 0,
+        "first_candle": opens[0].isoformat() if opens else None,
+        "last_candle": opens[-1].isoformat() if opens else None,
     }
 
 
@@ -202,6 +205,21 @@ def main() -> int:
         source_meta.update({"type": "file", "path": args.data, "point": point})
 
     quality = _quality(candles, args.horizon_bars)
+    requested_opens = [
+        candle.open_time.utc for candle in candles if start <= candle.open_time.utc < end
+    ]
+    quality["full_research_period_covered"] = bool(
+        requested_opens
+        and requested_opens[0] <= start + timedelta(days=7)
+        and requested_opens[-1] >= end - timedelta(days=7)
+    )
+    fingerprint_payload = "|".join(
+        f"{candle.open_time.utc.isoformat()}:{candle.open}:{candle.high}:{candle.low}:{candle.close}"
+        for candle in candles
+    )
+    quality["source_fingerprint"] = hashlib.sha256(
+        fingerprint_payload.encode("utf-8")
+    ).hexdigest()
     engine = AnalysisEngine(
         default_agents(config, symbol="XAUUSD", point=point),
         account_scope=config.account_scope, market_tz=config.market_tz,
@@ -222,7 +240,7 @@ def main() -> int:
     output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps(report["evidence_gate"], indent=2))
     print(f"sequences={len(records)} dataset={dataset_path} report={output}")
-    return 0 if report["evidence_gate"]["status"] == "PASS" else 2
+    return 0 if report["evidence_gate"]["status"] == "DATA_QUALITY_PASS" else 2
 
 
 if __name__ == "__main__":

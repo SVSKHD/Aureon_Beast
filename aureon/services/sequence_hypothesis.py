@@ -5,9 +5,10 @@ Pure research aggregation: no fitting, model registry writes, promotion or execu
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from statistics import mean, median
-from typing import Any, Iterable
+from typing import Any
 
 from aureon.models.enums import Direction
 from aureon.models.sequence_v1 import EMASequenceRecord
@@ -176,6 +177,10 @@ def build_phase2_report(
         failures.append("duplicate_open_times")
     if quality.get("missing_required_horizon", 0):
         failures.append("missing_required_horizon")
+    if not quality.get("full_research_period_covered", False):
+        failures.append("full_2023_through_jan_2026_period_not_covered")
+    if not quality.get("source_fingerprint"):
+        failures.append("source_fingerprint_missing")
 
     counter_records = [row for row in records if row.label.counter_move_candidate is not None]
     continuation_records = [
@@ -245,13 +250,14 @@ def build_phase2_report(
         },
     }
     report["evidence_gate"] = {
-        "status": "PASS" if not failures else "STOP",
+        "status": "DATA_QUALITY_PASS" if not failures else "STOP",
         "failures": failures,
         "criteria": {
             "min_sequences": gate.min_sequences,
             "require_both_directions": gate.require_both_directions,
             "max_ambiguous_fraction": gate.max_ambiguous_fraction,
         },
+        "hypothesis_supported": None,
         "phase3_approved": False,
         "reason": (
             "Statistical support must be explicitly reviewed after the report is generated; "
