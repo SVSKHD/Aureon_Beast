@@ -869,6 +869,54 @@ for any example inside its period; only `release` lets the month into Challenger
 so false positives and false negatives are stored as what the model actually said.
 `main_backtest.py` gained `--timeframe`; M5 remains the default.
 
+### The V1 validation sequence (train -> February exam -> learn -> March exam -> freeze)
+
+Everything below needs historical XAUUSD M5 candles (an archive under `data/live_candles`
+or an MT5 terminal) and, for the demo/shadow steps, the Windows VPS with the terminal up.
+None of it can run in a container without either. Dates are the plan, not defaults.
+
+    # 1. foundation examples (2023-2025) + January adaptation, persisted to training memory
+    python scripts/foundation_training.py build --mt5 --symbol XAUUSD --timeframe M5 \
+        --from 2023-01-01 --to 2025-12-31
+    python scripts/foundation_training.py build --mt5 --symbol XAUUSD --timeframe M5 \
+        --from 2026-01-01 --to 2026-01-31
+    # 2. what the daily/session bias preceded; retune thresholds ONLY from this table, then
+    #    rebuild with --bias-* overrides and compare the tables
+    python scripts/foundation_training.py bias-report --symbol XAUUSD --output data/backtests/bias_evidence.json
+    python scripts/foundation_training.py coverage --symbol XAUUSD --all-examples
+    # 3. first Champion: candidates -> walk-forward -> qualify -> shadow (promotion only via evidence)
+    python scripts/foundation_training.py train --symbol XAUUSD --from 2023-01-01 --to 2026-01-31
+    python scripts/foundation_training.py freeze --symbol XAUUSD
+    # 4. February as a true unseen exam
+    python scripts/foundation_training.py build --mt5 --symbol XAUUSD --from 2026-02-01 --to 2026-02-28
+    python scripts/foundation_training.py exam  --symbol XAUUSD --from 2026-02-01 --to 2026-02-28
+    python scripts/foundation_training.py score --exam-id <exam id>
+    # 5. learn from February, compare generations, let EvolutionAgent govern
+    python scripts/foundation_training.py release --exam-id <exam id>
+    python scripts/foundation_training.py train --symbol XAUUSD --from 2023-01-01 --to 2026-02-28
+    python scripts/foundation_training.py report --symbol XAUUSD
+    python scripts/evolve_model.py --model-id <shadow id> evaluate-shadow
+    # 6. March, untouched
+    python scripts/foundation_training.py freeze --symbol XAUUSD
+    python scripts/foundation_training.py build --mt5 --symbol XAUUSD --from 2026-03-01 --to 2026-03-31
+    python scripts/foundation_training.py exam  --symbol XAUUSD --from 2026-03-01 --to 2026-03-31
+    python scripts/foundation_training.py score --exam-id <exam id>
+    # 7. exit manager versus fixed +10, over the same setups
+    python scripts/foundation_training.py exits --mt5 --symbol XAUUSD --from 2023-01-01 --to 2026-03-31 \
+        --stop-move 7 --fixed-target 10 --output data/backtests/exit_policies.json
+    # 8. demo/shadow: run the stack with AUREON_AUTONOMOUS_MANAGEMENT_ENABLED=false and read
+    #    trade_management_events / scripts/v1_status.py for the stops and exits Aureon would have sent
+    # 9. demo execution: switch AUREON_AUTONOMOUS_MANAGEMENT_ENABLED=true on a DEMO account
+    #    and walk the drills in docs/DEMO_EXECUTION_CHECKLIST.md plus a stop move, a rejection,
+    #    a restart mid-trail and a hand-opened position
+    # 12. freeze the baseline
+    python scripts/freeze_v1_baseline.py --symbol XAUUSD --tag v1.0.0 \
+        --include data/backtests/bias_evidence.json --include data/backtests/exit_policies.json
+
+A training range that overlaps an OPEN or SCORED exam raises `LeakageError`; that is the
+guard, not a nuisance. `exits` reports evidence only: no trailing parameter is adopted from
+its table without the demo/shadow run in step 8.
+
 ### Legacy learning rows
 
 `training_examples` (+6 / EOD) stay readable for research. Supplying one to any V1 trainer,

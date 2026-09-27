@@ -19,6 +19,11 @@ Subcommands (dates are examples, never defaults):
   release  let a SCORED exam period enter Challenger training
   report   generation comparison between the Champion and the newest challenger/shadow
   coverage print the training-coverage table of the Champion (or all examples)
+  bias-report  what the frozen daily/session bias preceded (clean_10 / +20 / +30 / +40 rates
+           by direction x session x bias, alignment, transitions), sample counts included
+  exits    historical exit-manager validation: fixed +10 TP versus the live
+           DeterministicExitManager under a small policy grid (runners, premature exits,
+           MFE captured, give-back, drawdown, net move)
 
 The sequence FOUNDATION -> ADAPTATION -> FREEZE -> EXAM(Feb) -> SCORE -> RELEASE -> TRAIN ->
 FREEZE -> EXAM(Mar) is enforced by exam state: training refuses an unreleased period.
@@ -119,10 +124,8 @@ def _load_candles(
 
 
 def cmd_build(args, config: AureonConfig) -> int:
-    from aureon.engine.analysis_engine import AnalysisEngine
     from aureon.services.foundation_pipeline import build_canonical_examples, persist_examples
     from aureon.services.symbol_intelligence_agent import SymbolIntelligenceAgent
-    from main_observer import default_agents
 
     symbol = args.symbol.upper()
     timeframe = Timeframe(args.timeframe)
@@ -135,13 +138,7 @@ def cmd_build(args, config: AureonConfig) -> int:
         print(f"no {symbol} {timeframe.value} candles for the requested range", file=sys.stderr)
         return 2
     point = point or SymbolIntelligenceAgent().resolve_tuning(symbol).point
-    engine = AnalysisEngine(
-        default_agents(config, symbol=symbol, point=point),
-        account_scope=config.account_scope,
-        market_tz=config.market_tz,
-        mtf_bars=config.mtf_m5_bars,
-        mtf_periods=(config.ema_fast, config.ema_slow),
-    )
+    engine = _engine(config, symbol, point)
     print(
         f"replaying {len(candles):,} candles for {symbol} {timeframe.value} "
         f"{args.start}..{args.end}",
@@ -155,6 +152,7 @@ def cmd_build(args, config: AureonConfig) -> int:
         horizon_bars=args.horizon_bars,
         clean_target=args.clean_target,
         clean_max_mae=args.clean_max_mae,
+        bias_policy=_bias_policy(args),
         on_progress=lambda done, total, rows: (
             print(f"  {done:,}/{total:,} candles, {rows} setups", flush=True)
             if done % max(1, total // 10) == 0 or done == total
@@ -170,6 +168,122 @@ def cmd_build(args, config: AureonConfig) -> int:
     storage = _storage(config)
     written = persist_examples(storage.training_memory, examples)
     print(f"persisted {written} canonical examples to training memory")
+    return 0
+
+
+def _engine(config: AureonConfig, symbol: str, point: float):
+    from aureon.engine.analysis_engine import AnalysisEngine
+    from main_observer import default_agents
+
+    return AnalysisEngine(
+        default_agents(config, symbol=symbol, point=point),
+        account_scope=config.account_scope,
+        market_tz=config.market_tz,
+        mtf_bars=config.mtf_m5_bars,
+        mtf_periods=(config.ema_fast, config.ema_slow),
+    )
+
+
+def _bias_policy(args):
+    """A DailyBiasPolicy from --bias-* overrides, or None for the defaults."""
+    from aureon.services.daily_market_bias import DailyBiasPolicy
+
+    overrides = {
+        name: getattr(args, f"bias_{name}")
+        for name in (
+            "strong_strength",
+            "directional_strength",
+            "mixed_agreement_below",
+            "reversal_session_strength",
+            "session_smoothing_bars",
+            "daily_smoothing_bars",
+        )
+        if getattr(args, f"bias_{name}", None) is not None
+    }
+    return DailyBiasPolicy(**overrides) if overrides else None
+
+
+def _add_bias_flags(parser) -> None:
+    group = parser.add_argument_group("daily bias thresholds (defaults from DailyBiasPolicy)")
+    group.add_argument("--bias-strong-strength", dest="bias_strong_strength", type=float)
+    group.add_argument("--bias-directional-strength", dest="bias_directional_strength", type=float)
+    group.add_argument(
+        "--bias-mixed-agreement-below", dest="bias_mixed_agreement_below", type=float
+    )
+    group.add_argument(
+        "--bias-reversal-session-strength", dest="bias_reversal_session_strength", type=float
+    )
+    group.add_argument(
+        "--bias-session-smoothing-bars", dest="bias_session_smoothing_bars", type=int
+    )
+    group.add_argument("--bias-daily-smoothing-bars", dest="bias_daily_smoothing_bars", type=int)
+
+
+def cmd_bias_report(args, config: AureonConfig) -> int:
+    from aureon.services.foundation_pipeline import bias_evidence_report, render_bias_evidence
+
+    storage = _storage(config)
+    examples = storage.training_memory.canonical_between(
+        args.symbol.upper(), args.start or "0001-01-01", args.end or "9999-12-31"
+    )
+    report = bias_evidence_report(examples, min_samples=args.min_samples)
+    print(render_bias_evidence(report))
+    if args.output:
+        import json
+
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+        print(f"wrote {args.output}")
+    return 0
+
+
+def cmd_exits(args, config: AureonConfig) -> int:
+    from aureon.management.exit_manager import ExitPolicy
+    from aureon.services.decision_backtest import run_decision_replay
+    from aureon.services.exit_policy_backtest import compare_exit_policies, render_exit_comparison
+    from aureon.services.symbol_intelligence_agent import SymbolIntelligenceAgent
+
+    symbol = args.symbol.upper()
+    timeframe = Timeframe(args.timeframe)
+    config = config.model_copy(update={"symbols": (symbol,), "timeframes": (timeframe,)})
+    start = _bound(args.start, config.market_tz)
+    end = _bound(args.end, config.market_tz, inclusive_end=("T" not in args.end))
+    tail_days = max(2, ((args.hold_bars * timeframe.minutes + 1439) // 1440) + 4)
+    candles, point = _load_candles(args, config, symbol, timeframe, start, end, tail_days)
+    if not candles:
+        print("no candles for the requested range", file=sys.stderr)
+        return 2
+    point = point or SymbolIntelligenceAgent().resolve_tuning(symbol).point
+    rows = run_decision_replay(candles=candles, engine=_engine(config, symbol, point))
+    rows = [row for row in rows if start <= to_utc(datetime.fromisoformat(row.at)) < end]
+    policies = None
+    if args.policy:
+        policies = []
+        for spec in args.policy:
+            activation, lock, trail = (float(x) for x in spec.split(","))
+            policies.append(
+                ExitPolicy(
+                    activation_move=activation, minimum_lock=lock, trail_fraction_of_peak=trail
+                )
+            )
+    summaries = compare_exit_policies(
+        rows,
+        candles,
+        stop_move=args.stop_move,
+        fixed_target=args.fixed_target,
+        hold_bars=args.hold_bars,
+        policies=policies,
+    )
+    print(f"{sum(1 for r in rows if r.eligible)} eligible setups {args.start}..{args.end}")
+    print(render_exit_comparison(summaries))
+    if args.output:
+        import json
+
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(
+            json.dumps(summaries, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        print(f"wrote {args.output}")
     return 0
 
 
@@ -388,6 +502,33 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("--clean-target", type=float, default=10.0)
     build.add_argument("--clean-max-mae", type=float, default=7.0)
     build.add_argument("--dry-run", action="store_true")
+    _add_bias_flags(build)
+
+    bias_report = sub.add_parser("bias-report")
+    bias_report.add_argument("--symbol", required=True)
+    bias_report.add_argument("--from", dest="start")
+    bias_report.add_argument("--to", dest="end")
+    bias_report.add_argument("--min-samples", type=int, default=30)
+    bias_report.add_argument("--output")
+
+    exits = sub.add_parser("exits")
+    exits_source = exits.add_mutually_exclusive_group(required=True)
+    exits_source.add_argument("--data")
+    exits_source.add_argument("--data-dir")
+    exits_source.add_argument("--mt5", action="store_true")
+    exits.add_argument("--symbol", required=True)
+    exits.add_argument("--timeframe", default="M5")
+    exits.add_argument("--from", dest="start", required=True)
+    exits.add_argument("--to", dest="end", required=True)
+    exits.add_argument("--stop-move", type=float, default=7.0)
+    exits.add_argument("--fixed-target", type=float, default=10.0)
+    exits.add_argument("--hold-bars", type=int, default=864)
+    exits.add_argument(
+        "--policy",
+        action="append",
+        help="activation,lock,trail_fraction (repeatable); default grid when omitted",
+    )
+    exits.add_argument("--output")
 
     train = sub.add_parser("train")
     train.add_argument("--symbol", required=True)
@@ -439,6 +580,8 @@ def main(argv: list[str] | None = None) -> int:
         "release": cmd_release,
         "report": cmd_report,
         "coverage": cmd_coverage,
+        "bias-report": cmd_bias_report,
+        "exits": cmd_exits,
     }
     return handlers[args.command](args, config)
 

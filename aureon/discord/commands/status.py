@@ -102,6 +102,7 @@ class StatusCommands:
             system_state=state,
             heartbeats=heartbeats,
             settings=settings,
+            aureon_trades=[t for t in open_trades if getattr(t, "aureon_managed", False)],
             open_trades=len(for_symbol(open_trades, symbol)),
             pending_requests=len(for_symbol(pending, symbol)),
             latest_review=latest,

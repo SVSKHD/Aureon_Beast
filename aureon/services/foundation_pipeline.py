@@ -76,6 +76,7 @@ def build_canonical_examples(
     clean_max_mae: float = 7.0,
     target_move: float = 10.0,
     on_progress: Callable[[int, int, int], None] | None = None,
+    bias_policy: Any | None = None,
 ) -> tuple[list[CanonicalTrainingExample], dict[str, int]]:
     """Replay candles through the real agents and freeze canonical examples.
 
@@ -90,6 +91,7 @@ def build_canonical_examples(
         engine=engine,
         target_move=target_move,
         on_progress=on_progress,
+        bias_policy=bias_policy,
     )
     in_range = [row for row in rows if start <= to_utc(datetime.fromisoformat(row.at)) < end]
     examples = canonical_examples_from_replay(
@@ -106,6 +108,98 @@ def build_canonical_examples(
         "clean_10": sum(1 for example in examples if example.outcome.clean_10),
     }
     return examples, counts
+
+
+def bias_evidence_report(examples: list[Any], *, min_samples: int = 30) -> dict[str, Any]:
+    """What the frozen daily/session bias actually preceded (item 2 evidence).
+
+    Buckets canonical examples by (direction, session, daily bias), by daily-bias
+    alignment and by session transition, with sample counts beside every rate. Nothing
+    here tunes anything; it is the table a human reads before touching a threshold.
+    """
+    from collections import defaultdict
+
+    cells: dict[str, dict[str, list[Any]]] = defaultdict(lambda: defaultdict(list))
+
+    def add(group: str, key: str, example: Any) -> None:
+        cells[group][key].append(example)
+
+    for example in examples:
+        f = example.features
+        direction = f.direction.value
+        session = f.current_session or f.session or "unknown"
+        daily = f.daily_bias_at_entry or "unknown"
+        session_bias = f.session_bias_at_entry or "unknown"
+        add("direction|session|daily_bias", f"{direction}|{session}|{daily}", example)
+        add("direction|session|session_bias", f"{direction}|{session}|{session_bias}", example)
+        aligned = f.entry_aligned_with_daily_bias
+        if aligned is None and daily in {"strong_bullish", "bullish", "strong_bearish", "bearish"}:
+            aligned = (daily.endswith("bullish")) == (direction == "buy")
+        add(
+            "daily_bias_alignment",
+            "aligned" if aligned is True else "opposed" if aligned is False else "undirected",
+            example,
+        )
+        add("daily_bias", daily, example)
+        add("session_bias", session_bias, example)
+        add("reversal_risk", f.reversal_risk_at_entry or "unknown", example)
+        add("trend_quality", f.trend_quality_at_entry or "unknown", example)
+        add("session_transition_state", f.session_transition_state or "unknown", example)
+
+    def stats(rows: list[Any]) -> dict[str, Any]:
+        n = len(rows)
+        clean = sum(1 for r in rows if r.outcome.clean_10)
+        return {
+            "sample_count": n,
+            "clean_10_count": clean,
+            "clean_10_rate": round(clean / n, 4) if n else None,
+            "reach_20_rate": _rate(rows, lambda r: r.outcome.reached_20),
+            "reach_30_rate": _rate(rows, lambda r: r.outcome.reached_30),
+            "reach_40_rate": _rate(rows, lambda r: r.outcome.reached_40),
+            "average_mfe": _mean(rows, lambda r: r.outcome.max_favourable_move),
+            "average_mae": _mean(rows, lambda r: r.outcome.max_adverse_move),
+            "small_sample": n < min_samples,
+        }
+
+    return {
+        "schema": "AUREON_BIAS_EVIDENCE_V1",
+        "total": len(examples),
+        "min_samples": min_samples,
+        "groups": {
+            group: {key: stats(rows) for key, rows in sorted(values.items())}
+            for group, values in cells.items()
+        },
+    }
+
+
+def _rate(rows: list[Any], flag: Callable[[Any], bool]) -> float | None:
+    return round(sum(1 for r in rows if flag(r)) / len(rows), 4) if rows else None
+
+
+def _mean(rows: list[Any], value: Callable[[Any], float]) -> float | None:
+    return round(sum(value(r) for r in rows) / len(rows), 3) if rows else None
+
+
+def render_bias_evidence(report: dict[str, Any]) -> str:
+    lines = [f"bias evidence: {report['total']} examples (min_samples {report['min_samples']})"]
+    for group, values in report["groups"].items():
+        lines.append(f"\n[{group}]")
+        lines.append(
+            f"{'bucket':<44}{'n':>6}{'clean10':>9}{'r20':>7}{'r30':>7}{'r40':>7}{'mfe':>7}{'mae':>7}"
+        )
+        for key, s in values.items():
+            flag = "*" if s["small_sample"] else " "
+
+            def pct(v: float | None) -> str:
+                return "  -  " if v is None else f"{v * 100:4.0f}%"
+
+            lines.append(
+                f"{key:<44}{s['sample_count']:>6}{pct(s['clean_10_rate']):>9}"
+                f"{pct(s['reach_20_rate']):>7}{pct(s['reach_30_rate']):>7}{pct(s['reach_40_rate']):>7}"
+                f"{(s['average_mfe'] or 0):>7.1f}{(s['average_mae'] or 0):>7.1f}{flag}"
+            )
+    lines.append("* = below min_samples; not evidence")
+    return "\n".join(lines)
 
 
 def persist_examples(training_memory: Any, examples: list[CanonicalTrainingExample]) -> int:

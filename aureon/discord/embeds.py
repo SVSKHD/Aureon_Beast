@@ -151,6 +151,12 @@ def status_embed(screen: StatusScreen) -> Any:
             value="\n".join(screen.agent_highway),
             inline=False,
         )
+    if screen.intelligence:
+        embed.add_field(
+            name="V1 intelligence",
+            value="\n".join(screen.intelligence)[:1024],
+            inline=False,
+        )
     embed.add_field(
         name="Trading",
         value="🟢 enabled" if screen.trading_enabled else "🔴 disabled",

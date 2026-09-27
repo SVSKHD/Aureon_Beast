@@ -291,6 +291,7 @@ class Observer:
         #: snapshot is frozen into every setup's V1 features and published in system_state.
         self.daily_bias_agent = DailyMarketBiasAgent()
         self._daily_bias_reads: dict[tuple[str, Timeframe], object] = {}
+        self._entry_intelligence: dict[tuple[str, Timeframe], object] = {}
         #: Set by ``build_observer``; a test observer keeps its bias state in memory only.
         self.daily_bias_store: DailyBiasStateStore | None = None
 
@@ -1019,6 +1020,9 @@ class Observer:
                         setup, event, extra_context=full_context
                     )
                     if intelligence is not None:
+                        self._entry_intelligence[(candle.symbol, candle.timeframe)] = (
+                            intelligence
+                        )
                         self.agent_highway.publish(
                             topic="decision.ml.champion",
                             source_agent="champion_prediction",
@@ -1884,6 +1888,7 @@ class Observer:
                             (symbol, timeframe)
                         ),
                         daily_bias=self._daily_bias_reads.get((symbol, timeframe)),
+                        entry_intelligence=self._entry_intelligence.get((symbol, timeframe)),
                         cross_venue_blueprint=self._cross_venue_blueprints.get(symbol.upper()),
                     )
                 )

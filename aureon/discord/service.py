@@ -1731,6 +1731,8 @@ class StatusScreen:
     age_seconds: float | None = None
     agent_highway: list[str] = field(default_factory=list)
     symbol_registry: list[str] = field(default_factory=list)
+    #: V1 intelligence: the Champion's latest recorded call and the managed position.
+    intelligence: list[str] = field(default_factory=list)
 
     @property
     def asleep(self) -> bool:
@@ -1845,6 +1847,7 @@ def build_live_panel(state: Any) -> LivePanel:
         f"last wick {_event(state.last_wick, 'classification')} at "
         f"{_fmt_at((state.last_wick or {}).get('at'))}",
         *_context_agent_lines(state),
+        *_daily_bias_lines(state),
         *_m5_execution_gate_lines(state),
         *_decision_agent_lines(state),
         *_agent19_lines(state),
@@ -1853,6 +1856,85 @@ def build_live_panel(state: Any) -> LivePanel:
         *_context_lines(state, quote),
     ]
     return panel
+
+
+def _daily_bias_lines(state: Any) -> list[str]:
+    """The Daily Market Bias Agent's published snapshot (V1), rendered, never computed.
+
+    Strength and quality are deterministic scores; the line says so by never calling them
+    probabilities. Rendered whether or not the observer has published one, like every row.
+    """
+    bias = getattr(state, "daily_bias", None)
+    if bias is None:
+        return [f"daily bias {UNKNOWN}", f"session bias {UNKNOWN}"]
+    preferred = bias.preferred_direction.value.upper() if bias.preferred_direction else UNKNOWN
+    best = bias.best_session_so_far.value if bias.best_session_so_far else UNKNOWN
+    return [
+        f"daily bias {bias.daily_bias.value} · strength {bias.daily_bias_strength:.2f} · "
+        f"prefers {preferred} · trend {bias.trend_quality.value} · "
+        f"vol {bias.volatility_state.value} · reversal risk {bias.reversal_risk.value}",
+        f"session bias {bias.current_session.value} {bias.session_bias.value} · "
+        f"strength {bias.session_bias_strength:.2f} · "
+        f"opportunity {bias.opportunity_quality:.2f} · best so far {best} · "
+        f"{bias.session_transition_state or UNKNOWN}",
+    ]
+
+
+def v1_intelligence_lines(intelligence: Any | None, trade: Any | None) -> list[str]:
+    """The Champion's latest recorded call and the managed position (V1 item 10).
+
+    ``intelligence`` is the observer-published ``EntryIntelligence``; ``trade`` is the
+    Aureon-owned open position from ``trades``. Discord renders both and computes nothing:
+    the decision, confidence and coverage are exactly what the observer recorded when the
+    setup confirmed, and the stop and phase are what the monitor persisted.
+    """
+    lines: list[str] = []
+    if intelligence is None:
+        lines.append(f"champion {UNKNOWN} · no recorded call yet")
+    else:
+        clean = intelligence.probability_clean_10
+        ladder = " ".join(
+            f"+{n}:{(getattr(intelligence, f'probability_reach_{n}') or 0.0):.2f}"
+            for n in (5, 10, 20, 30, 40)
+        )
+        coverage = intelligence.training_coverage
+        decision = getattr(intelligence.decision, "value", intelligence.decision)
+        lines.append(
+            f"champion {intelligence.model_id} gen {intelligence.generation} · {decision} · "
+            f"P(clean_10) {UNKNOWN if clean is None else f'{clean:.2f}'} · "
+            f"{intelligence.direction.value.upper()} {intelligence.setup_id[:12]} at "
+            f"{_fmt_at(intelligence.predicted_at.isoformat())}"
+        )
+        lines.append(
+            f"  {ladder} · bias {intelligence.daily_bias or UNKNOWN}"
+            f"({_fmt(intelligence.daily_bias_strength)})"
+            f" · session {intelligence.session or UNKNOWN} {intelligence.session_bias or UNKNOWN}"
+            f" · coverage {getattr(coverage.status, 'value', coverage.status)}"
+            f" ({coverage.similar_samples} similar)"
+        )
+        lines.append(f"  reason: {intelligence.reason}")
+    if trade is None:
+        lines.append(f"aureon position {UNKNOWN}")
+    else:
+        state = getattr(trade, "management_state", None)
+        if state is None:
+            lines.append(
+                f"aureon position {trade.symbol} {trade.direction.value.upper()} "
+                f"@ {_fmt(trade.open_price)} · management {UNKNOWN}"
+            )
+        else:
+            reached = " ".join(
+                f"+{n}" for n in (5, 10, 20, 30, 40) if getattr(state, f"reached_{n}")
+            )
+            lines.append(
+                f"aureon position {trade.symbol} {trade.direction.value.upper()} "
+                f"@ {_fmt(trade.open_price)} · {state.phase.value} · "
+                f"stop {_fmt(state.current_stop)}"
+                f" · mfe {state.mfe:.2f} mae {state.mae:.2f} · reached {reached or UNKNOWN}"
+                f" · protection {'on' if state.protection_activated else 'pending'}"
+                f" · trail updates {state.trail_updates}"
+            )
+    return lines
 
 
 def _context_agent_lines(state: Any) -> list[str]:
@@ -2122,6 +2204,7 @@ def build_status(
     symbol: str | None = None,
     now: datetime | None = None,
     sleep_heartbeat_seconds: float = DEFAULT_SLEEP_HEARTBEAT_SECONDS,
+    aureon_trades: list[Any] | None = None,
 ) -> StatusScreen:
     """Assemble the status screen from Firestore reads only (§59).
 
@@ -2183,6 +2266,20 @@ def build_status(
     state_updated = getattr(system_state, "updated_at", None)
     highway_lines = _agent_highway_lines(system_state, symbol=symbol)
     symbol_registry = _symbol_registry_lines(system_state, symbol=symbol)
+    intelligence_lines: list[str] = []
+    for symbol_state in getattr(system_state, "symbols", ()) or ():
+        if symbol is not None and symbol_state.symbol != symbol.upper():
+            continue
+        managed = next(
+            (t for t in (aureon_trades or []) if t.symbol == symbol_state.symbol), None
+        )
+        prefix = f"{symbol_state.symbol} " if symbol is None else ""
+        intelligence_lines.extend(
+            prefix + line
+            for line in v1_intelligence_lines(
+                getattr(symbol_state, "entry_intelligence", None), managed
+            )
+        )
 
     screen = StatusScreen(
         updated_at=to_utc(state_updated) if state_updated else None,
@@ -2204,6 +2301,7 @@ def build_status(
             else None
         ),
         agent_highway=highway_lines,
+        intelligence=intelligence_lines,
         symbol_registry=symbol_registry,
     )
 

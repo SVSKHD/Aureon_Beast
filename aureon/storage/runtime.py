@@ -137,6 +137,13 @@ class ModelReadAdapter:
     def shadow_summary(self, symbol: str) -> Any:
         return self._repo.shadow_summary(symbol)
 
+    def latest_prediction(self, symbol: str) -> Any:
+        """The Champion's newest recorded prediction, for the intelligence line in /status."""
+        champion = self._repo.champion(symbol)
+        if champion is None:
+            return None
+        return self._repo.latest_prediction(symbol, model_id=champion.model_id)
+
 
 class SessionReadAdapter:
     """Read-only session shape exposed to Discord."""
