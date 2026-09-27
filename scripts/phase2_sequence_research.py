@@ -174,13 +174,38 @@ def replay_sequences(candles, engine, start, end, horizon: int):
     )
     records = []
     missing_horizon = 0
+    realigned_crosses = 0
     for index, cross, context in crosses:
-        future = candles[index + 1:index + 1 + horizon]
+        # AnalysisEngine detections may be stamped at the close boundary of
+        # the candle that emitted them.  In that case the next candle's open
+        # can equal detection.detected_at, which violates the sequence
+        # contract requiring every future candle to be strictly after the
+        # frozen cross timestamp.  Derive the horizon from the detection
+        # timestamp itself instead of assuming index + 1 is always future.
+        cross_at = to_utc(cross.detected_at.utc)
+        future_start = index + 1
+        while (
+            future_start < len(candles)
+            and to_utc(candles[future_start].open_time.utc) <= cross_at
+        ):
+            future_start += 1
+        if future_start != index + 1:
+            realigned_crosses += 1
+
+        future_end = future_start + horizon
+        future = candles[future_start:future_end]
         if len(future) < horizon:
             missing_horizon += 1
             continue
+        if to_utc(future[0].open_time.utc) <= cross_at:
+            raise AssertionError(
+                "Phase-2 future-window alignment failed: "
+                f"cross={cross_at.isoformat()} "
+                f"first_future={future[0].open_time.utc.isoformat()}"
+            )
+
         observable = []
-        for future_index in range(index + 1, index + 1 + horizon):
+        for future_index in range(future_start, future_end):
             state = dict(contexts[future_index])
             state["detections"] = [
                 _detection_row(row) for row in detections_by_index[future_index]
@@ -206,6 +231,11 @@ def replay_sequences(candles, engine, start, end, horizon: int):
         ),
         flush=True,
     )
+    if realigned_crosses:
+        print(
+            f"Cross/future alignment adjusted for {realigned_crosses:,} sequence(s).",
+            flush=True,
+        )
     return records, missing_horizon
 
 
