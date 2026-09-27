@@ -9,6 +9,7 @@ import pytest
 from aureon.services.backup_service import verify_manifest
 from aureon.services.foundation_pipeline import bias_evidence_report, render_bias_evidence
 from aureon.services.v1_baseline import freeze_v1_baseline
+from tests.unit.test_v1_release import reviewed_ledger
 from tests.unit.v1_fixtures import constant_model, examples
 
 
@@ -36,6 +37,13 @@ def test_baseline_freeze_is_verifiable_and_immutable(storage, tmp_path) -> None:
     storage.models.write_model(constant_model("champ", clean=0.7))
     result = tmp_path / "exits.json"
     result.write_text(json.dumps([{"label": "fixed"}]), encoding="utf-8")
+    evidence = reviewed_ledger(
+        tmp_path,
+        storage.models.champion("XAUUSD"),
+        config={"symbols": ["XAUUSD"]},
+        exit_policy={"activation_move": 5.0},
+        thresholds={"enter": 0.55},
+    )
     target = freeze_v1_baseline(
         root=tmp_path / "baselines",
         tag="v1.0.0-test",
@@ -45,6 +53,8 @@ def test_baseline_freeze_is_verifiable_and_immutable(storage, tmp_path) -> None:
         exit_policy={"activation_move": 5.0},
         thresholds={"enter": 0.55},
         extra_files=[result],
+        evidence=evidence,
+        commit="a" * 40,
     )
     assert (target / "champion.json").exists() and (target / "results" / "exits.json").exists()
     summary = json.loads((target / "baseline.json").read_text(encoding="utf-8"))

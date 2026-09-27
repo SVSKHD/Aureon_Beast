@@ -32,3 +32,7 @@ data/live_candles/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Private real-run logs and immutable local release bundles.
+data/v1_evidence/
+baselines/
