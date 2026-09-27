@@ -90,6 +90,24 @@ class BrokerInterface(ABC):
         reconciled rather than retried (§47).
         """
 
+    def modify_position(
+        self, position_id: int, *, sl: float | None = None, tp: float | None = None
+    ) -> BrokerOrderResult:
+        """Move a live position's stop-loss and/or take-profit.
+
+        Used by the deterministic exit manager, through the executor, to ratchet an
+        Aureon-owned position's stop. May fail because the position just closed, which is
+        reconciled rather than retried. A broker that cannot modify says so with
+        ``ok=False`` rather than raising, so the manager's state stays honest.
+        """
+        from aureon.models.enums import FailureCode
+
+        return BrokerOrderResult(
+            ok=False,
+            failure_code=FailureCode.BROKER_REJECTED,
+            message=f"{type(self).__name__} does not support modify_position",
+        )
+
     # ── Reading state ─────────────────────────────────────────────────────────
 
     @abstractmethod

@@ -10,9 +10,7 @@ from aureon.ml.features import FeatureEncoder, raw_training_features
 from aureon.ml.logistic import binary_metrics, fit_logistic
 from aureon.models.base import to_utc, utc_now
 from aureon.models.ml import BacktestFold, ModelBacktest, TargetMetrics
-from aureon.models.training import TrainingExample
 from aureon.services.model_training import (
-    ALGORITHM,
     FEATURE_SCHEMA,
     LABEL_SCHEMA,
     TARGETS,
@@ -201,7 +199,7 @@ class WalkForwardBacktester:
     @staticmethod
     def _id(symbol: str, at: Any) -> str:
         digest = hashlib.sha256(
-            f"walk_forward|{symbol}|{at.isoformat()}".encode("utf-8")
+            f"walk_forward|{symbol}|{at.isoformat()}".encode()
         ).hexdigest()[:20]
         return f"backtest_{symbol.lower()}_{digest}"
 
@@ -234,6 +232,8 @@ class V1WalkForwardBacktester:
         min_train_days: int = 20,
         test_days: int = 5,
         min_train_samples: int = 30,
+        start_market_date: str = "0001-01-01",
+        end_market_date: str = "9999-12-31",
     ) -> ModelBacktest:
         from aureon.ml.v1_features import V1FeatureEncoder, raw_v1_features
         from aureon.models.learning_v1 import FEATURE_SCHEMA_V1, LABEL_SCHEMA_V1
@@ -241,6 +241,8 @@ class V1WalkForwardBacktester:
             V1_TARGETS,
             fit_v1_target,
             predict_v1_target,
+        )
+        from aureon.services.v1_model_training import (
             target_value as v1_target_value,
         )
 
@@ -253,16 +255,18 @@ class V1WalkForwardBacktester:
         if algorithm not in {"logistic_regression_v1", "boosted_stumps_v1"}:
             raise ValueError(f"V1 walk-forward does not support {algorithm!r}")
 
-        examples = [
-            example
-            for example in self.training_memory.canonical_between(
+        from aureon.services.v1_model_training import assert_canonical_examples
+
+        examples = list(
+            self.training_memory.canonical_between(
                 symbol,
-                "0001-01-01",
-                "9999-12-31",
+                start_market_date,
+                end_market_date,
             )
-            if example.feature_schema == FEATURE_SCHEMA_V1
-            and example.label_schema == LABEL_SCHEMA_V1
-        ]
+        )
+        # Fail clearly rather than silently dropping rows: a walk-forward that quietly
+        # skipped legacy schemas would report a validation nobody could reproduce.
+        assert_canonical_examples(examples, what=f"{symbol} V1 walk-forward")
         examples.sort(key=lambda one: (one.market_date, one.features.timestamp, one.setup_id))
         dates = sorted({example.market_date for example in examples})
 
@@ -290,6 +294,7 @@ class V1WalkForwardBacktester:
         folds: list[BacktestFold] = []
         aggregate_labels: dict[str, list[int]] = defaultdict(list)
         aggregate_probabilities: dict[str, list[float]] = defaultdict(list)
+        aggregate_examples: dict[str, list[Any]] = defaultdict(list)
         fold_number = 0
         test_start_index = min_train_days
 
@@ -363,6 +368,7 @@ class V1WalkForwardBacktester:
                     metrics[target] = TargetMetrics.model_validate(metric_data)
                     aggregate_labels[target].extend(test_labels)
                     aggregate_probabilities[target].extend(probabilities)
+                    aggregate_examples[target].extend(test)
 
             folds.append(
                 BacktestFold(
@@ -386,10 +392,14 @@ class V1WalkForwardBacktester:
                 aggregate_labels[target],
                 aggregate_probabilities[target],
             )
+            # Averages over the OUT-OF-SAMPLE positives only, so the aggregate describes
+            # what the folds actually scored rather than the whole memory.
             target_examples = [
                 one
-                for one in examples
-                if v1_target_value(one, target)
+                for one, label in zip(
+                    aggregate_examples[target], aggregate_labels[target], strict=True
+                )
+                if label == 1
             ]
             metric_data["average_mae"] = (
                 sum(one.outcome.max_adverse_move for one in target_examples)
@@ -429,3 +439,10 @@ class V1WalkForwardBacktester:
         )
         self.models.write_backtest(result)
         return result
+
+    @staticmethod
+    def _id(symbol: str, at: Any) -> str:
+        digest = hashlib.sha256(
+            f"walk_forward|{symbol}|{at.isoformat()}".encode()
+        ).hexdigest()[:20]
+        return f"backtest_{symbol.lower()}_{digest}"

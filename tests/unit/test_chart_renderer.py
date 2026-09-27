@@ -581,7 +581,6 @@ def distance(left: str, right: str) -> int:
     return bin(int(left, 16) ^ int(right, 16)).count("1")
 
 
-@pytest.mark.parametrize("symbol", ["XAUUSD", "XAGUSD"])
 def test_enriched_setup_chart_has_a_market_context_panel() -> None:
     made = bars("XAUUSD", 60)
     overlay = cr.Overlays(
@@ -600,6 +599,7 @@ def test_enriched_setup_chart_has_a_market_context_panel() -> None:
     assert "PRESENT  BEARISH" in text
     assert "LONDON   DOWN · live" in text
 
+@pytest.mark.parametrize("symbol", ["XAUUSD", "XAGUSD"])
 def test_the_picture_has_not_changed_without_somebody_noticing(symbol: str) -> None:
     """One golden hash per symbol, with a tolerance in bits.
 

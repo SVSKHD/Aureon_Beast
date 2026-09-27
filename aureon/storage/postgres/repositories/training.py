@@ -127,6 +127,21 @@ class TrainingMemoryRepository(PostgresRepository):
             for row in self._rows(statement)
         ]
 
+    def canonical_for_setup(self, setup_id: str) -> CanonicalTrainingExample | None:
+        statement = (
+            select(self.canonical).where(self.canonical.c.setup_id == setup_id).limit(1)
+        )
+        rows = self._rows(statement)
+        return None if not rows else CanonicalTrainingExample.model_validate(dict(rows[0]))
+
+    def pending_count(self, symbol: str) -> int:
+        statement = (
+            select(self.pending)
+            .where(self.pending.c.symbol == symbol.upper())
+            .where(self.pending.c.status == "pending")
+        )
+        return len(self._rows(statement))
+
     def canonical_for(
         self, symbol: str, market_date: str
     ) -> list[CanonicalTrainingExample]:

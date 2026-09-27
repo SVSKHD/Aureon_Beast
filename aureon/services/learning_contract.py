@@ -13,12 +13,12 @@ from typing import Any
 from aureon.models.base import to_utc, utc_now
 from aureon.models.enums import Direction, DirectionContext, Timeframe
 from aureon.models.learning_v1 import (
+    FEATURE_SCHEMA_V1,
+    LABEL_SCHEMA_V1,
     AgentFeatureState,
     CanonicalTrainingExample,
     CleanMoveOutcomeV1,
-    FEATURE_SCHEMA_V1,
     FeatureSnapshotV1,
-    LABEL_SCHEMA_V1,
 )
 
 TARGETS = (5.0, 10.0, 20.0, 30.0, 40.0)
@@ -116,6 +116,55 @@ def _agent_states(snapshot: dict[str, Any]) -> dict[str, AgentFeatureState]:
         if any(value is not None for value in values.values()):
             result[name] = AgentFeatureState(**values)
     return result
+
+
+def _bias_fields(snapshot: dict[str, Any], direction: Direction) -> dict[str, Any]:
+    """The daily/session context keys, read from what was frozen and never recomputed.
+
+    ``entry_aligned_with_*`` is derived here from the frozen bias and the setup's own
+    direction: both are facts known at setup time, so the derivation adds no future
+    information.
+    """
+    daily = snapshot.get("daily_bias_at_entry")
+    session_bias = snapshot.get("session_bias_at_entry")
+    preferred = snapshot.get("preferred_direction_at_entry")
+
+    def _aligned(bias: Any) -> bool | None:
+        text = str(bias or "").lower()
+        if text in {"strong_bullish", "bullish"}:
+            return direction is Direction.BUY
+        if text in {"strong_bearish", "bearish"}:
+            return direction is Direction.SELL
+        if text == "reversal" and preferred:
+            return str(preferred).lower() == direction.value
+        return None
+
+    explicit_daily = _bool(snapshot.get("entry_aligned_with_daily_bias"))
+    explicit_session = _bool(snapshot.get("entry_aligned_with_session_bias"))
+    return {
+        "daily_bias_at_entry": daily,
+        "daily_bias_strength_at_entry": _float(snapshot.get("daily_bias_strength_at_entry")),
+        "current_session": snapshot.get("current_session") or snapshot.get("session"),
+        "session_bias_at_entry": session_bias,
+        "session_bias_strength_at_entry": _float(
+            snapshot.get("session_bias_strength_at_entry")
+        ),
+        "preferred_direction_at_entry": preferred,
+        "entry_aligned_with_daily_bias": (
+            explicit_daily if explicit_daily is not None else _aligned(daily)
+        ),
+        "entry_aligned_with_session_bias": (
+            explicit_session if explicit_session is not None else _aligned(session_bias)
+        ),
+        "trend_quality_at_entry": snapshot.get("trend_quality_at_entry"),
+        "opportunity_quality_at_entry": _float(snapshot.get("opportunity_quality_at_entry")),
+        "reversal_risk_at_entry": snapshot.get("reversal_risk_at_entry"),
+        "previous_session_bias": snapshot.get("previous_session_bias"),
+        "session_transition_state": snapshot.get("session_transition_state"),
+        "volatility_state_at_entry": snapshot.get("volatility_state_at_entry"),
+        "best_session_so_far": snapshot.get("best_session_so_far"),
+        "best_direction_so_far": snapshot.get("best_direction_so_far"),
+    }
 
 
 class FeatureBuilder:
@@ -228,18 +277,28 @@ class FeatureBuilder:
             neutral_agents=neutral,
             agents=agents,
             context=snapshot,
+            **_bias_fields(snapshot, direction),
         )
 
     @staticmethod
     def from_replay_row(row: Any, *, timestamp: datetime | None = None) -> FeatureSnapshotV1:
+        """Historical replay path. Reads the SAME frozen keys the live path does.
+
+        ``row.context`` carries what the replay observed at that candle (session,
+        wick/liquidity/breakout state, daily/session bias). It is populated by the replay
+        at the row's own candle, so nothing later than the setup reaches the snapshot.
+        """
         at = to_utc(timestamp or datetime.fromisoformat(row.at))
         direction = _direction(row.direction)
-        atr = _float(getattr(row, "atr14", None))
+        context = dict(getattr(row, "context", None) or {})
+        atr = _float(context.get("atr")) or _float(getattr(row, "atr14", None))
         ema_gap = _float(row.ema_gap)
         agents = {
             str(name): AgentFeatureState(state="present")
             for name in getattr(row, "same_candle_agents", ())
         }
+        agents.update(_agent_states(context))
+        session_value = context.get("session")
         return FeatureSnapshotV1(
             setup_id=f"replay:{row.symbol}:{row.timeframe}:{row.at}",
             symbol=row.symbol,
@@ -252,15 +311,33 @@ class FeatureBuilder:
             ema_slow=_float(row.ema_slow),
             ema_gap=ema_gap,
             ema_gap_change=_float(row.ema_gap_change),
+            ema_slope=_float(context.get("ema_slope")),
+            cross_direction=context.get("cross_direction"),
             rsi=_float(row.rsi),
+            rsi_zone=context.get("rsi_zone"),
+            rsi_change=_float(context.get("rsi_change")),
             atr=atr,
             ema_gap_atr=(
                 ema_gap / atr if ema_gap is not None and atr is not None and atr > 0 else None
             ),
+            volatility_regime=context.get("volatility_regime"),
+            session=str(session_value) if session_value else None,
+            time_of_day=at.strftime("%H:%M"),
+            day_of_week=at.weekday(),
             htf_trend=str(row.htf_state),
             htf_alignment=str(row.htf_state),
             market_regime=getattr(row, "regime", None),
+            wick_state=context.get("wick_state"),
+            wick_direction=context.get("wick_direction"),
+            wick_strength=_float(context.get("wick_strength")),
+            liquidity_state=context.get("liquidity_state"),
+            liquidity_sweep=_bool(context.get("liquidity_sweep")),
+            liquidity_detail=context.get("liquidity_detail"),
+            breakout_state=context.get("breakout_state"),
+            breakout_direction=context.get("breakout_direction"),
+            breakout_strength=_float(context.get("breakout_strength")),
             participation_state=getattr(row, "participation", None),
+            market_structure_state=context.get("market_structure_state"),
             supporting_agents=int(getattr(row, "director_supporting", 0)),
             opposing_agents=int(getattr(row, "director_opposing", 0)),
             neutral_agents=0,
@@ -268,7 +345,9 @@ class FeatureBuilder:
             context={
                 "director_state": getattr(row, "director_state", None),
                 "event": getattr(row, "event", None),
+                **context,
             },
+            **_bias_fields(context, direction),
         )
 
 
@@ -370,7 +449,7 @@ def canonical_example(
     if outcome.label_schema != LABEL_SCHEMA_V1:
         raise ValueError("label schema mismatch")
     digest = hashlib.sha256(
-        f"{features.setup_id}|{FEATURE_SCHEMA_V1}|{LABEL_SCHEMA_V1}".encode("utf-8")
+        f"{features.setup_id}|{FEATURE_SCHEMA_V1}|{LABEL_SCHEMA_V1}".encode()
     ).hexdigest()
     return CanonicalTrainingExample(
         example_id=digest,

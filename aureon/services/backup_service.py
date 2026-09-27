@@ -13,10 +13,10 @@ import logging
 import shutil
 import sqlite3
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +36,46 @@ class BackupResult:
     files: int
     drive_synced: int = 0
     drive_failed: bool = False
+
+
+@dataclass(frozen=True)
+class ManifestVerification:
+    ok: bool
+    files: int
+    problems: tuple[str, ...] = ()
+
+
+def verify_manifest(snapshot_dir: str | Path) -> ManifestVerification:
+    """Re-hash every file the manifest names. A missing or altered file is a problem."""
+    root = Path(snapshot_dir)
+    manifest_path = root / "manifest.json"
+    if not manifest_path.exists():
+        return ManifestVerification(ok=False, files=0, problems=("manifest.json missing",))
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        return ManifestVerification(ok=False, files=0, problems=(f"manifest unreadable: {exc}",))
+    if manifest.get("schema") != "AUREON_BACKUP_MANIFEST_V1":
+        return ManifestVerification(
+            ok=False, files=0, problems=(f"unexpected manifest schema {manifest.get('schema')!r}",)
+        )
+    problems: list[str] = []
+    entries = manifest.get("files") or []
+    for entry in entries:
+        path = root / str(entry.get("path"))
+        if not path.exists():
+            problems.append(f"missing {entry.get('path')}")
+            continue
+        if sha256_file(path) != entry.get("sha256"):
+            problems.append(f"checksum mismatch {entry.get('path')}")
+    return ManifestVerification(ok=not problems, files=len(entries), problems=tuple(problems))
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(path)
 
 
 class BackupService:
@@ -118,11 +158,9 @@ class BackupService:
         }
         manifest_path = root / "manifest.json"
         # Manifest creation time is operational metadata, so repeated snapshot runs may
-        # refresh only the manifest while asset bytes remain immutable.
-        manifest_path.write_text(
-            json.dumps(manifest, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
+        # refresh only the manifest while asset bytes remain immutable. Written atomically
+        # so a crash mid-write leaves the previous manifest, never half of one.
+        _atomic_write(manifest_path, json.dumps(manifest, indent=2, sort_keys=True))
 
         # Local snapshot completion is the success boundary. Offsite sync is separate.
         return BackupResult(
@@ -135,9 +173,11 @@ class BackupService:
         """Start best-effort Drive sync without blocking any Aureon service."""
         def _run() -> None:
             try:
-                self.sync_changed_to_drive(snapshot_dir)
-            except Exception:  # noqa: BLE001
+                copied = self.sync_changed_to_drive(snapshot_dir)
+                self._write_drive_status(snapshot_dir, status="synced", copied=copied)
+            except Exception as exc:  # noqa: BLE001
                 log.warning("Google Drive backup failed; local operation continues", exc_info=True)
+                self._write_drive_status(snapshot_dir, status="failed", error=str(exc))
 
         thread = threading.Thread(
             target=_run,
@@ -167,6 +207,24 @@ class BackupService:
             shutil.copy2(source, destination)
             copied += 1
         return copied
+
+    def _write_drive_status(
+        self, snapshot_dir: Path, *, status: str, copied: int = 0, error: str | None = None
+    ) -> None:
+        """Record the offsite outcome beside the snapshot. Never raises."""
+        if self.drive_root is None:
+            status = "unconfigured"
+        payload = {
+            "status": status,
+            "copied": copied,
+            "error": error,
+            "synced_at": datetime.now(UTC).isoformat() if status == "synced" else None,
+            "attempted_at": datetime.now(UTC).isoformat(),
+        }
+        try:
+            _atomic_write(snapshot_dir / "drive_sync_status.json", json.dumps(payload, indent=2))
+        except OSError:
+            log.debug("could not write drive sync status", exc_info=True)
 
     @staticmethod
     def _safe_copy(source: Path, destination: Path) -> None:

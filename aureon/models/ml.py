@@ -34,6 +34,9 @@ class ModelRegistryEntry(AureonDocument):
     label_schema_version: str
     model_schema_version: str = "AUREON_MOVE_MODEL_V1"
     parent_model_id: str | None = None
+    #: How many Champion generations precede this model (0 for a first model). Set at
+    #: training time from the parent's generation; part of EntryIntelligence.
+    generation: int = Field(default=0, ge=0)
     hyperparameters: dict = Field(default_factory=dict)
 
     trained_from: str
@@ -107,8 +110,15 @@ class ModelPrediction(AureonDocument):
     label_schema_version: str
     probabilities: dict[str, float] = Field(default_factory=dict)
     feature_snapshot: dict = Field(default_factory=dict)
+    #: What the model recommended BEFORE the outcome was known (ENTER/WAIT/REJECT/...).
+    #: Recorded at prediction time and never rewritten, so a later score cannot pretend
+    #: the call was made after the fact.
+    decision: str | None = None
     actual_outcomes: dict[str, bool | float | None] | None = None
     reconciled_at: UtcDatetime | None = None
+    #: Scored once the outcome arrives: true_positive / false_positive / false_negative /
+    #: true_negative on clean_10, relative to ``decision``. Failures are first-class.
+    outcome_class: str | None = None
 
 
 class ShadowPredictionSummary(AureonModel):

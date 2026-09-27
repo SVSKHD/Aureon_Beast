@@ -193,6 +193,91 @@ class TradeRepository(PostgresRepository):
             self._upsert(self._to_row(updated), connection=connection)
             return updated
 
+    def update_management(
+        self,
+        trade_id: str,
+        *,
+        management: Any | None = None,
+        guardian: Any | None = None,
+        management_state: Any | None = None,
+        now: datetime | None = None,
+    ) -> Trade | None:
+        """Persist the exit manager's state without changing the broker-observed status.
+
+        Like excursions, this updates on every quote and is not a transition, so it is not
+        audited here; the durable audit trail is ``trade_management_events``, written by
+        ``append_management_event`` on every phase or stop change. A CLOSED trade is
+        immutable history, so a late management read is ignored. An external position is
+        refused outright: Aureon never manages what it did not open (§52).
+        """
+        _ = to_utc(now or utc_now())
+        with self._db.transaction() as connection:
+            row = self._locked(trade_id, connection)
+            if row is None:
+                return None
+            current = Trade.model_validate(self._to_model_dict(row))
+            if current.status is TradeStatus.CLOSED:
+                return current
+            if not current.aureon_managed:
+                raise TerminalWriteRejected(
+                    f"{trade_id} is {current.source.value}; Aureon never manages an "
+                    "external/manual position (§52)"
+                )
+            updates: dict[str, Any] = {}
+            if management is not None:
+                updates["management"] = management
+            if guardian is not None:
+                updates["guardian"] = guardian
+            if management_state is not None:
+                updates["management_state"] = management_state
+            if not updates:
+                return current
+            updated = current.model_copy(update=updates)
+            self._upsert(self._to_row(updated), connection=connection)
+            return updated
+
+    def append_management_event(self, event: Any) -> Any:
+        """Append one exit-management audit row. Idempotent on ``event_id``."""
+        payload = event.model_dump(mode="json")
+        row = {
+            key: payload.get(key)
+            for key in (
+                "event_id",
+                "schema_version",
+                "trade_id",
+                "source",
+                "action",
+                "current_move",
+                "peak_move",
+                "giveback",
+                "protected_move",
+                "trail_price",
+                "continuation_score",
+                "continuation_total",
+                "exit_price",
+                "realized_move",
+                "exit_reason",
+                "phase",
+                "previous_phase",
+                "priority",
+                "current_stop",
+                "previous_stop",
+                "detail",
+            )
+        }
+        row["observed_at"] = event.observed_at
+        self._upsert(row, table=tables.TradeManagementEvent.__table__)
+        return event
+
+    def management_events(self, trade_id: str) -> list[Any]:
+        from aureon.models.trade import TradeManagementEvent
+
+        table = tables.TradeManagementEvent.__table__
+        statement = (
+            select(table).where(table.c.trade_id == trade_id).order_by(table.c.observed_at)
+        )
+        return [TradeManagementEvent.model_validate(dict(row)) for row in self._rows(statement)]
+
     # ── Reading ───────────────────────────────────────────────────────────────
 
     def get(self, trade_id: str) -> Trade | None:
@@ -218,6 +303,14 @@ class TradeRepository(PostgresRepository):
             statement = statement.where(self.table.c.symbol == symbol)
         statement = statement.order_by(self.table.c.open_time_utc)
         return self._parse_all(self._rows(statement), Trade, what="trade")
+
+    def open_aureon_trades(self, symbol: str | None = None) -> list[Trade]:
+        """Aureon-owned positions still open. What the one-position rule counts."""
+        return [
+            trade
+            for trade in self.open_trades()
+            if trade.aureon_managed and (symbol is None or trade.symbol == symbol.upper())
+        ]
 
     def open_trades(self) -> list[Trade]:
         """Every position not yet closed. The monitor's working set.
@@ -316,6 +409,9 @@ class TradeRepository(PostgresRepository):
             "link_type": trade.link_type.value if trade.link_type else None,
             "deal_ids": {"items": list(trade.deal_ids)},
             "excursion": payload["excursion"],
+            "management": payload.get("management"),
+            "guardian": payload.get("guardian"),
+            "management_state": payload.get("management_state"),
             "last_reconciled_at": trade.last_reconciled_at,
             "last_synced_at": trade.last_synced_at,
         }

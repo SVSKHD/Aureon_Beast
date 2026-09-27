@@ -260,6 +260,7 @@ class TradeRepository:
         *,
         management: object | None = None,
         guardian: object | None = None,
+        management_state: object | None = None,
     ) -> Trade | None:
         """Persist Agents 14/16 state without changing broker-observed trade status.
 
@@ -279,6 +280,13 @@ class TradeRepository:
                 updates["management"] = management
             if guardian is not None:
                 updates["guardian"] = guardian
+            if management_state is not None:
+                if not current.aureon_managed:
+                    raise TerminalWriteRejected(
+                        f"{trade_id} is {current.source.value}; Aureon never manages an "
+                        "external/manual position (§52)"
+                    )
+                updates["management_state"] = management_state
             if not updates:
                 return current
             updated = current.model_copy(update=updates)

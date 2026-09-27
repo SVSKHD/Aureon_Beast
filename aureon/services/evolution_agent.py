@@ -15,6 +15,7 @@ from aureon.ml.logistic import binary_metrics
 from aureon.models.base import to_utc, utc_now
 from aureon.models.learning_v1 import (
     EvolutionDecision,
+    GenerationComparison,
     ModelLifecycleStatus,
 )
 from aureon.models.ml import ModelRegistryEntry
@@ -233,6 +234,180 @@ class EvolutionAgent:
         )
         return promoted
 
+    def generation_report(
+        self,
+        *,
+        challenger_model_id: str,
+        previous_model_id: str | None = None,
+        examples: list[Any] | None = None,
+        min_bucket_samples: int = 20,
+        precision_margin: float = 0.05,
+        record: bool = True,
+    ) -> GenerationComparison:
+        """Compare two generations on the SAME frozen examples, bucket by bucket.
+
+        Historical evidence for governance, not a forecast. Both models score exactly the
+        same setups (paired), so a difference is the models', not the sample's. Buckets
+        below ``min_bucket_samples`` are reported but never counted as improved/degraded.
+        """
+        from aureon.services.training_coverage import dimension_values
+        from aureon.services.v1_model_training import (
+            V1_TARGETS,
+            assert_canonical_examples,
+            predict_v1_artifact,
+            target_value,
+        )
+
+        challenger = self.models.get_model(challenger_model_id)
+        if challenger is None:
+            raise LookupError(f"no model {challenger_model_id}")
+        previous = None
+        if previous_model_id is not None:
+            previous = self.models.get_model(previous_model_id)
+        elif challenger.parent_model_id:
+            previous = self.models.get_model(challenger.parent_model_id)
+        if previous is None:
+            previous = self.models.champion(challenger.symbol)
+            if previous is not None and previous.model_id == challenger.model_id:
+                previous = None
+
+        if examples is None:
+            reader = getattr(self.models, "canonical_between", None)
+            examples = list(reader(challenger.symbol, "0001-01-01", "9999-12-31")) if reader else []
+        examples = sorted(examples, key=lambda one: (one.features.timestamp, one.setup_id))
+        assert_canonical_examples(examples, what="generation report")
+
+        previous_through = previous.trained_through if previous is not None else None
+        new_period = [
+            one
+            for one in examples
+            if previous_through is None or one.market_date > previous_through
+        ]
+        comparison = new_period if new_period else examples
+        samples_before = previous.training_samples if previous is not None else 0
+
+        def score(model: Any) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+            labels: dict[str, list[int]] = {t: [] for t in V1_TARGETS}
+            probs: dict[str, list[float]] = {t: [] for t in V1_TARGETS}
+            buckets: dict[str, dict[str, list]] = {}
+            for example in comparison:
+                p = predict_v1_artifact(model, example.features)
+                for t in V1_TARGETS:
+                    labels[t].append(1 if target_value(example, t) else 0)
+                    probs[t].append(float(p[t]))
+                values = dimension_values(example.features)
+                for dimension in (
+                    "direction", "session", "daily_bias", "session_bias", "regime_family",
+                    "market_regime", "volatility_band", "htf_alignment",
+                ):
+                    key = f"{dimension}:{values[dimension]}"
+                    cell = buckets.setdefault(
+                        key, {"labels": [], "probs": [], "mae": [], "mfe": []}
+                    )
+                    cell["labels"].append(1 if example.outcome.clean_10 else 0)
+                    cell["probs"].append(float(p["clean_10"]))
+                    cell["mae"].append(float(example.outcome.max_adverse_move))
+                    cell["mfe"].append(float(example.outcome.max_favourable_move))
+            overall = {t: binary_metrics(labels[t], probs[t]) for t in V1_TARGETS if labels[t]}
+            for t in V1_TARGETS:
+                if t not in overall:
+                    continue
+                positives = [
+                    one for one, label in zip(comparison, labels[t], strict=True) if label == 1
+                ]
+                overall[t]["average_mae"] = (
+                    sum(o.outcome.max_adverse_move for o in positives) / len(positives)
+                    if positives else None
+                )
+                overall[t]["average_mfe"] = (
+                    sum(o.outcome.max_favourable_move for o in positives) / len(positives)
+                    if positives else None
+                )
+            by_bucket = {}
+            for key, cell in buckets.items():
+                data = binary_metrics(cell["labels"], cell["probs"])
+                data["samples"] = len(cell["labels"])
+                data["average_mae"] = sum(cell["mae"]) / len(cell["mae"])
+                data["average_mfe"] = sum(cell["mfe"]) / len(cell["mfe"])
+                by_bucket[key] = data
+            return overall, by_bucket
+
+        challenger_metrics, challenger_buckets = score(challenger)
+        previous_metrics: dict[str, Any] = {}
+        previous_buckets: dict[str, dict[str, Any]] = {}
+        if previous is not None:
+            previous_metrics, previous_buckets = score(previous)
+
+        improved: dict[str, list[str]] = {"regime": [], "session": [], "direction": []}
+        degraded: dict[str, list[str]] = {"regime": [], "session": [], "direction": []}
+        new_failures: list[str] = []
+        reduced_failures: list[str] = []
+        families = {
+            "regime": ("regime_family", "market_regime", "volatility_band"),
+            "session": ("session", "session_bias"),
+            "direction": ("direction", "daily_bias", "htf_alignment"),
+        }
+        for key, after in challenger_buckets.items():
+            before = previous_buckets.get(key)
+            if before is None or after["samples"] < min_bucket_samples:
+                continue
+            dimension = key.split(":", 1)[0]
+            family = next((f for f, dims in families.items() if dimension in dims), None)
+            p_after, p_before = after.get("precision"), before.get("precision")
+            if family and p_after is not None and p_before is not None:
+                if p_after >= p_before + precision_margin:
+                    improved[family].append(key)
+                elif p_after <= p_before - precision_margin:
+                    degraded[family].append(key)
+            f_after, f_before = after.get("false_positive_rate"), before.get("false_positive_rate")
+            if f_after is not None and f_before is not None:
+                if f_after >= f_before + precision_margin:
+                    new_failures.append(key)
+                elif f_after <= f_before - precision_margin:
+                    reduced_failures.append(key)
+
+        report = GenerationComparison(
+            previous_model_id=None if previous is None else previous.model_id,
+            challenger_model_id=challenger.model_id,
+            symbol=challenger.symbol,
+            previous_training_period=(
+                (previous.trained_from, previous.trained_through) if previous else (None, None)
+            ),
+            new_learning_period=(
+                (new_period[0].market_date, new_period[-1].market_date)
+                if new_period
+                else (None, None)
+            ),
+            samples_before=samples_before,
+            samples_added=len(new_period),
+            comparison_samples=len(comparison),
+            previous_metrics=previous_metrics,
+            challenger_metrics=challenger_metrics,
+            previous_buckets=previous_buckets,
+            challenger_buckets=challenger_buckets,
+            regimes_improved=tuple(sorted(improved["regime"])),
+            regimes_degraded=tuple(sorted(degraded["regime"])),
+            sessions_improved=tuple(sorted(improved["session"])),
+            sessions_degraded=tuple(sorted(degraded["session"])),
+            directional_contexts_improved=tuple(sorted(improved["direction"])),
+            directional_contexts_degraded=tuple(sorted(degraded["direction"])),
+            new_failure_patterns=tuple(sorted(new_failures)),
+            previous_failure_patterns_reduced=tuple(sorted(reduced_failures)),
+            generated_at=to_utc(self._now()),
+        )
+        if record:
+            self._record(
+                challenger,
+                action="generation_report",
+                reason=(
+                    f"paired comparison against {report.previous_model_id or 'no previous model'} "
+                    f"on {report.comparison_samples} frozen examples; historical evidence only"
+                ),
+                metrics=report.model_dump(mode="json"),
+                champion_model_id=report.previous_model_id,
+            )
+        return report
+
     def degradation_signal(self, symbol: str) -> dict[str, Any]:
         champion = self.models.champion(symbol)
         if champion is None:
@@ -338,7 +513,7 @@ class EvolutionAgent:
             else current_champion.model_id if current_champion is not None else None
         )
         digest = hashlib.sha256(
-            f"{model.model_id}|{action}|{created.isoformat()}".encode("utf-8")
+            f"{model.model_id}|{action}|{created.isoformat()}".encode()
         ).hexdigest()[:24]
         decision = EvolutionDecision(
             decision_id=f"evolution_{digest}",

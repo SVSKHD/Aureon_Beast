@@ -445,6 +445,43 @@ class FakeBroker(BrokerInterface):
             filled_volume=closing,
         )
 
+    def modify_position(
+        self, position_id: int, *, sl: float | None = None, tp: float | None = None
+    ) -> BrokerOrderResult:
+        self.calls.append("modify_position")
+        behaviour = self._next_behaviour()
+        if behaviour.crash_before_result:
+            raise BrokerError("connection lost during modify")
+        with self._lock:
+            position = self._positions.get(position_id)
+            if position is None:
+                return BrokerOrderResult(
+                    ok=False,
+                    retcode=10_013,
+                    retcode_name="TRADE_RETCODE_INVALID",
+                    failure_code=FailureCode.BROKER_REJECTED,
+                    message=f"position {position_id} is not open",
+                )
+            update: dict[str, object] = {}
+            if sl is not None:
+                update["sl"] = sl
+            if tp is not None:
+                update["tp"] = tp
+            self._positions[position_id] = position.model_copy(update=update)
+            self.ledger.append(
+                LedgerEntry(
+                    kind="modify",
+                    symbol=position.symbol,
+                    order_type=None,
+                    volume=position.volume,
+                    comment=position.comment or "",
+                    magic=position.magic or 0,
+                    position_id=position_id,
+                    price=sl if sl is not None else (tp or 0.0),
+                )
+            )
+        return BrokerOrderResult(ok=True, retcode=10_009, position_id=position_id)
+
     # ── Reading ───────────────────────────────────────────────────────────────
 
     def open_positions(self) -> list[BrokerPosition]:

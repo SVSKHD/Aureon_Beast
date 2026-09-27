@@ -16,6 +16,10 @@ from pydantic import Field, model_validator
 from aureon.models.base import AureonDocument, UtcDatetime, to_utc, utc_now
 from aureon.models.enums import ControlRequestKind, ControlRequestStatus, FailureCode
 
+#: ``requested_by`` prefix that marks a request Aureon raised on its own. The executor
+#: refuses such a request on any position Aureon does not own.
+AUTONOMOUS_REQUESTER_PREFIX = "aureon:"
+
 
 class ControlRequest(AureonDocument):
     """A requested action on something already live (§46, §47)."""
@@ -28,6 +32,9 @@ class ControlRequest(AureonDocument):
     symbol: str | None = None
     volume: float | None = Field(
         default=None, gt=0, description="Partial close volume; None closes all."
+    )
+    stop_loss: float | None = Field(
+        default=None, gt=0, description="New stop-loss price for MODIFY_STOP."
     )
 
     requested_by: str
@@ -53,8 +60,17 @@ class ControlRequest(AureonDocument):
             return False
         return to_utc(now or utc_now()) < self.lease_expires_at
 
+    @property
+    def autonomous(self) -> bool:
+        """Whether Aureon itself asked for this, rather than a human."""
+        return self.requested_by.startswith(AUTONOMOUS_REQUESTER_PREFIX)
+
     @model_validator(mode="after")
     def _volume_only_for_close(self) -> ControlRequest:
         if self.kind is ControlRequestKind.CANCEL and self.volume is not None:
             raise ValueError("volume is meaningless for a cancel; a pending order is whole")
+        if self.kind is ControlRequestKind.MODIFY_STOP and self.stop_loss is None:
+            raise ValueError("a MODIFY_STOP request needs a stop_loss")
+        if self.kind is not ControlRequestKind.MODIFY_STOP and self.stop_loss is not None:
+            raise ValueError("stop_loss is only meaningful for MODIFY_STOP")
         return self

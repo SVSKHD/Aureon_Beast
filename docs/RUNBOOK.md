@@ -796,6 +796,85 @@ Knowing this in advance is cheaper than fighting it at 02:00.
 - **`update_phases.py`** will not write a Status cell. What is proven is a judgement; it
   only reports which files exist.
 
+## V1 gap closure: bias, live management, coverage, unseen month
+
+One status surface for all of it:
+
+    python scripts/v1_status.py            # MARKET / AGENTS / LEARNING / MODEL / LIVE POSITION / EVOLUTION / BACKUP / SYSTEM
+    python main_learning.py --status       # the same report from the learning sidecar's entrypoint
+
+### The Daily Market Bias Agent
+
+The observer runs it on every closed candle after the context agents and the HTF read. It
+is deterministic and only ever moves forward; its snapshot is frozen into every setup's V1
+features (`daily_bias_at_entry`, `session_bias_at_entry`, `entry_aligned_with_*`,
+`session_transition_state`, ...) and published in `system_state` for `/status` and the health
+report. Its state file (`AUREON_DAILY_BIAS_STATE_PATH`, default `data/daily_bias_state.json`)
+is written atomically after each candle so a restart resumes the day where it left off. Every
+value it produces is a **strength**, **score** or **quality**, never a probability, and no
+session is hard-coded as the best one.
+
+### Live management of an Aureon-owned position
+
+The monitor runs the deterministic exit manager (`aureon/management/exit_manager.py`) on every
+quote for every position Aureon itself opened (our magic AND a matching request). It records
+the phase (`open -> protection_pending -> protected -> trailing -> exit_pending -> closed`),
+the ratcheted stop, MFE/MAE, the +5/+10/+20/+30/+40 ladder and, on close, the exit experience
+(`exit_price`, `exit_time`, `exit_reason`, `realized_move`, `profit_given_back_from_peak`,
+`structural_invalidation_reason`) on the trade's `management_state`, and appends one
+`trade_management_events` row per phase or stop change.
+
+**A manual or external position is observed and displayed and never managed.** The model
+refuses management state on it, the repository refuses the write, and the executor refuses
+any autonomous request that names it.
+
+By default the manager only records. To let it act:
+
+    AUREON_AUTONOMOUS_MANAGEMENT_ENABLED=true
+
+The monitor then writes `control_requests` rows (`modify_stop` to ratchet, `close` for a
+hard-risk, structural or guardian exit) that the **executor** performs under the usual claim
+and lease. The request id is a hash of trade, kind and stop level, so a restart cannot
+duplicate one. Exit priority is fixed: hard risk, then structural invalidation, then profit
+protection or trailing. The entry model is never consulted for an exit.
+
+Trail parameters: `AUREON_EXIT_ACTIVATION_MOVE` (5), `AUREON_EXIT_MINIMUM_LOCK` (4),
+`AUREON_EXIT_TRAIL_FRACTION` (0.55), `AUREON_EXIT_TIGHTEN_FRACTION` (0.70),
+`AUREON_EXIT_TIGHTEN_GIVEBACK` (5), `AUREON_EXIT_EMERGENCY_GIVEBACK` (8),
+`AUREON_EXIT_HARD_STOP_MOVE` (empty = use the broker stop). These are the existing Agent 14/16
+and backtest values; do not invent more aggressive ones without a backtest.
+
+### One Aureon position
+
+`ExecutionSettings.max_aureon_positions_per_symbol` (default 1) counts only Aureon-magic
+positions on the request's symbol. Manual trades do not count. While Aureon holds a position
+the Champion still analyses every setup and answers `HOLD_EXISTING_POSITION`, flagging
+`addon_opportunity` for research; V1 never pyramids.
+
+### Foundation training and the unseen month
+
+    python scripts/foundation_training.py build --data-dir data/live_candles --symbol XAUUSD --timeframe M5 --from 2023-01-01 --to 2025-12-31
+    python scripts/foundation_training.py train --symbol XAUUSD --from 2023-01-01 --to 2026-01-31
+    python scripts/foundation_training.py freeze --symbol XAUUSD
+    python scripts/foundation_training.py exam --symbol XAUUSD --from 2026-02-01 --to 2026-02-28
+    python scripts/foundation_training.py score --exam-id <id>
+    python scripts/foundation_training.py release --exam-id <id>
+    python scripts/foundation_training.py train --symbol XAUUSD --from 2023-01-01 --to 2026-02-28
+    python scripts/foundation_training.py report --symbol XAUUSD
+    python scripts/foundation_training.py coverage --symbol XAUUSD
+
+Dates are examples. While an exam is OPEN or SCORED, `V1ModelTrainer` raises `LeakageError`
+for any example inside its period; only `release` lets the month into Challenger training.
+`score` records the frozen model's prediction and decision BEFORE reconciling the outcome,
+so false positives and false negatives are stored as what the model actually said.
+`main_backtest.py` gained `--timeframe`; M5 remains the default.
+
+### Legacy learning rows
+
+`training_examples` (+6 / EOD) stay readable for research. Supplying one to any V1 trainer,
+evaluator or walk-forward raises `SchemaContractError`; nothing converts a +6 success into a
+`clean_10` success.
+
 ## Where the numbers come from
 
 | document | what it is | regenerate with |

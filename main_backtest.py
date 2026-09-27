@@ -149,6 +149,7 @@ def _fetch_mt5_chunked(
     start: datetime,
     end: datetime,
     chunk_days: int = 7,
+    timeframe: Timeframe = Timeframe.M5,
 ) -> list:
     candles_by_open = {}
     cursor = start
@@ -163,7 +164,7 @@ def _fetch_mt5_chunked(
         )
         chunk = provider.get_closed_candles(
             symbol,
-            Timeframe.M5,
+            timeframe,
             cursor,
             chunk_end,
         )
@@ -195,6 +196,12 @@ def main() -> int:
     parser.add_argument("--from", dest="start", required=True, help="YYYY-MM-DD or ISO datetime")
     parser.add_argument("--to", dest="end", required=True, help="YYYY-MM-DD or ISO datetime")
     parser.add_argument("--symbol", default=None)
+    parser.add_argument(
+        "--timeframe",
+        default="M5",
+        choices=[one.value for one in Timeframe],
+        help="candle timeframe to replay (default M5)",
+    )
     parser.add_argument("--train", action="store_true", help="fit chronological reference model")
     parser.add_argument(
         "--test-model",
@@ -259,8 +266,9 @@ def main() -> int:
     print("[1/6] Loading configuration...", flush=True)
     config = AureonConfig.from_env()
     symbol = (args.symbol or config.symbols[0]).upper()
+    timeframe = Timeframe(args.timeframe)
     config = config.model_copy(
-        update={"symbols": (symbol,), "timeframes": (Timeframe.M5,)}
+        update={"symbols": (symbol,), "timeframes": (timeframe,)}
     )
 
     start = _bound(args.start, config.market_tz)
@@ -277,7 +285,7 @@ def main() -> int:
         all_candles, archive_files = _archive_candles(
             Path(args.data_dir),
             symbol=symbol,
-            timeframe=Timeframe.M5,
+            timeframe=timeframe,
             market_tz=config.market_tz,
             start=start,
             end=end,
@@ -305,7 +313,7 @@ def main() -> int:
             warmup_start = start - timedelta(days=14)
             outcome_end = end + timedelta(days=outcome_tail_days)
             print(
-                f"      fetching {symbol} M5 from {warmup_start.date()} "
+                f"      fetching {symbol} {timeframe.value} from {warmup_start.date()} "
                 f"through {outcome_end.date()} "
                 "(includes warmup + outcome tail)...",
                 flush=True,
@@ -315,6 +323,7 @@ def main() -> int:
                 symbol=symbol,
                 start=warmup_start,
                 end=outcome_end,
+                timeframe=timeframe,
             )
             requested_candles = [
                 candle for candle in replay_candles
@@ -337,12 +346,12 @@ def main() -> int:
         provider = HistoricalDataProvider(
             args.data,
             symbol=symbol,
-            timeframe=Timeframe.M5,
+            timeframe=timeframe,
             market_tz=config.market_tz,
         )
         provider.connect()
         replay_candles = provider.get_closed_candles(
-            symbol, Timeframe.M5, start, end
+            symbol, timeframe, start, end
         )
         requested_candles = replay_candles
         point = provider.symbol_info(symbol).point
@@ -351,7 +360,7 @@ def main() -> int:
     if not requested_candles:
         source_name = source_label or args.data_dir or args.data or "MT5"
         print(
-            f"No {symbol} M5 candles in requested range from {source_name}.",
+            f"No {symbol} {timeframe.value} candles in requested range from {source_name}.",
             file=sys.stderr,
         )
         return 2
@@ -586,7 +595,7 @@ def main() -> int:
         "schema": "AUREON_DECISION_BACKTEST_V2",
         "historical_reference_only": True,
         "symbol": symbol,
-        "timeframe": "M5",
+        "timeframe": timeframe.value,
         "start": start.isoformat(),
         "end_exclusive": end.isoformat(),
         "candles": len(requested_candles),

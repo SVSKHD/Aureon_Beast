@@ -7,14 +7,16 @@ randomly shuffles future periods into the past.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any
 
 from aureon.agents.ema_rsi_eligibility_agent import EmaRsiEligibilityAgent
 from aureon.config.sessions import session_for
 from aureon.ml.logistic import LogisticModel, binary_metrics, fit_logistic
-from aureon.models.enums import Direction, Timeframe
+from aureon.models.enums import Direction
+from aureon.services.daily_market_bias import DailyBiasInputs, DailyMarketBiasAgent
 from aureon.services.higher_timeframe_agent import HigherTimeframeAgent
 from aureon.services.market_director import DirectorInputs, MarketDirector
 from aureon.services.market_snapshot import MarketSnapshot
@@ -51,6 +53,11 @@ class DecisionReplayRow:
     mae_12: float
     reached_10: bool
     bars_to_10: int | None
+    #: What the replay observed AT this candle and nothing later: session, indicator
+    #: deltas, the last wick/liquidity/breakout events and the Daily Market Bias Agent's
+    #: frozen context. Read by ``FeatureBuilder.from_replay_row`` with the same keys the
+    #: live observer freezes, so historical and live V1 features share one density.
+    context: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -66,21 +73,32 @@ def run_decision_replay(
     snapshot = MarketSnapshot(symbol=candles[0].symbol if candles else "UNKNOWN")
     htf_agent = HigherTimeframeAgent()
     director = MarketDirector(primary_target_move=target_move)
-    pending: list[tuple[int, Any, Any, Any, Any, list[str]]] = []
+    bias_agent = DailyMarketBiasAgent()
+    last_htf = None
+    pending: list[tuple[int, Any, Any, Any, Any, list[str], dict[str, Any]]] = []
     total = len(candles)
     progress_every = max(1, total // 20)
 
     for index, candle in enumerate(candles):
         detections = engine.on_closed_candle(candle)
+        session = session_for(candle.open_time.market)
         snapshot.observe_candle(
             high=candle.high,
             low=candle.low,
             open=candle.open,
             close=candle.close,
-            session=session_for(candle.open_time.market),
+            session=session,
         )
         for detection in detections:
             snapshot.observe(detection)
+
+        # The bias agent sees every closed candle, in order, exactly as the live observer
+        # feeds it. Only the HTF read is reused from the last eligibility candle.
+        read = engine.indicator_read(candle.symbol, candle.timeframe)
+        current = snapshot.as_state()
+        bias = bias_agent.observe(
+            _bias_inputs(candle, session, read, current, last_htf, snapshot)
+        )
 
         eligibility = next(
             (d for d in detections if d.agent_name == EmaRsiEligibilityAgent.agent_name),
@@ -95,8 +113,8 @@ def run_decision_replay(
 
         mtf = engine.mtf_context(candle.symbol, candle.timeframe)
         htf = htf_agent.assess(mtf)
-        read = engine.indicator_read(candle.symbol, candle.timeframe)
-        current = snapshot.as_state()
+        last_htf = htf
+        context = _replay_context(candle, session, read, current, bias)
         signals = tuple((d.agent_name, d.direction) for d in detections if d.direction is not None)
         decision = director.decide(
             DirectorInputs(
@@ -121,6 +139,7 @@ def run_decision_replay(
                 decision,
                 current,
                 sorted({d.agent_name for d in detections}),
+                context,
             )
         )
         if on_progress is not None and (
@@ -129,7 +148,7 @@ def run_decision_replay(
             on_progress(index + 1, total, len(pending))
 
     rows: list[DecisionReplayRow] = []
-    for index, detection, htf, decision, current, same_candle_agents in pending:
+    for index, detection, htf, decision, current, same_candle_agents, context in pending:
         direction = (
             Direction.BUY
             if detection.evidence.categorical.get("cross_direction") == "bullish"
@@ -182,9 +201,87 @@ def run_decision_replay(
                 mfe_12=metrics[12][0], mae_12=metrics[12][1],
                 reached_10=reached_10,
                 bars_to_10=bars_to_10,
+                context=context,
             )
         )
     return rows
+
+
+def _bias_inputs(
+    candle: Any, session: Any, read: Any, current: dict, htf: Any, snapshot: Any
+) -> DailyBiasInputs:
+    regime = current.get("market_regime")
+    journey = current.get("market_journey")
+    participation = current.get("volume_participation")
+    trend = None
+    if snapshot.session_open is not None and snapshot.session_close is not None:
+        change = snapshot.session_close - snapshot.session_open
+        trend = "flat" if abs(change) < 0.5 else ("up" if change > 0 else "down")
+    return DailyBiasInputs(
+        symbol=candle.symbol,
+        timeframe=candle.timeframe.value,
+        at=candle.close_time,
+        market_date=candle.open_time.market.date().isoformat(),
+        session=session,
+        open=candle.open,
+        high=candle.high,
+        low=candle.low,
+        close=candle.close,
+        ema_fast=read.ema_fast,
+        ema_slow=read.ema_slow,
+        previous_ema_fast=read.previous_ema_fast,
+        rsi=read.rsi,
+        previous_rsi=read.previous_rsi,
+        atr=read.atr,
+        regime=regime if isinstance(regime, dict) else None,
+        journey=journey if isinstance(journey, dict) else None,
+        htf_trend=(
+            getattr(getattr(htf, "dominant_bias", None), "value", None) if htf is not None else None
+        ),
+        session_live_trend=trend,
+        wick=current.get("last_wick") if isinstance(current.get("last_wick"), dict) else None,
+        sweep=current.get("last_sweep") if isinstance(current.get("last_sweep"), dict) else None,
+        breakout=(
+            current.get("last_breakout") if isinstance(current.get("last_breakout"), dict) else None
+        ),
+        participation=participation if isinstance(participation, dict) else None,
+    )
+
+
+def _replay_context(
+    candle: Any, session: Any, read: Any, current: dict, bias: Any
+) -> dict[str, Any]:
+    """The frozen keys ``FeatureBuilder`` reads, from what the replay knew at this candle."""
+    context: dict[str, Any] = {
+        "session": session.value,
+        "atr": read.atr,
+        "rsi_zone": current.get("rsi_zone"),
+    }
+    if read.ema_fast is not None and read.previous_ema_fast is not None:
+        context["ema_slope"] = read.ema_fast - read.previous_ema_fast
+    if read.rsi is not None and read.previous_rsi is not None:
+        context["rsi_change"] = read.rsi - read.previous_rsi
+    cross = current.get("last_cross")
+    if isinstance(cross, dict):
+        context["cross_direction"] = cross.get("direction")
+    wick = current.get("last_wick")
+    if isinstance(wick, dict):
+        context["wick_state"] = wick.get("classification")
+    sweep = current.get("last_sweep")
+    if isinstance(sweep, dict):
+        context["liquidity_state"] = sweep.get("level_type")
+        context["liquidity_sweep"] = True
+        context["liquidity_detail"] = str(sweep)
+    breakout = current.get("last_breakout")
+    if isinstance(breakout, dict):
+        context["breakout_state"] = breakout.get("level_type")
+        context["breakout_direction"] = breakout.get("direction")
+    regime = current.get("market_regime")
+    if isinstance(regime, dict):
+        context["volatility_regime"] = regime.get("volatility_state")
+        context["market_structure_state"] = regime.get("structure_state")
+    context.update(bias.as_feature_context())
+    return context
 
 
 def train_reference(rows: list[DecisionReplayRow], *, train_fraction: float = 0.7) -> dict[str, Any]:

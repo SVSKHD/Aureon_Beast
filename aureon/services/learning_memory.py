@@ -60,13 +60,18 @@ class LearningMemoryService:
         existing = self.repository.pending_for_setup(setup.setup_id)
         if existing is not None:
             return existing
+        # A setup already resolved into a canonical example must never be re-frozen: the
+        # upsert would rewind it to pending and a second example would be written later.
+        resolved = getattr(self.repository, "canonical_for_setup", None)
+        if resolved is not None and resolved(setup.setup_id) is not None:
+            return None
 
         moment = to_utc(event.market_time.utc)
         learning_id = hashlib.sha256(
             (
                 f"{setup.setup_id}|{features.feature_schema}|"
                 "AUREON_CLEAN_MOVE_V1"
-            ).encode("utf-8")
+            ).encode()
         ).hexdigest()
         pending = PendingLearningSetup(
             learning_id=learning_id,

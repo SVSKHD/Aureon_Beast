@@ -311,6 +311,36 @@ class MT5Broker(BrokerInterface):
             raise BrokerError(f"close returned None: {mt5.last_error()}")
         return self._to_result(result)
 
+    def modify_position(
+        self, position_id: int, *, sl: float | None = None, tp: float | None = None
+    ) -> BrokerOrderResult:
+        mt5 = self.mt5
+        positions = mt5.positions_get(ticket=position_id)
+        if not positions:
+            return BrokerOrderResult(
+                ok=False,
+                retcode=10_013,
+                failure_code=FailureCode.BROKER_REJECTED,
+                message=f"position {position_id} is not open",
+            )
+        position = positions[0]
+        payload = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "symbol": position.symbol,
+            "position": position_id,
+            "sl": float(sl if sl is not None else position.sl),
+            "tp": float(tp if tp is not None else position.tp),
+            "magic": int(position.magic),
+            "comment": "aureon-trail",
+        }
+        try:
+            result = mt5.order_send(payload)
+        except Exception as exc:  # noqa: BLE001
+            raise BrokerError(f"modify raised: {exc}") from exc
+        if result is None:
+            raise BrokerError(f"modify returned None: {mt5.last_error()}")
+        return self._to_result(result)
+
     # ── Reading ───────────────────────────────────────────────────────────────
 
     def open_positions(self) -> list[BrokerPosition]:

@@ -164,6 +164,9 @@ A real position. MT5 is the truth (§49-§53).
 | `swap` | `float` | no | `0.0` |  |
 | `deal_ids` | `tuple[int]` | no | `()` |  |
 | `excursion` | `Excursion` | no | `Excursion()` |  |
+| `management` | `TradeManagementDecision \| null` | no | `None` |  |
+| `guardian` | `GuardianDecision \| null` | no | `None` |  |
+| `management_state` | `TradeManagementState \| null` | no | `None` |  |
 | `detection_id` | `str \| null` | no | `None` |  |
 | `link_type` | `LinkType \| null` | no | `None` |  |
 | `last_reconciled_at` | `AwareDatetime \| null` | no | `None` |  |
@@ -182,6 +185,7 @@ A requested action on something already live (§46, §47).
 | `target` | `str` | yes | — | Order ticket for cancel, position id for close. |
 | `symbol` | `str \| null` | no | `None` |  |
 | `volume` | `float \| null` | no | `None` | Partial close volume; None closes all. |
+| `stop_loss` | `float \| null` | no | `None` | New stop-loss price for MODIFY_STOP. |
 | `requested_by` | `str` | yes | — |  |
 | `requested_at` | `AwareDatetime` | no | `utc_now()` |  |
 | `executor_instance_id` | `str \| null` | no | `None` |  |
@@ -231,6 +235,9 @@ One document describing the whole system's health (§59, §61-§63).
 | `updated_at` | `AwareDatetime` | no | `utc_now()` |  |
 | `symbols` | `tuple[SymbolState]` | no | `()` |  |
 | `heartbeats` | `dict[str, AwareDatetime]` | no | `dict()` |  |
+| `agent_health` | `dict[str, AgentHealth]` | no | `dict()` | Latest health of every Agent Highway bridge, scoped by symbol/timeframe. |
+| `symbol_intelligence` | `SymbolIntelligenceReport \| null` | no | `None` | Agent 18 symbol classes, approved tuning provenance and active server symbols. |
+| `cross_venue_blueprints` | `dict[str, CrossVenueBlueprint]` | no | `dict()` | Latest Agent 19 MT5-to-cTrader blueprint per source symbol. |
 | `trading_enabled` | `bool \| null` | no | `None` | Mirror of settings/execution, for display only. |
 | `account_mode` | `AccountMode \| null` | no | `None` |  |
 | `sleep_phase` | `SleepPhase \| null` | no | `None` |  |
@@ -250,6 +257,7 @@ Execution gates and limits (§56, §84).
 | `max_deviation_points` | `int` | no | `20` |  |
 | `max_open_positions` | `int` | no | `5` |  |
 | `max_daily_trades` | `int` | no | `20` |  |
+| `max_aureon_positions_per_symbol` | `int` | no | `1` |  |
 | `confirmation_ttl_seconds` | `float` | no | `60.0` |  |
 | `quote_ttl_seconds` | `float` | no | `15.0` |  |
 | `status_stale_after_seconds` | `float` | no | `45.0` |  |
@@ -468,6 +476,67 @@ One named condition, and whether it is currently true.
 | `onsets` | `int` | no | `0` |  |
 | `updated_at` | `AwareDatetime \| null` | no | `None` |  |
 
+### TrainingExample
+
+One immutable EOD training row for one setup under one feature/label contract.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
+| `example_id` | `str` | yes | — |  |
+| `market_date` | `str` | yes | — |  |
+| `symbol` | `str` | yes | — |  |
+| `timeframe` | `Timeframe` | yes | — |  |
+| `setup_id` | `str` | yes | — |  |
+| `family` | `SetupFamily` | yes | — |  |
+| `direction_context` | `DirectionContext` | yes | — |  |
+| `setup_version` | `str` | yes | — |  |
+| `feature_schema_version` | `str` | no | `'EOD_SETUP_FEATURES_V1'` |  |
+| `label_schema_version` | `str` | no | `'FAVOURABLE_MOVE_LADDER_V2'` |  |
+| `context` | `dict` | no | `dict()` |  |
+| `agent_read` | `dict` | no | `dict()` |  |
+| `six_dollar_status` | `str` | yes | — | reached, not_reached_eod, or unavailable. EOD is the frozen label horizon. |
+| `six_dollar_reached` | `bool \| null` | no | `None` |  |
+| `six_dollar_reference_price` | `float \| null` | no | `None` |  |
+| `six_dollar_threshold_price` | `float \| null` | no | `None` |  |
+| `six_dollar_reached_at` | `AwareDatetime \| null` | no | `None` |  |
+| `time_to_six_seconds` | `float \| null` | no | `None` |  |
+| `twenty_dollar_reached` | `bool \| null` | no | `None` |  |
+| `forty_dollar_reached` | `bool \| null` | no | `None` |  |
+| `time_to_twenty_seconds` | `float \| null` | no | `None` |  |
+| `time_to_forty_seconds` | `float \| null` | no | `None` |  |
+| `max_favourable_move_price` | `float \| null` | no | `None` |  |
+| `extension_after_six_price` | `float \| null` | no | `None` |  |
+| `mfe_points` | `float \| null` | no | `None` |  |
+| `mae_points` | `float \| null` | no | `None` |  |
+| `mae_before_six_price` | `float \| null` | no | `None` | Maximum adverse quote-price excursion from the frozen detection reference before +6 was first observed. Null when the bar history cannot prove it. |
+| `evaluation_rule_id` | `str \| null` | no | `None` |  |
+| `evaluation_complete` | `bool` | no | `False` |  |
+| `generated_at` | `AwareDatetime` | yes | — |  |
+
+### DailyTrainingStatus
+
+One durable EOD checkpoint so a restart does not train the same day ambiguously.
+
+| field | type | required | default | notes |
+|---|---|---|---|---|
+| `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
+| `status_id` | `str` | yes | — |  |
+| `market_date` | `str` | yes | — |  |
+| `symbol` | `str` | yes | — |  |
+| `feature_schema_version` | `str` | no | `'EOD_SETUP_FEATURES_V1'` |  |
+| `label_schema_version` | `str` | no | `'FAVOURABLE_MOVE_LADDER_V2'` |  |
+| `examples_written` | `int` | no | `0` |  |
+| `reached_six` | `int` | no | `0` |  |
+| `not_reached_six` | `int` | no | `0` |  |
+| `unavailable_six` | `int` | no | `0` |  |
+| `complete_evaluations` | `int` | no | `0` |  |
+| `mae_before_six_available` | `int` | no | `0` |  |
+| `median_mae_before_six_price` | `float \| null` | no | `None` |  |
+| `max_mae_before_six_price` | `float \| null` | no | `None` |  |
+| `by_timeframe` | `tuple[TrainingTimeframeStatus]` | no | `()` |  |
+| `generated_at` | `AwareDatetime` | yes | — |  |
+
 ---
 
 ## Embedded value models
@@ -542,17 +611,6 @@ What the engine hands an agent alongside the candle window (§79).
 | `session` | `SessionContext` | yes | — |  |
 | `sequence_today` | `int` | yes | — | Nth detection-eligible candle in the broker day. |
 | `sequence_session` | `int` | yes | — | Nth within the session. |
-
-### AgentEvidence
-
-Normalized facts an agent knew when it emitted a detection. This is an evidence contract, not a score and never contains outcome information.
-
-| field | type | required | default | notes |
-|---|---|---|---|---|
-| `schema_version` | `int` | no | `1` | Evidence-contract version. |
-| `numeric` | `dict[str, float]` | no | `dict()` | Finite measurable facts from the same closed candle. |
-| `categorical` | `dict[str, str]` | no | `dict()` | Stable labels such as level type, transition or regime. |
-| `flags` | `dict[str, bool]` | no | `dict()` | Boolean conditions known at detection time. |
 
 ### IndicatorSnapshot
 
@@ -830,8 +888,16 @@ Per symbol/timeframe observation state (§59).
 | `volatility` | `VolatilityContext \| null` | no | `None` | ATR(14) and the session range vs its median (9B). |
 | `trend_read` | `TrendRead \| null` | no | `None` | What the last N closed candles did, as facts and a summary (9D). |
 | `mtf` | `MtfContext \| null` | no | `None` | Higher-timeframe reads at the last closed candle (11D). |
+| `higher_timeframe_agent` | `HigherTimeframeAssessment \| null` | no | `None` | Agent 12 normalized M15/H1/H4 assessment. |
+| `market_director` | `DirectorDecision \| null` | no | `None` | Agent 15 WAIT/WATCH/FORMING/READY decision. |
+| `expansion_opportunity` | `ExpansionOpportunity \| null` | no | `None` | Agent 17 big-move scenario and hypothetical entry windows. |
+| `risk_agent` | `RiskAssessment \| null` | no | `None` | Agent 13 pre-trade risk read when account context is available. |
+| `cross_venue_blueprint` | `CrossVenueBlueprint \| null` | no | `None` | Agent 19 latest MT5-to-cTrader blueprint for this symbol. |
 | `session` | `SessionName \| null` | no | `None` |  |
 | `session_trend` | `str \| null` | no | `None` |  |
+| `session_live_trend` | `str \| null` | no | `None` |  |
+| `session_open` | `float \| null` | no | `None` |  |
+| `session_close` | `float \| null` | no | `None` |  |
 | `session_high` | `float \| null` | no | `None` |  |
 | `session_low` | `float \| null` | no | `None` |  |
 | `last_cross` | `dict[str, object] \| null` | no | `None` | {direction, at, price, detection_id} |
@@ -839,6 +905,11 @@ Per symbol/timeframe observation state (§59).
 | `last_sweep` | `dict[str, object] \| null` | no | `None` | {direction, level_type, at} |
 | `last_wick` | `dict[str, object] \| null` | no | `None` | {classification, at} |
 | `last_breakout` | `dict[str, object] \| null` | no | `None` | {direction, level_type, at} |
+| `last_ema_rsi_eligibility` | `dict[str, object] \| null` | no | `None` | {event, direction, rsi, eligible, at} from Agent 20. |
+| `market_journey` | `dict[str, object] \| null` | no | `None` | Latest Asia-to-now + previous-day context transition. |
+| `market_regime` | `dict[str, object] \| null` | no | `None` | Latest non-directional trend/range/compression/expansion regime. |
+| `volume_participation` | `dict[str, object] \| null` | no | `None` | Latest relative-volume, VWAP and participation context. |
+| `daily_bias` | `DailyMarketBiasSnapshot \| null` | no | `None` | Chronological daily/session bias as of the last closed candle. |
 
 ### SymbolLimits
 
@@ -871,7 +942,7 @@ What Discord announces, held at ``settings/notifications`` (9C).
 | `schema_version` | `int` | no | `1` | Document schema version (§6, decision 12). |
 | `enabled_kinds` | `tuple[str]` | no | `('ema_cross', 'wick', 'liquidity', 'breakout')` | agent_name values Discord posts an embed for (9C). |
 | `detections_enabled` | `bool` | no | `True` |  |
-| `setup_states` | `tuple[str]` | no | `('observing', 'watch', 'developing', 'confirmed', 'pullback', 'continuation', 'fakeout_risk', 'completed', 'invalidated', 'repeated_level_test', 'breakout_pressure', 'volume_expansion_at_level')` | Setup states and watch-event types Discord posts or edits a card for. |
+| `setup_states` | `tuple[str]` | no | `('observing', 'watch', 'developing', 'confirmed', 'pullback', 'continuation', 'fakeout_risk', 'completed', 'invalidated', 'repeated_level_test', 'breakout_pressure', 'volume_expansion_at_level', 'favourable_move_6_reached', 'favourable_move_20_reached', 'favourable_move_40_reached')` | Setup states and watch-event types Discord posts or edits a card for. |
 | `setups_enabled` | `bool` | no | `True` |  |
 | `updated_at` | `AwareDatetime \| null` | no | `None` |  |
 | `updated_by` | `str \| null` | no | `None` |  |
@@ -1176,6 +1247,9 @@ Why a request failed (§56, §57, §41, §78).
 | `INSUFFICIENT_MARGIN` | `insufficient_margin` |
 | `MAX_OPEN_POSITIONS` | `max_open_positions` |
 | `MAX_DAILY_TRADES` | `max_daily_trades` |
+| `MAX_AUREON_POSITIONS` | `max_aureon_positions` |
+| `POSITIONS_UNKNOWN` | `positions_unknown` |
+| `NOT_AUREON_OWNED` | `not_aureon_owned` |
 | `BROKER_REJECTED` | `broker_rejected` |
 | `REQUOTE` | `requote` |
 | `CONNECTION_LOST` | `connection_lost` |
@@ -1192,6 +1266,7 @@ A Discord-initiated action on something already live (§46, §47).
 |---|---|
 | `CANCEL` | `cancel` |
 | `CLOSE` | `close` |
+| `MODIFY_STOP` | `modify_stop` |
 
 ### ControlRequestStatus
 
@@ -1390,12 +1465,12 @@ re-derives exactly the token it stamped.
 Phase 13 (plan §2). MT5 remains broker truth, parquet remains the candle archive,
 and the SQLite outbox remains local durability.
 
-Schema revision **0001** (`alembic_version`). `python
+Schema revision **0007** (`alembic_version`). `python
 scripts/migrate.py check` FAILS when the database is behind this OR ahead of it:
 an older build against a newer schema writes NULL into every column it does not
 know about, silently (C-7).
 
-24 tables. Column rule (plan §7): relational for anything filtered,
+35 tables. Column rule (plan §7): relational for anything filtered,
 ordered, identified, claimed or transitioned on; `JSONB` for frozen context read
 back whole. Tick data is never stored here.
 
@@ -1404,26 +1479,37 @@ back whole. Tick data is never stored here.
 | `alerts` | 14 | 2 |
 | `assessments` | 17 | 3 |
 | `audit_logs` | 12 | 3 |
-| `control_requests` | 14 | 2 |
+| `canonical_training_examples` | 11 | 1 |
+| `control_requests` | 15 | 2 |
 | `daily_reviews` | 7 | 1 |
+| `daily_training_status` | 16 | 1 |
 | `detection_evaluations` | 10 | 1 |
-| `detections` | 24 | 4 |
+| `detections` | 25 | 4 |
 | `heartbeats` | 5 | 0 |
+| `learning_exams` | 11 | 1 |
 | `market_day_frames` | 10 | 1 |
 | `market_days` | 16 | 2 |
+| `model_backtests` | 16 | 1 |
+| `model_evolution_log` | 9 | 2 |
+| `model_predictions` | 16 | 2 |
+| `model_registry` | 21 | 2 |
+| `model_training_runs` | 15 | 1 |
 | `notifications` | 10 | 2 |
 | `ops_events` | 10 | 2 |
+| `pending_learning_setups` | 15 | 1 |
 | `sessions` | 21 | 1 |
 | `settings` | 6 | 0 |
 | `setup_evaluations` | 16 | 1 |
 | `setup_events` | 12 | 1 |
-| `setups` | 22 | 4 |
+| `setups` | 23 | 4 |
 | `symbol_specs` | 4 | 0 |
 | `sync_batches` | 8 | 1 |
 | `system_state` | 7 | 1 |
+| `trade_management_events` | 22 | 1 |
 | `trade_notes` | 6 | 1 |
 | `trade_requests` | 35 | 4 |
-| `trades` | 29 | 4 |
+| `trades` | 32 | 4 |
+| `training_examples` | 31 | 2 |
 | `weekly_reviews` | 8 | 1 |
 
 ### `alerts`
@@ -1490,6 +1576,26 @@ Indexes: `ix_assessments_detection`, `ix_assessments_provenance`, `ix_assessment
 
 Indexes: `ix_audit_logs_actor`, `ix_audit_logs_at`, `ix_audit_logs_document`
 
+### `canonical_training_examples`
+
+| column | type | null |
+|---|---|---|
+| `example_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `market_date` | `VARCHAR` | no |
+| `setup_id` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | no |
+| `timeframe` | `VARCHAR` | no |
+| `feature_schema` | `VARCHAR` | no |
+| `label_schema` | `VARCHAR` | no |
+| `features` | `JSONB` | no |
+| `outcome` | `JSONB` | no |
+| `generated_at` | `TIMESTAMP WITH TIME ZONE` | no |
+
+Indexes: `ix_canonical_training_symbol_date`
+
+Unique: `uq_canonical_training_contract`
+
 ### `control_requests`
 
 | column | type | null |
@@ -1501,6 +1607,7 @@ Indexes: `ix_audit_logs_actor`, `ix_audit_logs_at`, `ix_audit_logs_document`
 | `target` | `VARCHAR` | no |
 | `symbol` | `VARCHAR` | yes |
 | `volume` | `FLOAT` | yes |
+| `stop_loss` | `FLOAT` | yes |
 | `requested_by` | `VARCHAR` | no |
 | `requested_at` | `TIMESTAMP WITH TIME ZONE` | no |
 | `completed_at` | `TIMESTAMP WITH TIME ZONE` | yes |
@@ -1524,6 +1631,29 @@ Indexes: `ix_control_requests_claim`, `ix_control_requests_lease`
 | `review` | `JSONB` | no |
 
 Indexes: `ix_daily_reviews_date`
+
+### `daily_training_status`
+
+| column | type | null |
+|---|---|---|
+| `status_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `market_date` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | no |
+| `feature_schema_version` | `VARCHAR` | no |
+| `label_schema_version` | `VARCHAR` | no |
+| `examples_written` | `INTEGER` | no |
+| `reached_six` | `INTEGER` | no |
+| `not_reached_six` | `INTEGER` | no |
+| `unavailable_six` | `INTEGER` | no |
+| `complete_evaluations` | `INTEGER` | no |
+| `mae_before_six_available` | `INTEGER` | no |
+| `median_mae_before_six_price` | `FLOAT` | yes |
+| `max_mae_before_six_price` | `FLOAT` | yes |
+| `by_timeframe` | `JSONB` | no |
+| `generated_at` | `TIMESTAMP WITH TIME ZONE` | no |
+
+Indexes: `ix_daily_training_status_contract` (unique)
 
 ### `detection_evaluations`
 
@@ -1586,6 +1716,24 @@ Indexes: `ix_detections_agent_close`, `ix_detections_market_date`, `ix_detection
 | `instance_id` | `VARCHAR` | yes |
 | `detail` | `JSONB` | no |
 
+### `learning_exams`
+
+| column | type | null |
+|---|---|---|
+| `exam_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `symbol` | `VARCHAR` | no |
+| `period_from` | `VARCHAR` | no |
+| `period_to` | `VARCHAR` | no |
+| `frozen_model_id` | `VARCHAR` | yes |
+| `status` | `VARCHAR` | no |
+| `created_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `scored_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `released_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `metrics` | `JSONB` | no |
+
+Indexes: `ix_learning_exams_symbol`
+
 ### `market_day_frames`
 
 | column | type | null |
@@ -1626,6 +1774,120 @@ Indexes: `ix_market_day_frames_key` (unique)
 
 Indexes: `ix_market_days_complete`, `ix_market_days_symbol_date` (unique)
 
+### `model_backtests`
+
+| column | type | null |
+|---|---|---|
+| `backtest_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `model_id` | `VARCHAR` | yes |
+| `symbol` | `VARCHAR` | no |
+| `status` | `VARCHAR` | no |
+| `algorithm` | `VARCHAR` | no |
+| `feature_schema_version` | `VARCHAR` | no |
+| `label_schema_version` | `VARCHAR` | no |
+| `started_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `completed_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `start_market_date` | `VARCHAR` | yes |
+| `end_market_date` | `VARCHAR` | yes |
+| `folds` | `JSONB` | no |
+| `aggregate_metrics` | `JSONB` | no |
+| `out_of_sample_predictions` | `INTEGER` | no |
+| `failure_message` | `VARCHAR` | yes |
+
+Indexes: `ix_model_backtests_symbol_started`
+
+### `model_evolution_log`
+
+| column | type | null |
+|---|---|---|
+| `decision_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `symbol` | `VARCHAR` | no |
+| `model_id` | `VARCHAR` | no |
+| `champion_model_id` | `VARCHAR` | yes |
+| `action` | `VARCHAR` | no |
+| `reason` | `VARCHAR` | no |
+| `metrics` | `JSONB` | no |
+| `created_at` | `TIMESTAMP WITH TIME ZONE` | no |
+
+Indexes: `ix_model_evolution_model_time`, `ix_model_evolution_symbol_time`
+
+### `model_predictions`
+
+| column | type | null |
+|---|---|---|
+| `prediction_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `model_id` | `VARCHAR` | no |
+| `setup_id` | `VARCHAR` | no |
+| `event_id` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | no |
+| `timeframe` | `VARCHAR` | no |
+| `predicted_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `feature_schema_version` | `VARCHAR` | no |
+| `label_schema_version` | `VARCHAR` | no |
+| `probabilities` | `JSONB` | no |
+| `feature_snapshot` | `JSONB` | no |
+| `decision` | `VARCHAR` | yes |
+| `actual_outcomes` | `JSONB` | yes |
+| `reconciled_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `outcome_class` | `VARCHAR` | yes |
+
+Indexes: `ix_model_predictions_model`, `ix_model_predictions_symbol_time`
+
+Unique: `uq_model_prediction_setup`
+
+### `model_registry`
+
+| column | type | null |
+|---|---|---|
+| `model_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `symbol` | `VARCHAR` | no |
+| `algorithm` | `VARCHAR` | no |
+| `status` | `VARCHAR` | no |
+| `feature_schema_version` | `VARCHAR` | no |
+| `label_schema_version` | `VARCHAR` | no |
+| `model_schema_version` | `VARCHAR` | no |
+| `parent_model_id` | `VARCHAR` | yes |
+| `generation` | `INTEGER` | yes |
+| `hyperparameters` | `JSONB` | no |
+| `trained_from` | `VARCHAR` | no |
+| `trained_through` | `VARCHAR` | no |
+| `training_samples` | `INTEGER` | no |
+| `target_metrics` | `JSONB` | no |
+| `validation_metrics` | `JSONB` | no |
+| `shadow_metrics` | `JSONB` | no |
+| `artifact` | `JSONB` | no |
+| `promotion_reason` | `VARCHAR` | yes |
+| `created_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `activated_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+
+Indexes: `ix_model_registry_symbol_created`, `ix_model_registry_symbol_status`
+
+### `model_training_runs`
+
+| column | type | null |
+|---|---|---|
+| `run_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `model_id` | `VARCHAR` | yes |
+| `symbol` | `VARCHAR` | no |
+| `status` | `VARCHAR` | no |
+| `algorithm` | `VARCHAR` | no |
+| `feature_schema_version` | `VARCHAR` | no |
+| `label_schema_version` | `VARCHAR` | no |
+| `started_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `completed_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `sample_count` | `INTEGER` | no |
+| `trained_from` | `VARCHAR` | yes |
+| `trained_through` | `VARCHAR` | yes |
+| `target_metrics` | `JSONB` | no |
+| `failure_message` | `VARCHAR` | yes |
+
+Indexes: `ix_model_training_symbol_started`
+
 ### `notifications`
 
 | column | type | null |
@@ -1659,6 +1921,30 @@ Indexes: `ix_notifications_ref`, `ix_notifications_status`
 | `detail` | `VARCHAR` | no |
 
 Indexes: `ix_ops_events_active`, `ix_ops_events_updated`
+
+### `pending_learning_setups`
+
+| column | type | null |
+|---|---|---|
+| `learning_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `setup_id` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | no |
+| `timeframe` | `VARCHAR` | no |
+| `market_date` | `VARCHAR` | no |
+| `feature_schema` | `VARCHAR` | no |
+| `label_schema` | `VARCHAR` | no |
+| `features` | `JSONB` | no |
+| `horizon_bars` | `INTEGER` | no |
+| `bars_seen` | `INTEGER` | no |
+| `status` | `VARCHAR` | no |
+| `outcome_state` | `JSONB` | no |
+| `created_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `updated_at` | `TIMESTAMP WITH TIME ZONE` | no |
+
+Indexes: `ix_pending_learning_stream`
+
+Unique: `uq_pending_learning_contract`
 
 ### `sessions`
 
@@ -1767,6 +2053,7 @@ Indexes: `ix_setup_events_setup_created`
 | `anchor` | `JSONB` | no |
 | `linked_detection_ids` | `JSONB` | no |
 | `context_summary` | `JSONB` | no |
+| `agent_confluence` | `JSONB` | no |
 | `reference` | `JSONB` | yes |
 | `params_snapshot` | `JSONB` | no |
 
@@ -1809,6 +2096,35 @@ Indexes: `ix_sync_batches_started`
 | `state` | `JSONB` | no |
 
 Indexes: `ix_system_state_symbol` (unique)
+
+### `trade_management_events`
+
+| column | type | null |
+|---|---|---|
+| `event_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `trade_id` | `VARCHAR` | no |
+| `observed_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `source` | `VARCHAR` | no |
+| `action` | `VARCHAR` | no |
+| `current_move` | `FLOAT` | yes |
+| `peak_move` | `FLOAT` | yes |
+| `giveback` | `FLOAT` | yes |
+| `protected_move` | `FLOAT` | yes |
+| `trail_price` | `FLOAT` | yes |
+| `continuation_score` | `INTEGER` | yes |
+| `continuation_total` | `INTEGER` | yes |
+| `exit_price` | `FLOAT` | yes |
+| `realized_move` | `FLOAT` | yes |
+| `exit_reason` | `VARCHAR` | yes |
+| `phase` | `VARCHAR` | yes |
+| `previous_phase` | `VARCHAR` | yes |
+| `priority` | `VARCHAR` | yes |
+| `current_stop` | `FLOAT` | yes |
+| `previous_stop` | `FLOAT` | yes |
+| `detail` | `VARCHAR` | yes |
+
+Indexes: `ix_trade_management_trade_time`
 
 ### `trade_notes`
 
@@ -1896,10 +2212,53 @@ Indexes: `ix_trade_requests_claim`, `ix_trade_requests_detection`, `ix_trade_req
 | `link_type` | `VARCHAR` | yes |
 | `deal_ids` | `JSONB` | no |
 | `excursion` | `JSONB` | no |
+| `management` | `JSONB` | yes |
+| `guardian` | `JSONB` | yes |
+| `management_state` | `JSONB` | yes |
 | `last_reconciled_at` | `TIMESTAMP WITH TIME ZONE` | yes |
 | `last_synced_at` | `TIMESTAMP WITH TIME ZONE` | yes |
 
 Indexes: `ix_trades_open_time`, `ix_trades_position` (unique), `ix_trades_request`, `ix_trades_symbol_status`
+
+### `training_examples`
+
+| column | type | null |
+|---|---|---|
+| `example_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `market_date` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | no |
+| `timeframe` | `VARCHAR` | no |
+| `setup_id` | `VARCHAR` | no |
+| `family` | `VARCHAR` | no |
+| `direction_context` | `VARCHAR` | no |
+| `setup_version` | `VARCHAR` | no |
+| `feature_schema_version` | `VARCHAR` | no |
+| `label_schema_version` | `VARCHAR` | no |
+| `context` | `JSONB` | no |
+| `agent_read` | `JSONB` | no |
+| `six_dollar_status` | `VARCHAR` | no |
+| `six_dollar_reached` | `BOOLEAN` | yes |
+| `six_dollar_reference_price` | `FLOAT` | yes |
+| `six_dollar_threshold_price` | `FLOAT` | yes |
+| `six_dollar_reached_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `time_to_six_seconds` | `FLOAT` | yes |
+| `twenty_dollar_reached` | `BOOLEAN` | yes |
+| `forty_dollar_reached` | `BOOLEAN` | yes |
+| `time_to_twenty_seconds` | `FLOAT` | yes |
+| `time_to_forty_seconds` | `FLOAT` | yes |
+| `max_favourable_move_price` | `FLOAT` | yes |
+| `extension_after_six_price` | `FLOAT` | yes |
+| `mfe_points` | `FLOAT` | yes |
+| `mae_points` | `FLOAT` | yes |
+| `mae_before_six_price` | `FLOAT` | yes |
+| `evaluation_rule_id` | `VARCHAR` | yes |
+| `evaluation_complete` | `BOOLEAN` | no |
+| `generated_at` | `TIMESTAMP WITH TIME ZONE` | no |
+
+Indexes: `ix_training_examples_symbol_date`, `ix_training_examples_timeframe`
+
+Unique: `uq_training_example_contract`
 
 ### `weekly_reviews`
 

@@ -196,6 +196,7 @@ class LocalDatabase:
             trade_additions = {
                 "management": "JSON",
                 "guardian": "JSON",
+                "management_state": "JSON",
             }
             for name, sql_type in trade_additions.items():
                 if name not in trade_columns:
@@ -212,6 +213,7 @@ class LocalDatabase:
             }
             model_additions = {
                 "parent_model_id": "TEXT",
+                "generation": "INTEGER",
                 "hyperparameters": "JSON NOT NULL DEFAULT '{}'",
                 "validation_metrics": "JSON NOT NULL DEFAULT '{}'",
                 "shadow_metrics": "JSON NOT NULL DEFAULT '{}'",
@@ -223,6 +225,52 @@ class LocalDatabase:
                         f"ALTER TABLE model_registry ADD COLUMN {name} {sql_type}"
                     )
                     log.info("upgraded local schema: model_registry.%s", name)
+
+            control_columns = {
+                row[1]
+                for row in connection.exec_driver_sql(
+                    "PRAGMA table_info(control_requests)"
+                ).fetchall()
+            }
+            if "stop_loss" not in control_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE control_requests ADD COLUMN stop_loss FLOAT"
+                )
+                log.info("upgraded local schema: control_requests.stop_loss")
+
+            prediction_columns = {
+                row[1]
+                for row in connection.exec_driver_sql(
+                    "PRAGMA table_info(model_predictions)"
+                ).fetchall()
+            }
+            for name, sql_type in {"decision": "TEXT", "outcome_class": "TEXT"}.items():
+                if name not in prediction_columns:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE model_predictions ADD COLUMN {name} {sql_type}"
+                    )
+                    log.info("upgraded local schema: model_predictions.%s", name)
+
+            event_columns = {
+                row[1]
+                for row in connection.exec_driver_sql(
+                    "PRAGMA table_info(trade_management_events)"
+                ).fetchall()
+            }
+            event_additions = {
+                "phase": "TEXT",
+                "previous_phase": "TEXT",
+                "priority": "TEXT",
+                "current_stop": "FLOAT",
+                "previous_stop": "FLOAT",
+                "detail": "TEXT",
+            }
+            for name, sql_type in event_additions.items():
+                if name not in event_columns:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE trade_management_events ADD COLUMN {name} {sql_type}"
+                    )
+                    log.info("upgraded local schema: trade_management_events.%s", name)
 
     def wait_until_ready(self, **_: Any) -> float:
         self.probe()

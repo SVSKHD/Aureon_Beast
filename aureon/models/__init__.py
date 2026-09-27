@@ -41,7 +41,7 @@ from aureon.models.broker import (
     BrokerOrder,
     BrokerPosition,
 )
-from aureon.models.control import ControlRequest
+from aureon.models.control import AUTONOMOUS_REQUESTER_PREFIX, ControlRequest
 from aureon.models.detection import (
     AgentEvidence,
     CandleContext,
@@ -52,6 +52,7 @@ from aureon.models.detection import (
 from aureon.models.enums import (
     CONTROL_REQUEST_TRANSITIONS,
     HORIZON_TRANSITIONS,
+    MANAGEMENT_TRANSITIONS,
     PRICE_ALERT_TRANSITIONS,
     TERMINAL_ALERT_STATUSES,
     TERMINAL_REQUEST_STATUSES,
@@ -63,12 +64,14 @@ from aureon.models.enums import (
     Direction,
     ExcursionSource,
     ExecutionClassification,
+    ExitPriority,
     FailureCode,
     FillingMode,
     Freshness,
     HorizonKind,
     HorizonStatus,
     LinkType,
+    ManagementPhase,
     MarketState,
     NotificationKind,
     NotificationStatus,
@@ -86,6 +89,7 @@ from aureon.models.enums import (
     TrendBias,
     assert_control_request_transition,
     assert_horizon_transition,
+    assert_management_transition,
     assert_price_alert_transition,
     assert_trade_request_transition,
     assert_trade_transition,
@@ -110,7 +114,34 @@ from aureon.models.identity import (
     execution_attempt_id,
     new_alert_id,
 )
+from aureon.models.learning_v1 import (
+    FEATURE_SCHEMA_V1,
+    LABEL_SCHEMA_V1,
+    MODEL_SCHEMA_V1,
+    CanonicalTrainingExample,
+    CleanMoveOutcomeV1,
+    CoverageAssessment,
+    CoverageBucket,
+    CoverageStatus,
+    EntryDecision,
+    EntryIntelligence,
+    EvolutionDecision,
+    FeatureSnapshotV1,
+    GenerationComparison,
+    LearningExam,
+    LearningExamStatus,
+    ModelLifecycleStatus,
+    PendingLearningSetup,
+)
 from aureon.models.market import Candle, QuoteSnapshot, SymbolInfo
+from aureon.models.market_bias import (
+    DailyBiasState,
+    DailyMarketBiasSnapshot,
+    ReversalRisk,
+    SessionBiasRead,
+    TrendQuality,
+    VolatilityState,
+)
 from aureon.models.ops import OpsEvent
 from aureon.models.profile import (
     MAX_PROFILE_BINS,
@@ -152,11 +183,6 @@ from aureon.models.system import (
     SystemState,
     freshness_of,
 )
-from aureon.models.training import (
-    DailyTrainingStatus,
-    TrainingExample,
-    TrainingTimeframeStatus,
-)
 from aureon.models.trade import (
     CLOSE_REASON_CONVENTION,
     BrokerOrderRequest,
@@ -164,7 +190,14 @@ from aureon.models.trade import (
     Excursion,
     PendingOrder,
     Trade,
+    TradeManagementEvent,
+    TradeManagementState,
     TradeRequest,
+)
+from aureon.models.training import (
+    DailyTrainingStatus,
+    TrainingExample,
+    TrainingTimeframeStatus,
 )
 
 # Every stored document, in the order CONTRACTS.md renders them.
@@ -191,6 +224,36 @@ DOCUMENT_MODELS: tuple[type[AureonDocument], ...] = (
 )
 
 __all__ = [
+    "AUTONOMOUS_REQUESTER_PREFIX",
+    "FEATURE_SCHEMA_V1",
+    "LABEL_SCHEMA_V1",
+    "MODEL_SCHEMA_V1",
+    "CanonicalTrainingExample",
+    "CleanMoveOutcomeV1",
+    "CoverageAssessment",
+    "CoverageBucket",
+    "CoverageStatus",
+    "EntryDecision",
+    "EntryIntelligence",
+    "EvolutionDecision",
+    "FeatureSnapshotV1",
+    "GenerationComparison",
+    "LearningExam",
+    "LearningExamStatus",
+    "ModelLifecycleStatus",
+    "PendingLearningSetup",
+    "DailyBiasState",
+    "DailyMarketBiasSnapshot",
+    "ReversalRisk",
+    "SessionBiasRead",
+    "TrendQuality",
+    "VolatilityState",
+    "MANAGEMENT_TRANSITIONS",
+    "ExitPriority",
+    "ManagementPhase",
+    "assert_management_transition",
+    "TradeManagementEvent",
+    "TradeManagementState",
     "SCHEMA_VERSION",
     "AureonDocument",
     "AureonModel",

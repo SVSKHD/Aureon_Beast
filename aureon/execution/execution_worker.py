@@ -341,13 +341,28 @@ class ExecutionWorker:
             account = self.broker.account_info()
         except Exception:  # noqa: BLE001
             account = None
+        positions_unknown = False
+        aureon_on_symbol = 0
         try:
-            positions = len(self.broker.open_positions())
-        except Exception:  # noqa: BLE001
+            open_positions = self.broker.open_positions()
+            positions = len(open_positions)
+            aureon_on_symbol = sum(
+                1
+                for position in open_positions
+                if position.magic == self.magic and position.symbol == request.symbol
+            )
+        except Exception:  # noqa: BLE001 - unknown is NOT zero; the guard fails closed
+            log.exception("open_positions failed; position limits cannot be verified")
             positions = 0
+            positions_unknown = True
 
         snapshot = BrokerSnapshot(
-            symbol_info=info, quote=quote, account=account, open_positions=positions
+            symbol_info=info,
+            quote=quote,
+            account=account,
+            open_positions=positions,
+            positions_unknown=positions_unknown,
+            aureon_positions_on_symbol=aureon_on_symbol,
         )
         return check(
             request,

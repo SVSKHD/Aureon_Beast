@@ -26,9 +26,11 @@ from aureon.models.base import AureonDocument, AureonModel, MarketTime, UtcDatet
 from aureon.models.enums import (
     Direction,
     ExcursionSource,
+    ExitPriority,
     FailureCode,
     FillingMode,
     LinkType,
+    ManagementPhase,
     OrderType,
     TradeRequestStatus,
     TradeSource,
@@ -255,7 +257,11 @@ class Excursion(AureonModel):
 
 
 class TradeManagementEvent(AureonDocument):
-    """One durable Agent14/16 protection adjustment or final managed-exit observation."""
+    """One durable exit-management action: a phase change, a stop move, or the final exit.
+
+    Append-only. Together these rows are the audit trail of everything the deterministic
+    exit manager decided for one Aureon-owned position, in the order it decided it.
+    """
 
     event_id: str
     trade_id: str
@@ -272,6 +278,66 @@ class TradeManagementEvent(AureonDocument):
     exit_price: float | None = None
     realized_move: float | None = None
     exit_reason: str | None = None
+    phase: str | None = None
+    previous_phase: str | None = None
+    priority: str | None = None
+    current_stop: float | None = None
+    previous_stop: float | None = None
+    detail: str | None = None
+
+
+class TradeManagementState(AureonModel):
+    """The deterministic exit manager's durable state for one Aureon-owned position.
+
+    Everything a restart needs to continue protecting the position exactly where it left
+    off: the ratcheted stop, the ladder of reached targets, the peak, and -- once closed
+    -- the exit experience the learning side reads. Moves are in the instrument's price
+    units (dollars for XAUUSD), the same units as the clean_10 label.
+    """
+
+    phase: ManagementPhase = ManagementPhase.OPEN
+    entry_price: float
+    direction: Direction
+    initial_stop: float | None = None
+    current_stop: float | None = None
+
+    mfe: float = Field(default=0.0, ge=0, description="Max favourable move, price units.")
+    mae: float = Field(default=0.0, ge=0, description="Max adverse move, price units.")
+    current_move: float = 0.0
+
+    reached_5: bool = False
+    reached_10: bool = False
+    reached_20: bool = False
+    reached_30: bool = False
+    reached_40: bool = False
+
+    protection_activated: bool = False
+    protection_activation_price: float | None = None
+    trail_activated: bool = False
+    trail_activation_price: float | None = None
+    trail_updates: int = Field(default=0, ge=0)
+    peak_favorable_price: float | None = None
+
+    exit_price: float | None = None
+    exit_time: UtcDatetime | None = None
+    exit_reason: str | None = None
+    exit_priority: ExitPriority = ExitPriority.NONE
+    exit_requested_at: UtcDatetime | None = None
+    exit_request_id: str | None = None
+    realized_move: float | None = None
+    profit_given_back_from_peak: float | None = None
+    structural_invalidation_reason: str | None = None
+    hard_risk_reason: str | None = None
+
+    last_action: str = "hold"
+    last_reason: str | None = None
+    updated_at: UtcDatetime | None = None
+    policy: dict[str, float] = Field(default_factory=dict)
+    rule_version: str = "EXIT_MANAGER_V1"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.phase is ManagementPhase.CLOSED
 
 
 class Trade(AureonDocument):
@@ -322,6 +388,9 @@ class Trade(AureonDocument):
     # position; broker truth still decides whether and where it actually closes.
     management: TradeManagementDecision | None = None
     guardian: GuardianDecision | None = None
+    #: The deterministic exit manager's durable state (V1). Only ever set on an
+    #: Aureon-owned position; an external position never carries one.
+    management_state: TradeManagementState | None = None
 
     detection_id: str | None = None
     link_type: LinkType | None = None
@@ -363,3 +432,16 @@ class Trade(AureonDocument):
     @property
     def is_external(self) -> bool:
         return self.source is TradeSource.EXTERNAL_MT5
+
+    @property
+    def aureon_managed(self) -> bool:
+        """Only Aureon-owned positions may be autonomously managed (§52)."""
+        return self.source.aureon_managed
+
+    @model_validator(mode="after")
+    def _external_positions_carry_no_management_state(self) -> Trade:
+        if self.is_external and self.management_state is not None:
+            raise ValueError(
+                "an external/manual position never carries Aureon management state (§52)"
+            )
+        return self

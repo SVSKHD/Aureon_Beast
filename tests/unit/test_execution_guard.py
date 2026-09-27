@@ -142,7 +142,7 @@ def test_the_guard_has_all_its_rules_registered() -> None:
 
     Pinning the count makes adding a rule a deliberate, visible act.
     """
-    assert len(RULES) == 18
+    assert len(RULES) == 20
 
 
 # ── §57: the operator's switch ────────────────────────────────────────────────
