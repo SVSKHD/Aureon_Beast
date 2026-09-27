@@ -41,3 +41,21 @@ any new ML curriculum may consume these labels.
 - Unit coverage for immediate continuation, pullback continuation, deep pullback,
   failure, ambiguity and leakage/horizon guards.
 - No model training or execution imports.
+
+
+## Counter-move and re-entry completion
+
+A pullback is not automatically a counter-trade. The labeler accepts a counter-move
+candidate only when an observable-state row contains independent deterministic
+directional evidence opposite the original EMA cross. The candidate entry is the close
+of that evidence candle; MFE, MAE and +6/+10/+20/+30/+40 timing are measured strictly
+after that entry.
+
+Pullback exhaustion is likewise observable-time-only: after a qualified counter-move,
+the first independent directional evidence returning to the original thesis is frozen
+as the exhaustion/re-entry candidate. A failed continuation remains a negative example;
+the candidate is not moved retrospectively to the pullback extreme.
+
+The `observable_states` input is expected to be produced by chronological replay from
+the existing deterministic agents. Outcome/future keys are stripped from candidate
+context as a second leakage barrier.
