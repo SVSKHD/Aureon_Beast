@@ -81,6 +81,28 @@ class EMASequenceSnapshot(AureonModel):
     context: dict = Field(default_factory=dict)
 
 
+class ObservableCandidateSnapshot(AureonModel):
+    """Candidate frozen when deterministic evidence made it observable."""
+
+    model_config = ConfigDict(frozen=True)
+    candidate_id: str
+    timestamp: UtcDatetime
+    entry_price: float
+    direction: Direction
+    candidate_type: str
+    evidence_agents: list[str] = Field(default_factory=list)
+    evidence: dict = Field(default_factory=dict)
+    context: dict = Field(default_factory=dict)
+
+
+class CandidateOutcome(AureonModel):
+    model_config = ConfigDict(frozen=True)
+    mfe: float = Field(default=0.0, ge=0)
+    mae: float = Field(default=0.0, ge=0)
+    targets: TargetLadder = Field(default_factory=TargetLadder)
+    bars_observed: int = Field(default=0, ge=0)
+
+
 class EMASequenceLabel(AureonModel):
     """Future-only research label for one frozen crossover snapshot."""
 
@@ -98,6 +120,12 @@ class EMASequenceLabel(AureonModel):
 
     continuation: TargetLadder = Field(default_factory=TargetLadder)
     counter_move: TargetLadder = Field(default_factory=TargetLadder)
+
+    counter_move_candidate: ObservableCandidateSnapshot | None = None
+    counter_move_outcome: CandidateOutcome | None = None
+    exhaustion_candidate: ObservableCandidateSnapshot | None = None
+    continuation_candidate: ObservableCandidateSnapshot | None = None
+    continuation_candidate_outcome: CandidateOutcome | None = None
 
     path_ambiguous: bool = False
     diagnostics: dict = Field(default_factory=dict)
