@@ -30,6 +30,7 @@ from aureon.models.enums import (
     SleepPhase,
     Timeframe,
 )
+from aureon.models.learning_v1 import EntryIntelligence
 from aureon.models.market import QuoteSnapshot
 from aureon.models.market_bias import DailyMarketBiasSnapshot
 from aureon.models.mtf import MtfContext
@@ -247,6 +248,10 @@ class SymbolState(AureonModel):
         default=None,
         description="Chronological daily/session bias as of the last closed candle.",
     )
+    #: The Champion's latest recorded EntryIntelligence for this stream (V1), published by
+    #: the observer so Discord can render decision, confidence and coverage without running
+    #: a model. Intelligence only; nothing gates on it here.
+    entry_intelligence: EntryIntelligence | None = None
 
     @model_validator(mode="after")
     def _derive_display_values(self) -> SymbolState:

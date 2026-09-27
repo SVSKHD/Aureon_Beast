@@ -285,6 +285,17 @@ class ModelRepository(PostgresRepository):
         rows = self._rows(statement)
         return None if not rows else ModelPrediction.model_validate(self._prediction_dict(rows[0]))
 
+    def latest_prediction(
+        self, symbol: str, *, model_id: str | None = None
+    ) -> ModelPrediction | None:
+        """The newest recorded prediction for a symbol (the Champion's unless told otherwise)."""
+        statement = select(self.predictions).where(self.predictions.c.symbol == symbol.upper())
+        if model_id is not None:
+            statement = statement.where(self.predictions.c.model_id == model_id)
+        statement = statement.order_by(self.predictions.c.predicted_at.desc()).limit(1)
+        rows = self._rows(statement)
+        return None if not rows else ModelPrediction.model_validate(self._prediction_dict(rows[0]))
+
     def predictions_for_model(
         self,
         model_id: str,

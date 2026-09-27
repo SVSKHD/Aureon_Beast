@@ -910,6 +910,7 @@ Per symbol/timeframe observation state (§59).
 | `market_regime` | `dict[str, object] \| null` | no | `None` | Latest non-directional trend/range/compression/expansion regime. |
 | `volume_participation` | `dict[str, object] \| null` | no | `None` | Latest relative-volume, VWAP and participation context. |
 | `daily_bias` | `DailyMarketBiasSnapshot \| null` | no | `None` | Chronological daily/session bias as of the last closed candle. |
+| `entry_intelligence` | `EntryIntelligence \| null` | no | `None` |  |
 
 ### SymbolLimits
 

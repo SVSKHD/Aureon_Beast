@@ -69,11 +69,12 @@ def run_decision_replay(
     engine: Any,
     target_move: float = 10.0,
     on_progress: Callable[[int, int, int], None] | None = None,
+    bias_policy: Any | None = None,
 ) -> list[DecisionReplayRow]:
     snapshot = MarketSnapshot(symbol=candles[0].symbol if candles else "UNKNOWN")
     htf_agent = HigherTimeframeAgent()
     director = MarketDirector(primary_target_move=target_move)
-    bias_agent = DailyMarketBiasAgent()
+    bias_agent = DailyMarketBiasAgent(bias_policy)
     last_htf = None
     pending: list[tuple[int, Any, Any, Any, Any, list[str], dict[str, Any]]] = []
     total = len(candles)
