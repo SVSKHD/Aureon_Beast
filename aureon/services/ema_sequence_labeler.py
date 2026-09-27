@@ -68,8 +68,8 @@ class EMASequenceLabeler:
         snapshot = self._snapshot(cross_detection, frozen_context)
         future = future_candles[: self.config.horizon_bars]
         first_future = to_utc(future[0].open_time.utc)
-        if first_future < snapshot.timestamp:
-            raise ValueError("future candles precede the frozen cross timestamp")
+        if first_future <= snapshot.timestamp:
+            raise ValueError("future candles must be strictly after the frozen cross timestamp")
 
         label = self._label_path(snapshot, future, observable_states or [])
         return EMASequenceRecord(snapshot=snapshot, label=label)

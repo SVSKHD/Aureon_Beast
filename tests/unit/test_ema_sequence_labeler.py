@@ -179,8 +179,18 @@ def _states(*rows):
 @pytest.mark.parametrize(
     ("direction", "bars", "counter_side", "continuation_side"),
     [
-        (Direction.BUY, [(101, 97, 98), (100, 94, 95), (102, 95, 101), (109, 100, 108)], "sell", "buy"),
-        (Direction.SELL, [(103, 99, 102), (106, 100, 105), (105, 98, 99), (100, 91, 92)], "buy", "sell"),
+        (
+            Direction.BUY,
+            [(101, 97, 98), (100, 94, 95), (102, 95, 101), (109, 100, 108)],
+            "sell",
+            "buy",
+        ),
+        (
+            Direction.SELL,
+            [(103, 99, 102), (106, 100, 105), (105, 98, 99), (100, 91, 92)],
+            "buy",
+            "sell",
+        ),
     ],
 )
 def test_counter_move_and_reentry_are_symmetric(
@@ -189,7 +199,7 @@ def test_counter_move_and_reentry_are_symmetric(
     labeler = EMASequenceLabeler(EMASequenceConfig(
         horizon_bars=4, continuation_move=6, pullback_min_move=2, failure_move=10
     ))
-    candles = [_bar(i, h, l, close) for i, (h, l, close) in enumerate(bars)]
+    candles = [_bar(i, high, low, close) for i, (high, low, close) in enumerate(bars)]
     states = _states(
         [{"agent": "liquidity", "direction": counter_side}],
         [{"agent": "ema_rsi_eligibility", "direction": counter_side}],
