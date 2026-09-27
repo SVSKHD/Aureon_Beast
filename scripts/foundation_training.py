@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Foundation training and the true-unseen-month workflow for Aureon V1 (GAP 10/11).
 
 Subcommands (dates are examples, never defaults):
@@ -153,11 +152,7 @@ def cmd_build(args, config: AureonConfig) -> int:
         clean_target=args.clean_target,
         clean_max_mae=args.clean_max_mae,
         bias_policy=_bias_policy(args),
-        on_progress=lambda done, total, rows: (
-            print(f"  {done:,}/{total:,} candles, {rows} setups", flush=True)
-            if done % max(1, total // 10) == 0 or done == total
-            else None
-        ),
+        on_progress=_progress_bar,
     )
     print(
         f"setups={counts['replay_rows']} eligible={counts['eligible_rows']} "
@@ -315,6 +310,24 @@ def cmd_train(args, config: AureonConfig) -> int:
         if candidate.status == "candidate":
             governed = evolution.qualify_candidate(candidate.model_id)
         print(f"  -> {governed.status}")
+
+        # Show the exact chronological-validation metrics used for qualification.
+        clean_validation = candidate.target_metrics.get("clean_10")
+        if clean_validation is not None:
+            print(
+                "     validation clean_10: "
+                f"samples={clean_validation.samples} "
+                f"precision={clean_validation.precision} "
+                f"recall={clean_validation.recall} "
+                f"fpr={clean_validation.false_positive_rate} "
+                f"brier={clean_validation.brier}"
+            )
+
+        if governed.status == "rejected" and clean_validation is not None:
+            failures = evolution._validation_failures(clean_validation)
+            if failures:
+                print(f"     rejection reason: {'; '.join(failures)}")
+
         if governed.status != "challenger":
             continue
         backtest = backtester.run(
@@ -466,6 +479,24 @@ def cmd_report(args, config: AureonConfig) -> int:
     print(report.disclaimer)
     return 0
 
+def _progress_bar(done: int, total: int, rows: int) -> None:
+    if total <= 0:
+        return
+
+    percent = min(100, int((done / total) * 100))
+    width = 30
+    filled = int(width * percent / 100)
+    bar = "█" * filled + "░" * (width - filled)
+
+    print(
+        f"\rReplaying + agents [{bar}] {percent:3d}% | "
+        f"{done:,}/{total:,} candles | {rows} setups",
+        end="",
+        flush=True,
+    )
+
+    if done >= total:
+        print()
 
 def cmd_coverage(args, config: AureonConfig) -> int:
     from aureon.services.training_coverage import coverage_report, render_coverage
@@ -494,6 +525,11 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--data")
     source.add_argument("--data-dir")
     source.add_argument("--mt5", action="store_true")
+    build.add_argument(
+        "--verbose",
+        action="store_true",
+        help="show detailed engine logs during replay",
+    )
     build.add_argument("--symbol", required=True)
     build.add_argument("--timeframe", default="M5")
     build.add_argument("--from", dest="start", required=True)
@@ -567,9 +603,15 @@ def main(argv: list[str] | None = None) -> int:
     coverage.add_argument("--all-examples", action="store_true")
 
     args = parser.parse_args(argv)
+    log_level = logging.INFO if getattr(args, "verbose", False) else logging.WARNING
+
     logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s"
+        level=log_level,
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
+
+    if not getattr(args, "verbose", False):
+        logging.getLogger("aureon.engine.volume_profile").setLevel(logging.WARNING)
     config = AureonConfig.from_env()
     handlers = {
         "build": cmd_build,
