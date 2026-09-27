@@ -82,10 +82,20 @@ def _movement_summary(records: list[EMASequenceRecord]) -> dict[str, Any]:
     }
 
 
+CANDIDATE_FIELDS: dict[str, tuple[str, str]] = {
+    "counter_move": ("counter_move_candidate", "counter_move_outcome"),
+    "counter_move_candidate": ("counter_move_candidate", "counter_move_outcome"),
+    "continuation": ("continuation_candidate", "continuation_candidate_outcome"),
+    "continuation_candidate": ("continuation_candidate", "continuation_candidate_outcome"),
+}
+
+
 def _candidate_fields(prefix: str) -> tuple[str, str]:
-    """Resolve candidate/outcome fields without duplicating the candidate suffix."""
-    candidate_field = prefix if prefix.endswith("_candidate") else f"{prefix}_candidate"
-    return candidate_field, f"{candidate_field}_outcome"
+    """Resolve report fields from the explicit EMASequenceLabel schema."""
+    try:
+        return CANDIDATE_FIELDS[prefix]
+    except KeyError as exc:
+        raise ValueError(f"unsupported candidate report prefix: {prefix}") from exc
 
 
 def _candidate_summary(records: list[EMASequenceRecord], prefix: str) -> dict[str, Any]:
