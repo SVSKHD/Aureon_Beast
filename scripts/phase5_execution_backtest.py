@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -12,12 +13,28 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from aureon.services.phase5_execution_backtest import (  # noqa: E402
-    ExecutionAssumptions, phase5_report,
+    ExecutionAssumptions, JAN23_MODEL_ID, phase5_report,
 )
 
 
 def _rows(path: str) -> list[dict]:
     return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _phase4_provenance(path: str) -> dict:
+    source = Path(path)
+    raw = source.read_bytes()
+    report = json.loads(raw)
+    if report.get("model_id") != JAN23_MODEL_ID:
+        raise ValueError(f"unexpected Phase-4 model_id: {report.get('model_id')!r}")
+    if report.get("research_only") is not True or report.get("production_eligible") is not False:
+        raise ValueError("Phase-4 report is not the expected research-only artifact")
+    return {
+        "model_id": report["model_id"],
+        "dataset": report.get("dataset"),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "source": str(source),
+    }
 
 
 def main() -> int:
@@ -26,6 +43,7 @@ def main() -> int:
     p.add_argument("--deterministic-aureon", required=True)
     p.add_argument("--wait-confirmation", required=True)
     p.add_argument("--sequence-ml", required=True)
+    p.add_argument("--phase4-report", required=True)
     p.add_argument("--counter-move-continuation")
     p.add_argument("--from", dest="start", required=True)
     p.add_argument("--to", dest="end", required=True)
@@ -55,13 +73,16 @@ def main() -> int:
     report = phase5_report(
         baseline_results=baselines, assumptions=assumptions,
         unseen_period={"from": args.start, "to": args.end},
+        phase4_provenance=_phase4_provenance(args.phase4_report),
     )
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    print("✓ PHASE-4 FROZEN ARTIFACT HASHED")
+    print("✓ PHASE-5 EVIDENCE CONTRACT VERIFIED")
     print("✓ PHASE-5 EXECUTION EVIDENCE READY")
     print("✓ SAME-BAR AMBIGUITY CONSERVATIVE")
-    print("✓ LOT-SIZE P&L INCLUDED")
+    print("✓ LOT-SIZE P&L + MAX DRAWDOWN INCLUDED")
     print("✓ LIVE EXECUTION / PROMOTION DISABLED")
     print(f"Report: {out}")
     return 0
