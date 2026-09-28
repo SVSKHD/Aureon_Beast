@@ -1,199 +1,180 @@
-# Aureon
+# Aureon Beast
 
-Market observation, detection evaluation, and **human-confirmed** execution.
+**Aureon is a market setup intelligence system.**
 
-The central invariant: **a detection never creates a trade.** Observation and
-execution are separate halves of the system, and the boundary between them is
-enforced by tests, not by convention — see `tests/boundary/`.
+It watches XAUUSD and other configured symbols, combines several deterministic agents, records what they see, evaluates what happened afterwards, and sends useful market context to Discord.
 
-## Layout
+> **Aureon finds setups. The human decides whether to trade.**
 
-```
-aureon/
-  models/       pydantic contracts + status-transition assertions (Phase 1)
-  config/       typed settings from the environment (Phase 1)
-  storage/      local SQLite application storage + repository boundary
-  data/         market data providers; mt5_provider.py may import MetaTrader5
-  engine/       indicators, analysis/market/replay engines, level tracking
-  agents/       pure detection agents: same window + params -> same detections
-  outbox/       durable SQLite outbox; never drops a detection
-  services/     market state, heartbeats
-  evaluation/   detection outcomes, COMPLETE vs PENDING horizons (Phase 3)
-  execution/    BrokerInterface, guard, worker, reconciliation (Phase 4)
-  positions/    lifecycle; MT5 is the truth (Phase 5)
-  discord/      human interface; reads local storage, never trades (Phase 6)
-  reviews/      machine observation vs human execution, kept apart (Phase 7)
-```
+A detection is not an order. Agent agreement is not an order. Research/model output is not an order.
 
-## Getting started
+## How Aureon works
 
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env     # then fill it in; never commit .env
-pytest
+```text
+MT5 market data
+      ↓
+Deterministic agents
+      ↓
+Market + higher-timeframe context
+      ↓
+Setup / opportunity analysis
+      ↓
+Discord alert and explanation
+      ↓
+HUMAN DECISION
+      ↓
+Manual trade (if wanted)
 ```
 
-`MetaTrader5` is a Windows-only optional extra (`pip install -e ".[mt5]"`). It is
-imported lazily inside the only two modules permitted to touch it, so the full
-test suite runs on any OS against a fake broker.
+The research layer then studies what happened after each frozen setup: favourable movement, adverse movement, +$5/+10/+20+ continuation, failures, sessions and market regimes. This evidence can improve future setup filtering without allowing hindsight into the original detection.
 
-## Rules and status
+## Current production agents
 
-- `CLAUDE.md` — standing rules. Read before any change.
-- `docs/PHASES.md` — phase plan, gates, the cross-phase checklist, and an **Evidence**
-  column derived from the files that actually exist (`make phases`).
-- `docs/PHASE0_STATUS.md` — what has landed and what Phases 2–8 are waiting on.
+The default observer roster is defined in `main_observer.py -> default_agents()`.
 
-## Local storage
+| Agent | What it does | Role |
+| --- | --- | --- |
+| **EMA Cross** | Detects bullish/bearish fast/slow EMA crosses on closed candles. RSI is recorded as context, not a gate. | Directional setup event |
+| **EMA-RSI Eligibility** | Records whether EMA/RSI conditions satisfy the configured eligibility context. | Setup context |
+| **RSI** | Records transitions into/out of overbought and oversold zones. It does not say BUY/SELL. | Context only |
+| **Session Trend** | Describes directional behaviour for the current trading session. | Trend context |
+| **Wick** | Detects meaningful upper/lower wick rejection. It does not independently issue a trade direction. | Rejection context |
+| **Liquidity** | Detects sweeps of tracked highs/lows followed by rejection. | Reversal/liquidity context |
+| **Breakout** | Detects closes beyond the same tracked levels used by the liquidity agent. | Continuation context |
+| **Market Journey** | Describes how price has travelled through the current market path. | Market context |
+| **Market Regime** | Classifies the market environment (trend/range/compression/expansion style context). | Regime context |
+| **Volume Participation** | Measures relative participation, volume/tick-volume behaviour, VWAP and candle expansion. | Participation context |
 
-Aureon currently runs entirely on the local Windows machine. Application state is stored in `data/aureon.db` using SQLite WAL mode; raw candle history stays in Parquet and the existing `outbox.db` remains the durable delivery queue. Firebase/Firestore is not required. PostgreSQL is intentionally only a placeholder for the next storage decision.
+Liquidity and Breakout intentionally share one `LevelTracker`, so they evaluate the same market levels.
 
-Bootstrap or verify the local application database before the first run:
+## Higher-level intelligence
+
+The observer also contains higher-level services around the base agents:
+
+- **Higher Timeframe Agent** — adds higher-timeframe alignment/context.
+- **Daily Market Bias** — maintains the broader daily directional context.
+- **Market Director** — combines already-observed market state into a higher-level view.
+- **Expansion Opportunity Agent** — evaluates expansion/continuation opportunity.
+- **Symbol Intelligence Agent** — supplies symbol-specific tuning and market schedule information.
+- **Cross-Venue Replication Agent** — tracks relevant cross-venue context where configured.
+
+These components provide context and setup intelligence. They do not turn a detection into an automatic trade.
+
+## What a useful Aureon alert should answer
+
+Aureon should make it easy for the human trader to understand:
+
+```text
+Direction:          BUY / SELL
+EMA state:          cross / early context
+Session trend:      aligned / mixed / opposed
+HTF context:        aligned / mixed
+Market regime:      trend / range / expansion / compression
+Liquidity:          sweep / none
+Breakout:           present / none
+Wick rejection:     present / none
+Participation:      strong / normal / weak
+Daily bias:         bullish / bearish / mixed
+
+Setup status:       valid / weak / conflicting
+Expected movement:  research evidence for +$5 / +$10 / +$20+
+Invalidation:       structural context
+
+FINAL ACTION: HUMAN DECISION
+```
+
+The exact fields shown depend on what evidence is available. Aureon should expose disagreement between agents rather than hide it behind a single score.
+
+## Research and learning
+
+Aureon stores frozen detections and evaluates what happened **after** them.
+
+Current research focuses on questions such as:
+
+- How often does a setup reach +$5, +$10, +$15, +$20 and larger moves?
+- What was MAE before the favourable move?
+- Does waiting for pullback/re-entry improve the setup?
+- Which sessions and market regimes produce cleaner continuation?
+- Which agents add useful information and which add noise?
+- When does a +$10 move have credible runner potential?
+
+Research scripts and ML experiments are **advisory only**. A model may estimate movement probabilities, but it does not replace the deterministic setup agents or make the human trading decision.
+
+## Storage
+
+Aureon runs locally on Windows.
+
+- Application state: `data/aureon.db` (SQLite/WAL)
+- Raw candle history: Parquet
+- Durable delivery queue: `outbox.db`
+
+Firebase/Firestore is not required for the current local runtime.
+
+Initialize or verify storage:
 
 ```bash
 python scripts/setup_local_sqlite.py
-```
-
-That command creates missing tables/additive columns and reports the exact file, WAL mode,
-foreign-key state, table count, and current detection/setup row counts. To verify an existing
-database without changing its schema:
-
-```bash
 python scripts/setup_local_sqlite.py --check
 ```
 
-The intended local settings are:
+## Start Aureon
 
-```env
-AUREON_STORAGE_BACKEND=sqlite
-AUREON_LOCAL_DB_PATH=data/aureon.db
+Create the environment and install dependencies:
+
+```bash
+python -m venv .venv
+pip install -e ".[dev]"
 ```
 
-Normal startup remains:
+MetaTrader5 is an optional Windows dependency:
+
+```bash
+pip install -e ".[mt5]"
+```
+
+Configure `.env`, then run:
 
 ```bash
 python main_aureon.py
 ```
 
-When automatic updates are enabled, keep the live checkout on a clean `main` branch and verify
-eligibility with:
+The launcher supervises the observer, monitor, Discord, review/learning services and any explicitly enabled execution service. **Starting Aureon does not mean Aureon should autonomously trade.**
 
-```bash
-python scripts/guardian_status.py
-```
+For day-to-day operation see:
 
-A merged change on `origin/main` is then eligible for the Runtime Guardian's normal
-fetch → fast-forward → preflight → graceful restart flow.
+- `docs/RUNBOOK.md`
+- `docs/MT5_SESSION_CHECKLIST.md`
+- `docs/V1_RELEASE_RUNBOOK.md`
 
+## Agent evidence
 
-After detections begin accumulating, inspect whether every agent is writing normalized
-training evidence:
+To inspect whether agents are producing normalized evidence:
 
 ```bash
 python scripts/report_agent_evidence.py --symbol XAUUSD
 ```
 
-At end of a completed broker day, the review process also builds an immutable training-memory
-snapshot automatically. It can be regenerated manually with:
-
-```bash
-python main_review.py training --symbol XAUUSD --date YYYY-MM-DD
-```
-
-The status is stored in SQLite and can be inspected from Discord with:
-
-```text
-/training-status symbol:XAUUSD
-```
-
-The primary daily target remains a favourable +$6 XAUUSD price move by EOD, while the
-movement ladder also records +$20, +$40, the maximum favourable move after the frozen detection
-reference, and how much farther price travelled after first reaching +$6. Training also records
-MFE/MAE and, when stored timeframe bars can prove it, maximum adverse price excursion before the
-first +$6 reach. This is research memory only and never changes execution rules automatically.
-
-The normal weekly review now appends an agent/timeframe movement table. The same report is
-available in Discord:
+Weekly evidence:
 
 ```text
 /training-weekly symbol:XAUUSD
 ```
 
-### Offline movement model, walk-forward backtest, and shadow inference
-
-The first ML layer is a dependency-free logistic baseline trained only from completed,
-versioned `training_examples`. It predicts three research targets:
-
-```text
-P(reaches $6 by EOD)
-P(reaches $20 by EOD)
-P(reaches $40 by EOD)
-```
-
-Train a candidate model:
-
-```bash
-python scripts/train_model.py --symbol XAUUSD
-```
-
-Run a chronological expanding-window backtest:
-
-```bash
-python scripts/backtest_model.py --symbol XAUUSD
-```
-
-Backtest that exact candidate artifact, then explicitly activate the same model id in
-shadow mode:
-
-```bash
-python scripts/backtest_model.py --symbol XAUUSD --model-id <MODEL_ID>
-python scripts/activate_shadow_model.py --model-id <MODEL_ID>
-```
-
-Activation is refused unless that exact model id has a completed walk-forward backtest.
-
-A shadow model predicts only when a setup reaches CONFIRMED. It writes a
-`model_predictions` row and has no path to trade requests, the executor, MT5, SL/TP, or
-setup lifecycle decisions. At EOD the review process reconciles those predictions with the
-stored $6/$20/$40 and excursion outcomes.
-
-Discord status:
+Model/research status where configured:
 
 ```text
 /model-status symbol:XAUUSD
 /backtest-status symbol:XAUUSD
 ```
 
-`/model-status` separates the latest trained candidate from the active shadow model and
-shows live prediction/reconciliation counts. Training metrics are explicitly in-sample;
-`/backtest-status` is the out-of-sample chronological measurement used to judge whether
-the model generalizes.
+## Core rules
 
-For each EMA/RSI/Trend/Wick/Liquidity/Breakout decision and timeframe it shows decision count,
-aligned decisions, +$6/+20/+40 reaches, median/maximum favourable movement, and median extension
-after +$6. Movement outcomes are credited only to decisions aligned with the setup direction.
+1. **Agents detect and describe setups.**
+2. **No detection automatically means TRADE.**
+3. **The human makes the final trading decision.**
+4. **Future candles may evaluate a setup but may never create the historical setup.**
+5. **Research, backtests and ML stay separate from live observations.**
+6. **Agent disagreement is useful information and must remain visible.**
+7. **Risk and execution assumptions used in research are not automatically production rules.**
 
-This report is deliberately about **data readiness**, not profitability. It shows the
-agent/version population, evidence coverage, and the numeric/categorical/boolean feature
-keys actually present in SQLite. Outcomes stay separate in the evaluation tables so future
-training cannot leak hindsight into detections.
-
-## Running it
-
-- `docs/RUNBOOK.md` — **start here to operate it.** What to type, what each tool refuses
-  to do, and what to do when something is wrong at an hour when reading source is not an
-  option.
-- `docs/MT5_SESSION_CHECKLIST.md` — the manual half of one observation session.
-- `docs/DEMO_EXECUTION_CHECKLIST.md` — the nine execution drills, and the three that can
-  only be done by hand.
-- `docs/evidence/` — one generated, committed file per session. Nothing here is written by
-  hand.
-
-## V1 real-run acceptance
-
-Follow `docs/V1_RELEASE_RUNBOOK.md` for the gold/silver sessions, demo drills, Windows
-supervision, calibration, foundation training, unseen-month exams, exit comparison,
-replay/MTF and weekend evidence sequence. `scripts/v1_release.py` tracks explicit operator
-reviews and artifact checksums. Final baseline freeze now requires all eleven evidence gates
-and binds them to the current commit, Champion and configuration; fixtures do not prove a run.
+That is Aureon's job: **observe clearly, find good setups, explain the evidence, learn from outcomes, and leave the final trade decision to the human.**
