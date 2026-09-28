@@ -109,3 +109,24 @@ def test_acceptance_gate_rejects_inconsistent_target_ladder() -> None:
     report = acceptance_report(records, rows, chronological_split(records))
     assert report["acceptance_gate"]["status"] == "STOP"
     assert "labels_not_internally_consistent" in report["acceptance_gate"]["failures"]
+
+
+def test_lowercase_source_directions_are_normalized_for_acceptance() -> None:
+    records = [
+        _record(0, "IMMEDIATE_CONTINUATION"),
+        _record(1, "FAILED_DIRECTION"),
+        _record(2, "PULLBACK_THEN_CONTINUATION"),
+        _record(3, "PULLBACK_THEN_CONTINUATION"),
+    ]
+    for record in records:
+        record.snapshot.direction.value = record.snapshot.direction.value.lower()
+        record.label.counter_move_candidate.direction.value = record.label.counter_move_candidate.direction.value.lower()
+        record.label.exhaustion_candidate.direction.value = record.label.exhaustion_candidate.direction.value.lower()
+        record.label.continuation_candidate.direction.value = record.label.continuation_candidate.direction.value.lower()
+
+    rows = build_examples(records)
+    report = acceptance_report(records, rows, chronological_split(records))
+
+    assert set(report["direction_counts"]) == {"BUY", "SELL"}
+    assert report["anti_leakage"]["label_consistency_failures"] == []
+    assert report["acceptance_gate"]["status"] == "PHASE_3_CURRICULUM_PASS"

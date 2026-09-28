@@ -171,7 +171,7 @@ def _example(record: Any, stage: Stage, timestamp: Any, direction: Any,
         "labels": {
             "decision": decision.value,
             "setup_type": setup_type,
-            "direction": _enum(direction) if direction is not None else None,
+            "direction": str(_enum(direction)).upper() if direction is not None else None,
             **movement,
         },
     }
