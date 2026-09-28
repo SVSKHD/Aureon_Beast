@@ -27,9 +27,20 @@ class DecisionLabel(StrEnum):
 
 class Stage(StrEnum):
     CROSS = "CROSS"
+    PULLBACK = "PULLBACK"
     COUNTER_MOVE = "COUNTER_MOVE"
     EXHAUSTION = "EXHAUSTION"
     REENTRY_CONTINUATION = "REENTRY_CONTINUATION"
+
+
+FEATURE_SCHEMA = (
+    "ema_fast", "ema_slow", "ema_fast_slope", "ema_slow_slope",
+    "ema_separation", "ema_separation_change", "rsi", "rsi_change", "atr",
+    "htf_alignment", "daily_market_bias", "market_regime", "volatility_regime",
+    "session", "wick_state", "liquidity_state", "breakout_state",
+    "market_structure", "participation", "agent_direction", "agent_confidence",
+    "agent_states", "context", "entry_price", "evidence_agents", "evidence",
+)
 
 
 @dataclass(frozen=True)
@@ -115,16 +126,29 @@ def _cross_features(record: Any) -> dict[str, Any]:
         "agent_states": _safe(s.agent_states),
         "context": _safe(s.context),
     }
+    features.update({"entry_price": None, "evidence_agents": [], "evidence": {}})
     return features
 
 
 def _candidate_features(candidate: Any) -> dict[str, Any]:
-    return {
+    context = _safe(candidate.context)
+    features = {key: None for key in FEATURE_SCHEMA}
+    for key in FEATURE_SCHEMA:
+        if key in context:
+            value = context[key]
+            features[key] = _clean_category(value) if key in {
+                "htf_alignment", "daily_market_bias", "market_regime",
+                "volatility_regime", "session", "wick_state", "liquidity_state",
+                "breakout_state", "market_structure", "participation",
+                "agent_direction",
+            } else value
+    features.update({
         "entry_price": candidate.entry_price,
         "evidence_agents": list(candidate.evidence_agents),
         "evidence": _safe(candidate.evidence),
-        "context": _safe(candidate.context),
-    }
+        "context": context,
+    })
+    return features
 
 
 def _example(record: Any, stage: Stage, timestamp: Any, direction: Any,
@@ -227,6 +251,23 @@ def chronological_split(records: list[Any]) -> Split:
     )
 
 
+def _label_consistency_failures(examples: list[dict[str, Any]]) -> list[str]:
+    failures: list[str] = []
+    for row in examples:
+        labels = row["labels"]
+        hits = [bool(labels[f"reached_{target}"]) for target in (6, 10, 20, 30, 40)]
+        if any(hits[index] and not hits[index - 1] for index in range(1, len(hits))):
+            failures.append(f"{row['snapshot_id']}:non_monotonic_targets")
+        for target in (6, 10, 20, 30, 40):
+            hit = bool(labels[f"reached_{target}"])
+            bars = labels[f"bars_to_{target}"]
+            if hit != (bars is not None):
+                failures.append(f"{row['snapshot_id']}:target_time_mismatch_{target}")
+        if labels["decision"] == "ENTER" and labels["direction"] not in {"BUY", "SELL"}:
+            failures.append(f"{row['snapshot_id']}:enter_without_direction")
+    return failures
+
+
 def acceptance_report(records: list[Any], examples: list[dict[str, Any]], split: Split) -> dict[str, Any]:
     ids = [row["snapshot_id"] for row in examples]
     partitions = {"train": set(split.train), "validation": set(split.validation), "test": set(split.test)}
@@ -244,6 +285,12 @@ def acceptance_report(records: list[Any], examples: list[dict[str, Any]], split:
     stages = Counter(row["stage"] for row in examples)
     setups = Counter(row["labels"]["setup_type"] for row in examples if row["labels"]["setup_type"])
     failures = []
+    schemas = {tuple(sorted(row["features"].keys())) for row in examples}
+    expected_schema = tuple(sorted(FEATURE_SCHEMA))
+    schema_stable = len(schemas) == 1 and next(iter(schemas), ()) == expected_schema
+    label_failures = _label_consistency_failures(examples)
+    if not schema_stable: failures.append("feature_schema_not_stable")
+    if label_failures: failures.append("labels_not_internally_consistent")
     if len(ids) != len(set(ids)): failures.append("duplicate_snapshot_ids")
     if any(overlaps.values()): failures.append("sequence_partition_overlap")
     if forbidden: failures.append("future_fields_in_features")
@@ -267,6 +314,8 @@ def acceptance_report(records: list[Any], examples: list[dict[str, Any]], split:
             "forbidden_feature_occurrences": forbidden,
             "partition_overlaps": overlaps,
             "duplicate_snapshot_ids": len(ids) - len(set(ids)),
+            "feature_schema_stable": schema_stable,
+            "label_consistency_failures": label_failures,
         },
         "acceptance_gate": {
             "status": "PHASE_3_CURRICULUM_PASS" if not failures else "STOP",
@@ -274,3 +323,20 @@ def acceptance_report(records: list[Any], examples: list[dict[str, Any]], split:
             "failures": failures,
         },
     }
+
+
+
+class Phase3SequenceCurriculum:
+    """Explicit Phase-3 research façade; intentionally contains no model-training API."""
+
+    dataset = "JAN23_RESEARCH"
+    research_only = True
+    production_eligible = False
+    champion_promotion_allowed = False
+    live_execution_allowed = False
+
+    def build(self, records: list[Any]) -> tuple[list[dict[str, Any]], Split, dict[str, Any]]:
+        examples = build_examples(records)
+        split = chronological_split(records)
+        report = acceptance_report(records, examples, split)
+        return examples, split, report
