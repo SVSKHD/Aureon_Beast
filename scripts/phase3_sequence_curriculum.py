@@ -13,7 +13,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from aureon.models.sequence_v1 import EMASequenceRecord  # noqa: E402
 from aureon.services.sequence_curriculum import (  # noqa: E402
-    acceptance_report, build_examples, chronological_split,
+    FEATURE_SCHEMA, Phase3SequenceCurriculum,
 )
 
 
@@ -35,8 +35,8 @@ def main() -> int:
         for line in source.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
     records.sort(key=lambda row: row.snapshot.timestamp)
-    examples = build_examples(records)
-    split = chronological_split(records)
+    curriculum = Phase3SequenceCurriculum()
+    examples, split, report = curriculum.build(records)
     membership = {
         sid: name
         for name, ids in (("train", split.train), ("validation", split.validation), ("test", split.test))
@@ -46,7 +46,6 @@ def main() -> int:
     for row in examples:
         buckets[membership[row["sequence_id"]]].append(row)
 
-    report = acceptance_report(records, examples, split)
     target_counts = {}
     for target in (6, 10, 20, 30, 40):
         eligible = [r for r in examples if r["labels"].get("mfe") is not None]
@@ -58,9 +57,7 @@ def main() -> int:
     report["movement_target_prevalence"] = target_counts
     report["partition_snapshot_counts"] = {k: len(v) for k, v in buckets.items()}
 
-    feature_names = sorted({
-        key for row in examples for key in row["features"]
-    })
+    feature_names = list(FEATURE_SCHEMA)
     missing = {
         key: sum(row["features"].get(key) is None for row in examples)
         for key in feature_names
@@ -75,6 +72,11 @@ def main() -> int:
         ],
         "future_labels_never_features": True,
     }
+    agent_counts = {}
+    for row in examples:
+        for agent in row["features"].get("evidence_agents") or []:
+            agent_counts[agent] = agent_counts.get(agent, 0) + 1
+    report["agent_feature_coverage"] = dict(sorted(agent_counts.items()))
     report["feature_coverage"] = {
         key: {"missing": count, "missing_rate": count / len(examples) if examples else None}
         for key, count in missing.items()
