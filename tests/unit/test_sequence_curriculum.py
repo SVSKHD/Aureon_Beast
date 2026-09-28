@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from aureon.services.sequence_curriculum import (
-    FORBIDDEN_FEATURE_KEYS, acceptance_report, build_examples, chronological_split,
+    FEATURE_SCHEMA, FORBIDDEN_FEATURE_KEYS, acceptance_report, build_examples, chronological_split,
 )
 
 
@@ -92,3 +92,20 @@ def test_failed_candidate_is_preserved_as_negative() -> None:
     counter = next(row for row in rows if row["stage"] == "COUNTER_MOVE")
     assert counter["labels"]["decision"] == "INVALIDATE"
     assert counter["labels"]["setup_type"] is None
+
+
+
+def test_feature_schema_is_stable_across_stages() -> None:
+    rows = build_examples([_record(0)])
+    assert rows
+    assert all(set(row["features"]) == set(FEATURE_SCHEMA) for row in rows)
+
+
+def test_acceptance_gate_rejects_inconsistent_target_ladder() -> None:
+    records = [_record(i) for i in range(4)]
+    rows = build_examples(records)
+    rows[0]["labels"]["reached_10"] = True
+    rows[0]["labels"]["reached_6"] = False
+    report = acceptance_report(records, rows, chronological_split(records))
+    assert report["acceptance_gate"]["status"] == "STOP"
+    assert "labels_not_internally_consistent" in report["acceptance_gate"]["failures"]
