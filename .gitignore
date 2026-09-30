@@ -36,3 +36,12 @@ htmlcov/
 # Private real-run logs and immutable local release bundles.
 data/v1_evidence/
 baselines/
+
+# IDE
+.idea/
+
+# Local backups
+backups/
+
+# Runtime/local data
+data/
