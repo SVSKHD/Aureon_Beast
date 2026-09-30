@@ -54,6 +54,7 @@ from aureon.models.market import QuoteSnapshot, SymbolInfo
 from aureon.models.settings import ExecutionSettings
 from aureon.models.system import DEFAULT_OFFLINE_AFTER_SECONDS, freshness_of
 from aureon.models.trade import TradeRequest
+from aureon.services.agent_consensus import AgentConsensus, consensus_lines
 from aureon.services.sleep_cycle import DEFAULT_SLEEP_HEARTBEAT_SECONDS
 
 log = logging.getLogger(__name__)
@@ -992,7 +993,11 @@ def _ema_cross_analysis(detection: Detection) -> str:
     )
 
 
-def build_notification(detection: Detection) -> NotificationScreen:
+def build_notification(
+    detection: Detection,
+    *,
+    consensus: AgentConsensus | None = None,
+) -> NotificationScreen:
     """The §59 detection embed: what the machine saw, and nothing it did not (9C).
 
     Every line comes from the **stored detection** — its own indicator snapshot, its own
@@ -1025,6 +1030,19 @@ def build_notification(detection: Detection) -> NotificationScreen:
         session = detection.session.session.value
 
         analysis = _ema_cross_analysis(detection)
+        consensus_field: tuple[str, str] | None = None
+        if consensus is not None:
+            detail = (
+                f"{consensus.meter}  {consensus.label}\n"
+                f"✅ {consensus.supportive} supportive · "
+                f"➖ {consensus.neutral} neutral · "
+                f"❌ {consensus.conflicting} conflicting"
+            )
+            agents = consensus_lines(consensus)
+            if agents:
+                detail += "\n" + " · ".join(agents)
+            detail += "\nAgreement meter only — not a win probability."
+            consensus_field = ("Agent consensus", detail)
 
         if detection.agent_name == "ema_cross":
             screen.title = f"{detection.symbol} · EMA 20/50 CROSS · {direction_label}"
@@ -1041,6 +1059,7 @@ def build_notification(detection: Detection) -> NotificationScreen:
                     str(evidence.categorical.get("ema200_context", UNKNOWN)),
                 ),
                 ("Analysis", analysis),
+                *( [consensus_field] if consensus_field is not None else [] ),
                 ("Session", session),
             ]
         else:
@@ -1059,6 +1078,7 @@ def build_notification(detection: Detection) -> NotificationScreen:
                     str(evidence.categorical.get("ema20_50_context", UNKNOWN)),
                 ),
                 ("Analysis", analysis),
+                *( [consensus_field] if consensus_field is not None else [] ),
                 ("Session", session),
             ]
         return screen
