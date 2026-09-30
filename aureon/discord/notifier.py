@@ -143,6 +143,8 @@ class Notifier:
         if context.notifications is None or context.notification_settings is None:
             return []
         settings = await context.run(context.notification_settings.read_or_default)
+        if getattr(settings, "signal_first_mode", False):
+            return []
         since = now - timedelta(seconds=self.window_seconds)
 
         announced: list[str] = []
@@ -180,7 +182,14 @@ class Notifier:
                 limit=100,
             )
             consensus = build_agent_consensus(detection, peers)
-        screen = build_notification(detection, consensus=consensus)
+        session_ema_context = None
+        if detection.agent_name == "session_trend":
+            session_ema_context = await self._session_ema_context(detection)
+        screen = build_notification(
+            detection,
+            consensus=consensus,
+            session_ema_context=session_ema_context,
+        )
         chart, filename = await self._detection_chart(detection)
         try:
             await self.send(
@@ -205,6 +214,52 @@ class Notifier:
             )
             return False
         return True
+
+    async def _session_ema_context(
+        self,
+        detection: Detection,
+    ) -> tuple[str, str]:
+        """Latest EMA-cross facts for a completed-session summary.
+
+        These are labelled as the latest CROSS, not current EMA state. That distinction
+        matters when a session contains no fresh cross near its boundary.
+        """
+        context = self.context
+        since = detection.detected_at.utc - timedelta(hours=24)
+        recent = await context.run(
+            context.detections.recent_for_symbol,
+            detection.symbol,
+            since=since,
+            limit=200,
+        )
+        eligible = [
+            item
+            for item in recent
+            if item.timeframe == detection.timeframe
+            and item.detected_at.utc <= detection.detected_at.utc
+        ]
+
+        def latest(agent_name: str) -> str:
+            found = next(
+                (item for item in eligible if item.agent_name == agent_name),
+                None,
+            )
+            if found is None:
+                return "—"
+            direction = (
+                "BULLISH"
+                if found.direction and found.direction.value == "buy"
+                else "BEARISH"
+                if found.direction and found.direction.value == "sell"
+                else "CONTEXT"
+            )
+            trend = str(found.evidence.categorical.get("trend_direction", "—"))
+            quality = str(found.evidence.categorical.get("cross_quality", "—"))
+            pattern = str(found.evidence.categorical.get("pre_cross_pattern", "—"))
+            when = found.detected_at.market.strftime("%H:%M")
+            return f"{direction} · {trend} · {quality} · {pattern} · {when}"
+
+        return latest("ema_cross"), latest("ema200_cross")
 
     async def _detection_chart(
         self,
