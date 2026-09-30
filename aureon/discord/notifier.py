@@ -148,7 +148,7 @@ class Notifier:
         announced: list[str] = []
         for symbol in context.config.symbols:
             recent = await context.run(
-                context.detections.recent_for_symbol, symbol, since=since, limit=25
+                context.detections.recent_for_symbol, symbol, since=since, limit=100
             )
             # Oldest first, so a burst reads in the order it happened.
             for detection in sorted(recent, key=lambda d: d.detected_at.utc):
