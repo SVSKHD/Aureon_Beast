@@ -1037,10 +1037,13 @@ def build_notification(
         # Early pressure is context, not a confirmed cross: never prefill Execute.
         screen.side = None
 
+        gap_now = evidence.numeric.get("ema_gap", 0.0)
+        gap_prev = gap_now - gap_change
+        gap_state = "contracting" if abs(gap_now) < abs(gap_prev) else "expanding"
         momentum = " · ".join(
             (
                 f"EMA20 slope {'UP' if fast_slope > 0 else 'DOWN'}",
-                f"gap {'widening' if abs(gap_change) > 0 and gap_change * fast_slope > 0 else 'contracting'}",
+                f"EMA20/50 gap {gap_state}",
                 f"RSI {'rising' if rsi_change > 0 else 'falling'}",
             )
         )
