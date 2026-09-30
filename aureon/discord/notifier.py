@@ -53,6 +53,7 @@ from aureon.models.alerts import PriceAlert
 from aureon.models.base import to_utc, utc_now
 from aureon.models.detection import Detection
 from aureon.models.enums import DirectionContext, NotificationKind
+from aureon.services.agent_consensus import build_agent_consensus
 
 log = logging.getLogger(__name__)
 
@@ -169,7 +170,17 @@ class Notifier:
         )
         if claim is None:
             return False  # already announced, here or by a previous process
-        screen = build_notification(detection)
+        consensus = None
+        if detection.agent_name in {"ema_cross", "ema200_cross"}:
+            since = detection.detected_at.utc - timedelta(seconds=1)
+            peers = await context.run(
+                context.detections.recent_for_symbol,
+                detection.symbol,
+                since=since,
+                limit=100,
+            )
+            consensus = build_agent_consensus(detection, peers)
+        screen = build_notification(detection, consensus=consensus)
         chart, filename = await self._detection_chart(detection)
         try:
             await self.send(
