@@ -875,11 +875,12 @@ def _render_detection_chart(detection: Detection, bars: Any, spec: Any) -> bytes
     if isinstance(ema200, (int, float)):
         levels.append(chart_renderer.ChartLevel(price=float(ema200), label="EMA200 now"))
 
-    label = (
-        f"EMA20/50 {detection.event_key.upper()} · {session}"
-        if detection.agent_name == "ema_cross"
-        else f"EMA200 {detection.event_key.upper()} · {session}"
-    )
+    if detection.agent_name == "ema_cross":
+        label = f"EMA20/50 {detection.event_key.upper()} · {session}"
+    elif detection.agent_name == "ema200_pre_cross":
+        label = f"PRE-CROSS {detection.event_key.upper()} · {session}"
+    else:
+        label = f"EMA200 {detection.event_key.upper()} · {session}"
     mark = chart_renderer.ChartMark(
         at=detection.candle_open_time.utc,
         price=detection.price,
@@ -888,7 +889,11 @@ def _render_detection_chart(detection: Detection, bars: Any, spec: Any) -> bytes
     )
 
     trend = str(evidence.categorical.get("trend_direction", "SIDEWAYS"))
-    quality = str(evidence.categorical.get("cross_quality", "WEAK"))
+    quality = (
+        "PRESSURE"
+        if detection.agent_name == "ema200_pre_cross"
+        else str(evidence.categorical.get("cross_quality", "WEAK"))
+    )
     pattern = str(evidence.categorical.get("pre_cross_pattern", "CHOPPY"))
     companion = (
         str(evidence.categorical.get("ema200_context", "unknown"))
@@ -906,7 +911,7 @@ def _render_detection_chart(detection: Detection, bars: Any, spec: Any) -> bytes
         detections=(mark,),
         analysis_lines=(
             f"TREND    {trend}",
-            f"QUALITY  {quality}",
+            f"STATE    {quality}",
             f"PATTERN  {pattern}",
             f"CONTEXT  {companion}",
         ),
