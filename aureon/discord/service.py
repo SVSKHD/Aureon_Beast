@@ -991,6 +991,7 @@ def build_notification(detection: Detection) -> NotificationScreen:
         evidence = detection.evidence
         trend = evidence.categorical.get("trend_direction", UNKNOWN)
         quality = evidence.categorical.get("cross_quality", UNKNOWN)
+        pattern = evidence.categorical.get("pre_cross_pattern", UNKNOWN)
         session = detection.session.session.value
 
         if detection.agent_name == "ema_cross":
@@ -1001,7 +1002,9 @@ def build_notification(detection: Detection) -> NotificationScreen:
                 ("Cross", f"EMA20 / EMA50 · {direction_label}"),
                 ("Trend", str(trend)),
                 ("Quality", str(quality)),
+                ("Pattern", str(pattern)),
                 ("EMA20 / EMA50", f"{_fmt(fast)} / {_fmt(slow)} · {relation}"),
+                ("EMA200 context", str(evidence.categorical.get("ema200_context", UNKNOWN))),
                 ("Session", session),
             ]
         else:
@@ -1013,7 +1016,12 @@ def build_notification(detection: Detection) -> NotificationScreen:
                 ("Cross", f"PRICE / EMA200 · {direction_label}"),
                 ("Trend", str(trend)),
                 ("Quality", str(quality)),
+                ("Pattern", str(pattern)),
                 ("EMA200", f"{_fmt(ema200)} · {relation}"),
+                (
+                    "EMA20 / EMA50 context",
+                    str(evidence.categorical.get("ema20_50_context", UNKNOWN)),
+                ),
                 ("Session", session),
             ]
         return screen
