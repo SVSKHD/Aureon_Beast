@@ -182,17 +182,87 @@ def notice_embed(title: str, message: str, *, bad: bool = False) -> Any:
     return _embed(title, colour=COLOUR_BAD if bad else COLOUR_INFO, description=message)
 
 
-def notification_embed(screen: Any) -> Any:
-    """A detection announcement (9C).
+def _direction_style(direction: str | None) -> tuple[str, int]:
+    """Colour describes direction only, never quality or execution clearance."""
+    direction = str(direction or "").lower()
+    if direction in {"buy", "bullish", "up"}:
+        return "🟢", COLOUR_OK
+    if direction in {"sell", "bearish", "down"}:
+        return "🔴", COLOUR_BAD
+    return "🟡", COLOUR_WARN
 
-    Deliberately the INFO colour whatever the direction. A green embed for a bullish cross
-    and a red one for a bearish one would read as approval and disapproval, which is a
-    recommendation drawn in colour — and the footer says the opposite in words.
+
+def _readable(value: str) -> str:
+    return str(value or "—").replace("_", " ")
+
+
+def notification_embed(screen: Any) -> Any:
+    """Mobile-first alert: headline, key facts, then concise context (9C).
+
+    Full evidence and identifiers remain on the screen/stored detection; notification
+    buttons still use the original identifiers. Discord supports an accent, not a custom
+    message background. The operator explicitly requested directional colours.
     """
-    embed = _embed(screen.title, colour=COLOUR_INFO)
-    for name, value in screen.fields:
-        embed.add_field(name=name, value=value or "—", inline=True)
-    embed.set_footer(text=screen.footer)
+    facts = dict(screen.fields)
+    session_summary = "SESSION CLOSED" in screen.title
+    direction = facts.get("Trend") if session_summary else screen.side
+    icon, colour = _direction_style(direction)
+    embed = _embed(f"{icon} {screen.title}", colour=colour)
+
+    if "Cross" in facts:
+        embed.description = (
+            f"**{facts.get('Price', '—')}** · {_readable(facts.get('Session', '—')).title()}\n"
+            f"Trend **{_readable(facts.get('Trend', '—'))}** · "
+            f"Quality **{_readable(facts.get('Quality', '—'))}**"
+        )
+        context = []
+        for name in ("EMA20 / EMA50", "EMA200", "EMA200 context", "EMA20 / EMA50 context"):
+            if name in facts:
+                context.append(f"**{name}:** {_readable(facts[name])}")
+        if context:
+            embed.add_field(name="EMA context", value="\n".join(context), inline=False)
+        consensus = facts.get("Agent consensus", "")
+        if consensus:
+            lines = consensus.splitlines()
+            # The first line is the decorative meter plus its categorical label.
+            label = lines[0].lstrip("█░ ").strip() or "Unavailable"
+            counts = lines[1] if len(lines) > 1 else "Counts unavailable"
+            counts = counts.replace("✅ ", "").replace("➖ ", "").replace("❌ ", "")
+            embed.add_field(
+                name=f"Agent agreement · {label}", value=counts, inline=False
+            )
+        else:
+            embed.add_field(name="Agent agreement", value="Unavailable", inline=False)
+        # Pattern adds a distinct fact; the Analysis paragraph repeats the same readings.
+        if facts.get("Pattern"):
+            embed.add_field(
+                name="Pattern", value=_readable(facts["Pattern"]).capitalize(), inline=False
+            )
+    elif session_summary:
+        embed.description = (
+            f"Trend **{_readable(facts.get('Trend', '—'))}** · "
+            f"Next **{facts.get('Now entering', '—')}**\n"
+            f"**Change / Range:** {facts.get('Change / Range', '—')}\n"
+            f"**O / H / L / C:** {facts.get('O / H / L / C', '—')}"
+        )
+        for name in ("Latest EMA20 / EMA50", "Latest Price / EMA200"):
+            embed.add_field(
+                name=name.replace("Latest", "Latest cross ·"),
+                value=_readable(facts.get(name, "—")), inline=False,
+            )
+    else:
+        # Other configured agents keep their facts, without mobile column stacking.
+        embed.description = "\n".join(
+            f"**{name}:** {_readable(value)}" for name, value in screen.fields
+        )[:4096]
+
+    footer = "Research only · not a recommendation · colour = direction"
+    if "Cross" in facts:
+        footer += " · agreement ≠ win probability"
+    if any("volume" in name.lower() for name in facts) and not session_summary:
+        footer += " · MT5 tick volume, not exchange volume"
+    footer += f" · ref {screen.detection_id[:12]}"
+    embed.set_footer(text=footer)
     return embed
 
 
