@@ -33,7 +33,11 @@ from aureon.agents.base_agent import BaseAgent, validate_window
 from aureon.engine.indicators import crossed_at_last, ema, min_warmup, rsi
 from aureon.models.detection import AgentEvidence, CandleContext, Detection, IndicatorSnapshot
 from aureon.models.enums import Direction
-from aureon.services.cross_analysis import cross_candle_quality, simple_trend_direction
+from aureon.services.cross_analysis import (
+    classify_pre_cross_pattern,
+    cross_candle_quality,
+    simple_trend_direction,
+)
 
 EVENT_BULLISH = "bullish"
 EVENT_BEARISH = "bearish"
@@ -130,6 +134,18 @@ class EmaCrossAgent(BaseAgent):
         fast_slope = _clean(fast_now - fast_prev)
         slow_slope = _clean(slow_now - slow_prev)
         trend = simple_trend_direction(window)
+        pattern = classify_pre_cross_pattern(window)
+        ema200_series = ema(price, 200)
+        ema200_now = _clean(ema200_series.iloc[-1]) if len(window) >= min_warmup(200) else None
+        ema200_relation = (
+            "price_above_ema200"
+            if ema200_now is not None and float(price.iloc[-1]) > ema200_now
+            else "price_below_ema200"
+            if ema200_now is not None and float(price.iloc[-1]) < ema200_now
+            else "price_at_ema200"
+            if ema200_now is not None
+            else "ema200_unavailable"
+        )
         quality = cross_candle_quality(
             window,
             reference_value=slow_now,
@@ -147,6 +163,9 @@ class EmaCrossAgent(BaseAgent):
             "cross_close_beyond_atr": float(quality["close_beyond_atr"]),
             "cross_body_range_ratio": float(quality["body_range_ratio"]),
         }
+        if ema200_now is not None:
+            numeric["ema200"] = ema200_now
+            numeric["price_minus_ema200"] = float(price.iloc[-1]) - ema200_now
         if rsi_value is not None:
             numeric["rsi"] = rsi_value
             numeric["rsi_distance_from_50"] = rsi_value - 50.0
@@ -157,6 +176,7 @@ class EmaCrossAgent(BaseAgent):
             extras={
                 "fast_minus_slow": gap_now,
                 "prev_fast_minus_slow": gap_prev,
+                **({"ema200": ema200_now} if ema200_now is not None else {}),
             },
         )
         evidence = AgentEvidence(
@@ -166,6 +186,8 @@ class EmaCrossAgent(BaseAgent):
                 "ema_relation": "fast_above" if signal > 0 else "fast_below",
                 "trend_direction": trend,
                 "cross_quality": str(quality["quality"]),
+                "pre_cross_pattern": pattern,
+                "ema200_context": ema200_relation,
             },
             flags={
                 "gap_expanding": abs(gap_now) > abs(gap_prev),
@@ -173,6 +195,11 @@ class EmaCrossAgent(BaseAgent):
                 "slow_slope_with_cross": slow_slope > 0 if signal > 0 else slow_slope < 0,
                 "clean_cross_close": bool(quality["clean_close"]),
                 "trend_with_cross": trend == ("UP" if signal > 0 else "DOWN"),
+                "ema200_aligned": (
+                    ema200_relation == "price_above_ema200"
+                    if signal > 0
+                    else ema200_relation == "price_below_ema200"
+                ),
             },
         )
 

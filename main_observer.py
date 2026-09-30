@@ -2393,7 +2393,7 @@ def default_agents(
         )
     return [
         EmaCrossAgent(fast_period=config.ema_fast, slow_period=config.ema_slow),
-        Ema200CrossAgent(),
+        Ema200CrossAgent(fast_period=config.ema_fast, slow_period=config.ema_slow),
         EmaRsiEligibilityAgent(
             fast_period=config.ema_fast,
             slow_period=config.ema_slow,

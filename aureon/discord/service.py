@@ -962,6 +962,36 @@ class NotificationScreen:
 RESEARCH_ONLY = "research only · not a recommendation"
 
 
+def _ema_cross_analysis(detection: Detection) -> str:
+    """One short descriptive sentence from facts frozen by the observer."""
+    evidence = detection.evidence
+    direction = (
+        "bullish"
+        if detection.direction and detection.direction.value == "buy"
+        else "bearish"
+        if detection.direction and detection.direction.value == "sell"
+        else "neutral"
+    )
+    trend = str(evidence.categorical.get("trend_direction", "SIDEWAYS")).lower()
+    quality = str(evidence.categorical.get("cross_quality", "WEAK")).lower()
+    pattern = str(evidence.categorical.get("pre_cross_pattern", "CHOPPY")).lower()
+    aligned = bool(
+        evidence.flags.get("ema200_aligned")
+        if detection.agent_name == "ema_cross"
+        else evidence.flags.get("ema20_50_aligned")
+    )
+
+    if aligned:
+        relationship = "The short-term and broader EMA structure are aligned."
+    else:
+        relationship = "The EMA structures are mixed, so the cross is not fully aligned."
+
+    return (
+        f"{quality.capitalize()} {direction} cross during {pattern.replace('_', ' ')} "
+        f"with the immediate trend {trend}. {relationship}"
+    )
+
+
 def build_notification(detection: Detection) -> NotificationScreen:
     """The §59 detection embed: what the machine saw, and nothing it did not (9C).
 
@@ -991,7 +1021,10 @@ def build_notification(detection: Detection) -> NotificationScreen:
         evidence = detection.evidence
         trend = evidence.categorical.get("trend_direction", UNKNOWN)
         quality = evidence.categorical.get("cross_quality", UNKNOWN)
+        pattern = evidence.categorical.get("pre_cross_pattern", UNKNOWN)
         session = detection.session.session.value
+
+        analysis = _ema_cross_analysis(detection)
 
         if detection.agent_name == "ema_cross":
             screen.title = f"{detection.symbol} · EMA 20/50 CROSS · {direction_label}"
@@ -1001,7 +1034,13 @@ def build_notification(detection: Detection) -> NotificationScreen:
                 ("Cross", f"EMA20 / EMA50 · {direction_label}"),
                 ("Trend", str(trend)),
                 ("Quality", str(quality)),
+                ("Pattern", str(pattern)),
                 ("EMA20 / EMA50", f"{_fmt(fast)} / {_fmt(slow)} · {relation}"),
+                (
+                    "EMA200 context",
+                    str(evidence.categorical.get("ema200_context", UNKNOWN)),
+                ),
+                ("Analysis", analysis),
                 ("Session", session),
             ]
         else:
@@ -1013,7 +1052,13 @@ def build_notification(detection: Detection) -> NotificationScreen:
                 ("Cross", f"PRICE / EMA200 · {direction_label}"),
                 ("Trend", str(trend)),
                 ("Quality", str(quality)),
+                ("Pattern", str(pattern)),
                 ("EMA200", f"{_fmt(ema200)} · {relation}"),
+                (
+                    "EMA20 / EMA50 context",
+                    str(evidence.categorical.get("ema20_50_context", UNKNOWN)),
+                ),
+                ("Analysis", analysis),
                 ("Session", session),
             ]
         return screen

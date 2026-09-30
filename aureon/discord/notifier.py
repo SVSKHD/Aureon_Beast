@@ -170,6 +170,7 @@ class Notifier:
         if claim is None:
             return False  # already announced, here or by a previous process
         screen = build_notification(detection)
+        chart, filename = await self._detection_chart(detection)
         try:
             await self.send(
                 self.channel_id,
@@ -180,6 +181,8 @@ class Notifier:
                     detection_id=detection.detection_id,
                     side=screen.side,
                 ),
+                chart=chart,
+                filename=filename,
             )
         except Exception as exc:  # noqa: BLE001 - recorded, not retried (9C-1)
             log.exception("could not post detection %s", detection.detection_id)
@@ -191,6 +194,52 @@ class Notifier:
             )
             return False
         return True
+
+    async def _detection_chart(
+        self,
+        detection: Detection,
+    ) -> tuple[bytes | None, str | None]:
+        """Reuse the existing Aureon chart renderer for EMA cross cards.
+
+        The chart renderer computes no indicators. EMA lines and labels come from the
+        frozen detection, while candle bars come from the market-day frame cache.
+        """
+        context = self.context
+        if (
+            detection.agent_name not in {"ema_cross", "ema200_cross"}
+            or context.market_days is None
+            or not self.charts
+        ):
+            return None, None
+        try:
+            from aureon.visuals import chart_renderer
+
+            market_date = detection.detected_at.market_date
+            bars = await context.run(
+                chart_renderer.bars_for,
+                context.market_days,
+                symbol=detection.symbol,
+                timeframe=detection.timeframe,
+                market_dates=[market_date],
+                include_today=market_date,
+            )
+            spec = await context.run(context.symbols.get, detection.symbol)
+            png = await context.run(
+                _render_detection_chart,
+                detection,
+                bars,
+                spec,
+            )
+        except Exception:  # noqa: BLE001 - picture failure must not suppress the alert
+            log.exception("could not draw detection chart %s", detection.detection_id)
+            return None, None
+        if not png:
+            return None, None
+        return (
+            png,
+            f"{detection.symbol}_{detection.timeframe.value}_"
+            f"{detection.agent_name}_{detection.detection_id[:8]}.png",
+        )
 
     async def _sweep_reminders(self, now: datetime) -> list[str]:
         context = self.context
@@ -727,6 +776,78 @@ def _render_chart(
     return chart_renderer.render(
         symbol=setup.symbol,
         timeframe=setup.timeframe,
+        bars=bars,
+        spec=spec,
+        overlays=overlays,
+    )
+
+
+def _render_detection_chart(detection: Detection, bars: Any, spec: Any) -> bytes:
+    """Draw an EMA-cross chart using the existing renderer and frozen values only."""
+    from aureon.visuals import chart_renderer
+
+    evidence = detection.evidence
+    direction = (
+        "bullish"
+        if detection.direction and detection.direction.value == "buy"
+        else "bearish"
+        if detection.direction and detection.direction.value == "sell"
+        else None
+    )
+    session = detection.session.session.value
+    levels: list[Any] = []
+    ema_values = detection.indicators.ema or {}
+
+    fast = ema_values.get("fast")
+    slow = ema_values.get("slow")
+    ema200 = ema_values.get("ema200") or detection.indicators.extras.get("ema200")
+
+    if isinstance(fast, (int, float)):
+        levels.append(chart_renderer.ChartLevel(price=float(fast), label="EMA20 now"))
+    if isinstance(slow, (int, float)):
+        levels.append(chart_renderer.ChartLevel(price=float(slow), label="EMA50 now"))
+    if isinstance(ema200, (int, float)):
+        levels.append(chart_renderer.ChartLevel(price=float(ema200), label="EMA200 now"))
+
+    label = (
+        f"EMA20/50 {detection.event_key.upper()} · {session}"
+        if detection.agent_name == "ema_cross"
+        else f"EMA200 {detection.event_key.upper()} · {session}"
+    )
+    mark = chart_renderer.ChartMark(
+        at=detection.candle_open_time.utc,
+        price=detection.price,
+        label=label,
+        direction_context=direction,
+    )
+
+    trend = str(evidence.categorical.get("trend_direction", "SIDEWAYS"))
+    quality = str(evidence.categorical.get("cross_quality", "WEAK"))
+    pattern = str(evidence.categorical.get("pre_cross_pattern", "CHOPPY"))
+    companion = (
+        str(evidence.categorical.get("ema200_context", "unknown"))
+        if detection.agent_name == "ema_cross"
+        else str(evidence.categorical.get("ema20_50_context", "unknown"))
+    )
+
+    overlays = chart_renderer.Overlays(
+        title=(
+            f"{detection.symbol} {detection.timeframe.value} · "
+            f"{detection.agent_name.replace('_', ' ').upper()}"
+        ),
+        subtitle=f"{detection.event_key.upper()} · {quality} · {pattern}",
+        levels=tuple(levels),
+        detections=(mark,),
+        analysis_lines=(
+            f"TREND    {trend}",
+            f"QUALITY  {quality}",
+            f"PATTERN  {pattern}",
+            f"CONTEXT  {companion}",
+        ),
+    )
+    return chart_renderer.render(
+        symbol=detection.symbol,
+        timeframe=detection.timeframe.value,
         bars=bars,
         spec=spec,
         overlays=overlays,

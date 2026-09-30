@@ -4,12 +4,20 @@ from __future__ import annotations
 import pandas as pd
 
 from aureon.agents.ema200_cross_agent import Ema200CrossAgent
+from aureon.discord.notifier import _render_detection_chart
 from aureon.discord.service import build_notification
 from aureon.models.base import MarketTime
 from aureon.models.detection import CandleContext, SessionContext
 from aureon.models.enums import Direction, SessionName, Timeframe
 from aureon.models.settings import NotificationSettings
-from aureon.services.cross_analysis import cross_candle_quality, simple_trend_direction
+from aureon.services.cross_analysis import (
+    V2_EMA_EVENT_KEYS,
+    V2_EXCLUDED_LEGACY_ALERTS,
+    classify_pre_cross_pattern,
+    cross_candle_quality,
+    simple_trend_direction,
+)
+from aureon.visuals import chart_renderer
 
 MARKET_TZ = "Europe/Athens"
 
@@ -134,3 +142,143 @@ def test_ema200_notification_card_is_clean_and_specific() -> None:
     assert fields["Trend"] in {"UP", "DOWN", "SIDEWAYS"}
     assert fields["Quality"] in {"STRONG", "NORMAL", "WEAK"}
     assert "EMA200" in fields
+
+
+
+def test_pre_cross_pattern_detects_trending() -> None:
+    frame = _frame(40)
+    for i in range(len(frame) - 1):
+        price = 2400.0 + i * 0.20
+        frame.iloc[i, frame.columns.get_loc("open")] = price - 0.05
+        frame.iloc[i, frame.columns.get_loc("high")] = price + 0.15
+        frame.iloc[i, frame.columns.get_loc("low")] = price - 0.15
+        frame.iloc[i, frame.columns.get_loc("close")] = price
+
+    assert classify_pre_cross_pattern(frame) == "TRENDING"
+
+
+def test_pre_cross_pattern_detects_consolidation() -> None:
+    frame = _frame(40)
+    for i in range(len(frame) - 1):
+        offset = 0.08 if i % 2 == 0 else -0.08
+        price = 2400.0 + offset
+        frame.iloc[i, frame.columns.get_loc("open")] = 2400.0
+        frame.iloc[i, frame.columns.get_loc("high")] = 2400.25
+        frame.iloc[i, frame.columns.get_loc("low")] = 2399.75
+        frame.iloc[i, frame.columns.get_loc("close")] = price
+
+    assert classify_pre_cross_pattern(frame) in {"CONSOLIDATION", "CHOPPY"}
+
+
+def test_ema200_detection_contains_ema20_50_context_and_pattern() -> None:
+    frame = _frame()
+    for i in range(len(frame) - 2):
+        frame.iloc[i, frame.columns.get_loc("close")] = 2398.0 + i * 0.002
+    frame.iloc[-2, frame.columns.get_loc("close")] = 2399.0
+    frame.iloc[-1, frame.columns.get_loc("open")] = 2399.2
+    frame.iloc[-1, frame.columns.get_loc("high")] = 2401.5
+    frame.iloc[-1, frame.columns.get_loc("low")] = 2399.0
+    frame.iloc[-1, frame.columns.get_loc("close")] = 2401.0
+
+    detection = Ema200CrossAgent().on_closed_candle(frame, _ctx(frame))[0]
+
+    assert detection.evidence.categorical["pre_cross_pattern"] in {
+        "TRENDING",
+        "CONSOLIDATION",
+        "CHOPPY",
+        "SHARP_REVERSAL",
+        "GRADUAL_MOMENTUM_SHIFT",
+    }
+    assert detection.evidence.categorical["ema20_50_context"] in {
+        "fast_above",
+        "fast_below",
+        "equal",
+    }
+
+
+def test_ema200_card_shows_pattern_and_ema20_50_context() -> None:
+    frame = _frame()
+    frame.iloc[-2, frame.columns.get_loc("close")] = 2399.0
+    frame.iloc[-1, frame.columns.get_loc("open")] = 2399.2
+    frame.iloc[-1, frame.columns.get_loc("high")] = 2401.5
+    frame.iloc[-1, frame.columns.get_loc("low")] = 2399.0
+    frame.iloc[-1, frame.columns.get_loc("close")] = 2401.0
+
+    detection = Ema200CrossAgent().on_closed_candle(frame, _ctx(frame))[0]
+    fields = dict(build_notification(detection).fields)
+
+    assert "Pattern" in fields
+    assert "EMA20 / EMA50 context" in fields
+
+
+
+def test_notification_card_includes_short_analysis() -> None:
+    frame = _frame()
+    frame.iloc[-2, frame.columns.get_loc("close")] = 2399.0
+    frame.iloc[-1, frame.columns.get_loc("open")] = 2399.2
+    frame.iloc[-1, frame.columns.get_loc("high")] = 2401.5
+    frame.iloc[-1, frame.columns.get_loc("low")] = 2399.0
+    frame.iloc[-1, frame.columns.get_loc("close")] = 2401.0
+
+    detection = Ema200CrossAgent().on_closed_candle(frame, _ctx(frame))[0]
+    fields = dict(build_notification(detection).fields)
+
+    assert "Analysis" in fields
+    assert 20 <= len(fields["Analysis"]) <= 300
+    assert "trend" in fields["Analysis"].lower()
+
+
+def test_existing_chart_renderer_draws_ema200_cross_card_image() -> None:
+    frame = _frame()
+    frame.iloc[-2, frame.columns.get_loc("close")] = 2399.0
+    frame.iloc[-1, frame.columns.get_loc("open")] = 2399.2
+    frame.iloc[-1, frame.columns.get_loc("high")] = 2401.5
+    frame.iloc[-1, frame.columns.get_loc("low")] = 2399.0
+    frame.iloc[-1, frame.columns.get_loc("close")] = 2401.0
+    detection = Ema200CrossAgent().on_closed_candle(frame, _ctx(frame))[0]
+
+    chart_bars = tuple(
+        chart_renderer.ChartBar(
+            at=index.to_pydatetime(),
+            open=float(row.open),
+            high=float(row.high),
+            low=float(row.low),
+            close=float(row.close),
+            tick_volume=float(row.tick_volume),
+        )
+        for index, row in frame.tail(60).iterrows()
+    )
+    png = _render_detection_chart(detection, chart_bars, None)
+
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_v2_ema_scope_is_fresh_cross_only() -> None:
+    assert V2_EMA_EVENT_KEYS == ("bullish", "bearish")
+    assert {"approach", "retest", "setup_b"}.issubset(V2_EXCLUDED_LEGACY_ALERTS)
+
+
+def test_v2_detection_contains_no_trade_calculations() -> None:
+    frame = _frame()
+    frame.iloc[-2, frame.columns.get_loc("close")] = 2399.0
+    frame.iloc[-1, frame.columns.get_loc("open")] = 2399.2
+    frame.iloc[-1, frame.columns.get_loc("high")] = 2401.5
+    frame.iloc[-1, frame.columns.get_loc("low")] = 2399.0
+    frame.iloc[-1, frame.columns.get_loc("close")] = 2401.0
+
+    detection = Ema200CrossAgent().on_closed_candle(frame, _ctx(frame))[0]
+    payload = detection.model_dump()
+
+    forbidden = {
+        "entry",
+        "entry_price",
+        "stop",
+        "stop_loss",
+        "target",
+        "take_profit",
+        "lot",
+        "recommendation",
+    }
+    assert forbidden.isdisjoint(payload)
+    assert forbidden.isdisjoint(detection.evidence.numeric)
+    assert forbidden.isdisjoint(detection.evidence.categorical)
