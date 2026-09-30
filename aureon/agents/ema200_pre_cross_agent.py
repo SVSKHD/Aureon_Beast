@@ -192,6 +192,10 @@ class Ema200PreCrossPressureAgent(BaseAgent):
         distance_atr = abs(distance_now) / atr
         if distance_atr > self.max_distance_atr or distance_now == 0:
             return None
+        # This warning exists only BEFORE a cross. A side change belongs exclusively
+        # to Ema200CrossAgent and must never be relabelled as opposite pre-cross pressure.
+        if distance_now * distance_prev <= 0:
+            return None
 
         direction = "bearish" if distance_now > 0 else "bullish"
         trend = simple_trend_direction(frame)
