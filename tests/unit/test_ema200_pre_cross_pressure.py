@@ -92,3 +92,17 @@ def test_pressure_card_is_warning_context_not_execution_prefill() -> None:
 def test_signal_first_mode_announces_pre_cross_pressure() -> None:
     settings = NotificationSettings()
     assert settings.announces("ema200_pre_cross") is True
+
+
+
+def test_pre_cross_agent_stays_silent_on_actual_cross_candle() -> None:
+    frame = _bearish_pressure_frame()
+    frame.iloc[-1, frame.columns.get_loc("close")] = 2398.0
+    frame.iloc[-1, frame.columns.get_loc("low")] = 2397.5
+    agent = Ema200PreCrossPressureAgent(
+        max_distance_atr=10.0,
+        min_supporting_conditions=3,
+        rearm_bars=1,
+    )
+
+    assert agent.on_closed_candle(frame, _ctx(frame)) == []
