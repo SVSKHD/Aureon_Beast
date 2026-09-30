@@ -171,7 +171,7 @@ class Notifier:
         if claim is None:
             return False  # already announced, here or by a previous process
         consensus = None
-        if detection.agent_name in {"ema_cross", "ema200_cross"}:
+        if detection.agent_name in {"ema200_pre_cross", "ema_cross", "ema200_cross"}:
             since = detection.detected_at.utc - timedelta(seconds=1)
             peers = await context.run(
                 context.detections.recent_for_symbol,
@@ -270,7 +270,7 @@ class Notifier:
         """
         context = self.context
         if (
-            detection.agent_name not in {"ema_cross", "ema200_cross"}
+            detection.agent_name not in {"ema200_pre_cross", "ema_cross", "ema200_cross"}
             or context.market_days is None
             or not self.charts
         ):
