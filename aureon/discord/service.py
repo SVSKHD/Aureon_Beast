@@ -981,6 +981,42 @@ def build_notification(detection: Detection) -> NotificationScreen:
 
     ema = detection.indicators.ema or {}
     fast, slow = ema.get("fast"), ema.get("slow")
+
+    if detection.agent_name in {"ema_cross", "ema200_cross"}:
+        direction_label = (
+            "BULLISH" if detection.direction and detection.direction.value == "buy"
+            else "BEARISH" if detection.direction and detection.direction.value == "sell"
+            else "CONTEXT"
+        )
+        evidence = detection.evidence
+        trend = evidence.categorical.get("trend_direction", UNKNOWN)
+        quality = evidence.categorical.get("cross_quality", UNKNOWN)
+        session = detection.session.session.value
+
+        if detection.agent_name == "ema_cross":
+            screen.title = f"{detection.symbol} · EMA 20/50 CROSS · {direction_label}"
+            relation = evidence.categorical.get("ema_relation", UNKNOWN)
+            screen.fields = [
+                ("Price", _fmt(detection.price)),
+                ("Cross", f"EMA20 / EMA50 · {direction_label}"),
+                ("Trend", str(trend)),
+                ("Quality", str(quality)),
+                ("EMA20 / EMA50", f"{_fmt(fast)} / {_fmt(slow)} · {relation}"),
+                ("Session", session),
+            ]
+        else:
+            ema200 = ema.get("ema200")
+            relation = evidence.categorical.get("price_relation", UNKNOWN)
+            screen.title = f"{detection.symbol} · EMA 200 CROSS · {direction_label}"
+            screen.fields = [
+                ("Price", _fmt(detection.price)),
+                ("Cross", f"PRICE / EMA200 · {direction_label}"),
+                ("Trend", str(trend)),
+                ("Quality", str(quality)),
+                ("EMA200", f"{_fmt(ema200)} · {relation}"),
+                ("Session", session),
+            ]
+        return screen
     relation = UNKNOWN
     if isinstance(fast, (int, float)) and isinstance(slow, (int, float)):
         relation = "fast above slow" if fast >= slow else "fast below slow"
