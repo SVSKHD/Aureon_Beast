@@ -1059,7 +1059,7 @@ def build_notification(
                     str(evidence.categorical.get("ema200_context", UNKNOWN)),
                 ),
                 ("Analysis", analysis),
-                *( [consensus_field] if consensus_field is not None else [] ),
+                *([consensus_field] if consensus_field is not None else []),
                 ("Session", session),
             ]
         else:
