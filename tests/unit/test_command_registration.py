@@ -36,6 +36,7 @@ SILVER = "XAGUSD"
 #: it for no reason (12, T-11).
 EXPECTED = {
     "/status",
+    "/pull-history",
     "/remind",
     "/execute",
     "/execute-trade",

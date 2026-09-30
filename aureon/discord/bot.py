@@ -49,6 +49,7 @@ from aureon.discord.context import BotContext
 from aureon.discord.embeds import notice_embed
 from aureon.discord.notifier import Notifier
 from aureon.discord.service import NotAuthorized, authorize, discord_cadences
+from aureon.services.pull_history import record_restart
 from aureon.services.restart_notice import clear_restart_notice, read_restart_notice
 
 log = logging.getLogger(__name__)
@@ -323,6 +324,10 @@ class AureonBot(discord.Client):
             log.exception("could not post runtime restart notice")
             return
 
+        try:
+            record_restart(repo_root, notice)
+        except Exception:  # noqa: BLE001 - history must not block a healthy restart
+            log.exception("could not record completed restart history")
         clear_restart_notice(repo_root)
         self._restart_notice_sent = True
 
