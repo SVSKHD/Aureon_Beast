@@ -65,7 +65,13 @@ class ResolvedLimits(AureonModel):
 #: notice: a cross, a sweep, a break and a rejection wick. `rsi` and `session_trend` are
 #: deliberately absent -- they are context, and an alert for every RSI reading is an alert
 #: for nothing.
-DEFAULT_NOTIFIED_AGENTS: tuple[str, ...] = ("ema_cross", "ema200_cross", "wick", "liquidity", "breakout")
+DEFAULT_NOTIFIED_AGENTS: tuple[str, ...] = (
+    "ema_cross",
+    "ema200_cross",
+    "wick",
+    "liquidity",
+    "breakout",
+)
 
 
 #: 12 T-11. Every name that may appear in ``settings/notifications.setup_states``: all nine
