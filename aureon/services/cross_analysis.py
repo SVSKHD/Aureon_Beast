@@ -111,3 +111,60 @@ def cross_candle_quality(
         "close_beyond_atr": close_beyond_atr,
         "clean_close": clean_close,
     }
+
+
+
+def classify_pre_cross_pattern(
+    frame: pd.DataFrame,
+    *,
+    lookback: int = 12,
+) -> str:
+    """Classify the price behaviour immediately before the crossing candle.
+
+    The crossing candle itself is excluded. This is intentionally a small descriptive
+    vocabulary for Discord/research rather than a trading score.
+    """
+    if len(frame) < lookback + 2:
+        return "CHOPPY"
+
+    history = frame.iloc[-(lookback + 1):-1]
+    close = history["close"].astype(float)
+    moves = close.diff().dropna()
+    atr = recent_atr(history)
+    if moves.empty or atr <= 0:
+        return "CHOPPY"
+
+    net_move = float(close.iloc[-1] - close.iloc[0])
+    path = float(moves.abs().sum())
+    efficiency = abs(net_move) / path if path > 0 else 0.0
+    direction_changes = int(((moves * moves.shift(1)) < 0).sum())
+    reversal_rate = direction_changes / max(1, len(moves) - 1)
+    range_size = float(history["high"].max() - history["low"].min())
+    range_atr = range_size / atr if atr > 0 else 0.0
+
+    first_half = close.iloc[: max(2, len(close) // 2)]
+    second_half = close.iloc[-max(2, len(close) // 2):]
+    first_move = float(first_half.iloc[-1] - first_half.iloc[0])
+    second_move = float(second_half.iloc[-1] - second_half.iloc[0])
+
+    # Tight range with low directional efficiency: consolidation.
+    if efficiency < 0.30 and range_atr <= 3.0 and reversal_rate < 0.55:
+        return "CONSOLIDATION"
+
+    # Lots of alternating bars irrespective of the net move: chop.
+    if reversal_rate >= 0.55:
+        return "CHOPPY"
+
+    # Direction already established before the cross.
+    if efficiency >= 0.65 and abs(net_move) >= atr:
+        return "TRENDING"
+
+    # Opposite first/second-half direction with a meaningful late displacement.
+    if first_move * second_move < 0 and abs(second_move) >= atr * 0.75:
+        return "SHARP_REVERSAL"
+
+    # A quieter but increasingly directional turn into the cross.
+    if abs(second_move) > abs(first_move) and abs(second_move) >= atr * 0.35:
+        return "GRADUAL_MOMENTUM_SHIFT"
+
+    return "CHOPPY"
