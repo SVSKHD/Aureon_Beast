@@ -143,8 +143,6 @@ class Notifier:
         if context.notifications is None or context.notification_settings is None:
             return []
         settings = await context.run(context.notification_settings.read_or_default)
-        if getattr(settings, "signal_first_mode", False):
-            return []
         since = now - timedelta(seconds=self.window_seconds)
 
         announced: list[str] = []
@@ -358,6 +356,8 @@ class Notifier:
         if context.notification_settings is None:
             return []
         settings = await context.run(context.notification_settings.read_or_default)
+        if getattr(settings, "signal_first_mode", False):
+            return []
         since = now - timedelta(seconds=self.window_seconds)
 
         announced: list[str] = []
