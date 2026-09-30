@@ -89,7 +89,12 @@ def cross_candle_quality(
     close_beyond_atr = close_beyond / atr if atr > 0 else 0.0
     clean_close = close_beyond > 0 and directional_close
 
-    if clean_close and body_atr >= 0.60 and body_range_ratio >= 0.55 and close_beyond_atr >= 0.10:
+    if (
+        clean_close
+        and body_atr >= 0.60
+        and body_range_ratio >= 0.55
+        and close_beyond_atr >= 0.10
+    ):
         quality = "STRONG"
     elif clean_close and body_atr >= 0.25 and close_beyond_atr >= 0.02:
         quality = "NORMAL"
