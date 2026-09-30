@@ -521,3 +521,11 @@ which stated them explicitly; every § citation remains an unverified reference.
 |---|---|
 | V1 remaining gaps 1–12 | Reuse existing session, demo, foundation, exam, exit and replay runners. Add eleven explicit operator-reviewed evidence gates; local test success never counts as real-run evidence. The ledger verifies completeness and integrity, not independent truth of attestations. |
 | V1 freeze | Require a trained Champion and reviewed evidence bound to source commit and model/configuration fingerprints. Freeze bias/session settings, symbol tuning and agent versions/parameters with raw evidence. Reject missing includes and duplicate filenames; stage the bundle before publishing an immutable directory. No broker operation, model promotion or source tag is performed by this workflow. |
+
+
+## Compact directional Discord alerts (2026-09-30)
+
+| Spec | Decision |
+|---|---|
+| 9C / operator layout request | Detection notifications use green for bullish/buy, red for bearish/sell, and yellow for neutral/unknown; completed-session summaries use the stored session trend. Colour denotes direction, never approval or execution clearance. This supersedes the earlier neutral-colour presentation choice for detection notifications only. Discord supports an embed accent, not an arbitrary message background. |
+| 9C mobile layout | EMA notifications group price/session and trend/quality, keep EMA context and agreement counts, humanize pattern labels, and omit the repeated analysis paragraph and decorative agreement meter/roster. Session cards retain OHLC/change/range and explicitly label latest crosses. Full screen data, stored evidence and button identifiers remain intact; visible reference is shortened to 12 characters. No notification policy, indicator, order or confirmation logic changes. |
