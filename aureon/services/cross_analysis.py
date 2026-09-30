@@ -12,6 +12,20 @@ import pandas as pd
 from aureon.engine.indicators import ema
 
 
+V2_EMA_EVENT_KEYS: tuple[str, ...] = ("bullish", "bearish")
+V2_EXCLUDED_LEGACY_ALERTS: tuple[str, ...] = (
+    "setup_b",
+    "hold_confirmation",
+    "approach",
+    "retest",
+    "missed_move",
+    "entry_calculation",
+    "stop_loss_calculation",
+    "target_calculation",
+    "automatic_trade_recommendation",
+)
+
+
 def _true_range(frame: pd.DataFrame) -> pd.Series:
     previous_close = frame["close"].shift(1)
     return pd.concat(
