@@ -86,7 +86,13 @@ class Ema200CrossAgent(BaseAgent):
         slow = ema(price, self.slow_period)
         fast_now = _clean(fast.iloc[-1])
         slow_now = _clean(slow.iloc[-1])
-        ema20_50_relation = "fast_above" if fast_now > slow_now else "fast_below" if fast_now < slow_now else "equal"
+        ema20_50_relation = (
+            "fast_above"
+            if fast_now > slow_now
+            else "fast_below"
+            if fast_now < slow_now
+            else "equal"
+        )
         quality = cross_candle_quality(
             window,
             reference_value=ema_now,
