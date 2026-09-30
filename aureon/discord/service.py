@@ -997,6 +997,7 @@ def build_notification(
     detection: Detection,
     *,
     consensus: AgentConsensus | None = None,
+    session_ema_context: tuple[str, str] | None = None,
 ) -> NotificationScreen:
     """The §59 detection embed: what the machine saw, and nothing it did not (9C).
 
@@ -1078,10 +1079,43 @@ def build_notification(
                     str(evidence.categorical.get("ema20_50_context", UNKNOWN)),
                 ),
                 ("Analysis", analysis),
-                *( [consensus_field] if consensus_field is not None else [] ),
+                *([consensus_field] if consensus_field is not None else []),
                 ("Session", session),
             ]
         return screen
+    if detection.agent_name == "session_trend":
+        evidence = detection.evidence
+        completed = str(evidence.categorical.get("completed_session", UNKNOWN)).upper()
+        trend = str(evidence.categorical.get("trend", UNKNOWN)).upper()
+        numbers = evidence.numeric
+        ema20_50, ema200 = session_ema_context or (UNKNOWN, UNKNOWN)
+        screen.title = f"{detection.symbol} · {completed} SESSION CLOSED"
+        screen.side = None
+        screen.fields = [
+            ("Trend", trend),
+            (
+                "Change / Range",
+                f"{_fmt(numbers.get('change'))} / {_fmt(numbers.get('range'))}",
+            ),
+            (
+                "O / H / L / C",
+                " / ".join(
+                    _fmt(numbers.get(name))
+                    for name in ("open", "high", "low", "close")
+                ),
+            ),
+            ("Latest EMA20 / EMA50", ema20_50),
+            ("Latest Price / EMA200", ema200),
+            ("Volatility", _volatility_line(detection)),
+            ("Tick-volume profile", _volume_line(detection)),
+            ("Now entering", detection.session.session.value.upper()),
+        ]
+        screen.footer = (
+            f"{RESEARCH_ONLY} · one summary per completed session · "
+            f"{detection.detection_id}"
+        )
+        return screen
+
     relation = UNKNOWN
     if isinstance(fast, (int, float)) and isinstance(slow, (int, float)):
         relation = "fast above slow" if fast >= slow else "fast below slow"
