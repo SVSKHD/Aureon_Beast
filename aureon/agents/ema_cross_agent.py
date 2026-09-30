@@ -33,6 +33,7 @@ from aureon.agents.base_agent import BaseAgent, validate_window
 from aureon.engine.indicators import crossed_at_last, ema, min_warmup, rsi
 from aureon.models.detection import AgentEvidence, CandleContext, Detection, IndicatorSnapshot
 from aureon.models.enums import Direction
+from aureon.services.cross_analysis import cross_candle_quality, simple_trend_direction
 
 EVENT_BULLISH = "bullish"
 EVENT_BEARISH = "bearish"
@@ -128,6 +129,12 @@ class EmaCrossAgent(BaseAgent):
         gap_prev = _clean(fast_prev - slow_prev)
         fast_slope = _clean(fast_now - fast_prev)
         slow_slope = _clean(slow_now - slow_prev)
+        trend = simple_trend_direction(window)
+        quality = cross_candle_quality(
+            window,
+            reference_value=slow_now,
+            direction=event_key,
+        )
         numeric = {
             "ema_fast": fast_now,
             "ema_slow": slow_now,
@@ -136,6 +143,9 @@ class EmaCrossAgent(BaseAgent):
             "ema_gap_change": _clean(gap_now - gap_prev),
             "fast_slope": fast_slope,
             "slow_slope": slow_slope,
+            "cross_body_atr": float(quality["body_atr"]),
+            "cross_close_beyond_atr": float(quality["close_beyond_atr"]),
+            "cross_body_range_ratio": float(quality["body_range_ratio"]),
         }
         if rsi_value is not None:
             numeric["rsi"] = rsi_value
@@ -154,11 +164,15 @@ class EmaCrossAgent(BaseAgent):
             categorical={
                 "cross_direction": event_key,
                 "ema_relation": "fast_above" if signal > 0 else "fast_below",
+                "trend_direction": trend,
+                "cross_quality": str(quality["quality"]),
             },
             flags={
                 "gap_expanding": abs(gap_now) > abs(gap_prev),
                 "fast_slope_with_cross": fast_slope > 0 if signal > 0 else fast_slope < 0,
                 "slow_slope_with_cross": slow_slope > 0 if signal > 0 else slow_slope < 0,
+                "clean_cross_close": bool(quality["clean_close"]),
+                "trend_with_cross": trend == ("UP" if signal > 0 else "DOWN"),
             },
         )
 
