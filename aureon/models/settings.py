@@ -65,13 +65,13 @@ class ResolvedLimits(AureonModel):
 #: notice: a cross, a sweep, a break and a rejection wick. `rsi` and `session_trend` are
 #: deliberately absent -- they are context, and an alert for every RSI reading is an alert
 #: for nothing.
-DEFAULT_NOTIFIED_AGENTS: tuple[str, ...] = (
+SIGNAL_FIRST_NOTIFIED_AGENTS: tuple[str, ...] = (
     "ema_cross",
     "ema200_cross",
-    "wick",
-    "liquidity",
-    "breakout",
+    "session_trend",
 )
+
+DEFAULT_NOTIFIED_AGENTS: tuple[str, ...] = SIGNAL_FIRST_NOTIFIED_AGENTS
 
 
 #: 12 T-11. Every name that may appear in ``settings/notifications.setup_states``: all nine
@@ -155,6 +155,10 @@ class NotificationSettings(AureonDocument):
     )
     #: False silences every detection embed without forgetting which kinds were enabled.
     detections_enabled: bool = True
+    #: V2 signal-first mode deliberately limits proactive Discord traffic to the two
+    #: EMA crosses plus one completed-session summary. Context agents still run and
+    #: remain available to EMA consensus/research; they simply stop creating cards.
+    signal_first_mode: bool = True
     #: 12 T-11. Which setup changes get a card, named from ``SETUP_ANNOUNCEMENTS``. A trigger is
     #: matched against either the setup's state or the event type that caused the change,
     #: whichever the change was -- see ``Notifier._setup_trigger``.
@@ -186,10 +190,16 @@ class NotificationSettings(AureonDocument):
         return self
 
     def announces(self, agent_name: str) -> bool:
-        return self.detections_enabled and agent_name in self.enabled_kinds
+        if not self.detections_enabled:
+            return False
+        if self.signal_first_mode:
+            return agent_name in SIGNAL_FIRST_NOTIFIED_AGENTS
+        return agent_name in self.enabled_kinds
 
     def announces_setup(self, trigger: str) -> bool:
         """Whether a setup change named by ``trigger`` gets a card."""
+        if self.signal_first_mode:
+            return False
         return self.setups_enabled and trigger in self.setup_states
 
 
