@@ -5,10 +5,10 @@ import pandas as pd
 
 from aureon.agents.ema200_cross_agent import Ema200CrossAgent
 from aureon.discord.service import build_notification
-from aureon.models.settings import NotificationSettings
 from aureon.models.base import MarketTime
 from aureon.models.detection import CandleContext, SessionContext
 from aureon.models.enums import Direction, SessionName, Timeframe
+from aureon.models.settings import NotificationSettings
 from aureon.services.cross_analysis import cross_candle_quality, simple_trend_direction
 
 MARKET_TZ = "Europe/Athens"
