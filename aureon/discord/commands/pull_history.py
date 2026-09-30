@@ -59,7 +59,10 @@ class PullHistoryCommands:
                     latest_restart,
                 )
                 if included is True:
-                    lines.append(f"Latest merged PR #{merges[0].number}: included in that restart ✅")
+                    lines.append(
+                        f"Latest merged PR #{merges[0].number}: "
+                        "included in that restart ✅"
+                    )
                 elif included is False:
                     lines.append(
                         f"Latest merged PR #{merges[0].number}: merged after that restart ⏳"
