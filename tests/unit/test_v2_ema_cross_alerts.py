@@ -4,6 +4,8 @@ from __future__ import annotations
 import pandas as pd
 
 from aureon.agents.ema200_cross_agent import Ema200CrossAgent
+from aureon.discord.service import build_notification
+from aureon.models.settings import NotificationSettings
 from aureon.models.base import MarketTime
 from aureon.models.detection import CandleContext, SessionContext
 from aureon.models.enums import Direction, SessionName, Timeframe
@@ -110,3 +112,25 @@ def test_cross_candle_quality_detects_clean_cross() -> None:
 
     assert result["quality"] in {"STRONG", "NORMAL"}
     assert result["clean_close"] is True
+
+
+def test_ema200_is_notified_by_default() -> None:
+    assert NotificationSettings().announces("ema200_cross") is True
+
+
+def test_ema200_notification_card_is_clean_and_specific() -> None:
+    frame = _frame()
+    frame.iloc[-2, frame.columns.get_loc("close")] = 2399.0
+    frame.iloc[-1, frame.columns.get_loc("open")] = 2399.2
+    frame.iloc[-1, frame.columns.get_loc("high")] = 2401.5
+    frame.iloc[-1, frame.columns.get_loc("low")] = 2399.0
+    frame.iloc[-1, frame.columns.get_loc("close")] = 2401.0
+
+    detection = Ema200CrossAgent().on_closed_candle(frame, _ctx(frame))[0]
+    card = build_notification(detection)
+    fields = dict(card.fields)
+
+    assert "EMA 200 CROSS" in card.title
+    assert fields["Trend"] in {"UP", "DOWN", "SIDEWAYS"}
+    assert fields["Quality"] in {"STRONG", "NORMAL", "WEAK"}
+    assert "EMA200" in fields
