@@ -46,6 +46,7 @@ class EMAMovementJourneyTracker:
         max_horizon_bars: int = 96,
         max_link_bars: int = 96,
         gap_tolerance_bars: int = 2,
+        on_journey_closed: object | None = None,
     ) -> None:
         if max_horizon_bars < 1:
             raise ValueError("max_horizon_bars must be positive")
@@ -57,6 +58,7 @@ class EMAMovementJourneyTracker:
         self.max_horizon_bars = max_horizon_bars
         self.max_link_bars = max_link_bars
         self.gap_tolerance_bars = gap_tolerance_bars
+        self.on_journey_closed = on_journey_closed
         self._active: dict[tuple[str, str], EMAMovementJourney] = {}
 
     def restore(self, journeys: list[EMAMovementJourney]) -> None:
@@ -290,6 +292,8 @@ class EMAMovementJourneyTracker:
         journey.end_reason = reason
         self._save(journey)
         self._active.pop((journey.symbol, journey.timeframe.value), None)
+        if self.on_journey_closed is not None:
+            self.on_journey_closed(journey)
 
     def _empty_outcome(self) -> EMAAnchorOutcome:
         return EMAAnchorOutcome(
