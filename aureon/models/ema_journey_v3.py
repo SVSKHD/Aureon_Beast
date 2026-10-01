@@ -95,8 +95,14 @@ class JourneyStatus(StrEnum):
     INVALID = "invalid"
 
 
+class JourneyOrigin(StrEnum):
+    PRE_CROSS = "pre_cross"
+    CONFIRMED_CROSS = "confirmed_cross"
+
+
 class JourneyEndReason(StrEnum):
     OPPOSITE_CONFIRMED_CROSS = "opposite_confirmed_cross"
+    PRE_CROSS_EXPIRED = "pre_cross_expired"
     MAX_HORIZON = "max_horizon"
     MARKET_DAY_CHANGE = "market_day_change"
     DATA_GAP = "data_gap"
@@ -124,6 +130,8 @@ class EMAAnchorOutcome(AureonModel):
     reference_price: float | None = None
     reference_price_kind: str = "detection_close"
     spread_accounted: bool = False
+    target_ladder: tuple[float, ...] = ()
+    target_ladder_source: str = "unknown"
     valid: bool = True
     invalid_reason: str | None = None
     targets: dict[str, TargetOutcome] = Field(default_factory=dict)
@@ -165,6 +173,7 @@ class EMAMovementJourney(AureonDocument):
     market_date: str
     started_at: UtcDatetime
     start_price: float
+    origin: JourneyOrigin = JourneyOrigin.CONFIRMED_CROSS
     anchors: tuple[EMAJourneyAnchor, ...] = ()
     status: JourneyStatus = JourneyStatus.OPEN
     ended_at: UtcDatetime | None = None
@@ -177,6 +186,20 @@ class EMAMovementJourney(AureonDocument):
     @property
     def latest_anchor(self) -> EMAJourneyAnchor | None:
         return self.anchors[-1] if self.anchors else None
+
+    @property
+    def has_pre_cross(self) -> bool:
+        return any(anchor.anchor_type is EMAAnchorType.PRE_CROSS for anchor in self.anchors)
+
+    @property
+    def has_confirmed_cross(self) -> bool:
+        return any(
+            anchor.anchor_type in {
+                EMAAnchorType.EMA20_50_CROSS,
+                EMAAnchorType.EMA200_CROSS,
+            }
+            for anchor in self.anchors
+        )
 
     @property
     def movement_consumed_before_latest_cross(self) -> float | None:

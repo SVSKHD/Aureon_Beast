@@ -81,6 +81,8 @@ class V3EMALearningCoordinator:
             model,
             anchor.features,
             min_samples=self.min_model_samples,
+            direction=anchor.direction.value,
+            min_cell_samples=20,
         )
         prediction_id = hashlib.sha256(
             f"{model.model_id}|{anchor.detection_id}".encode()
