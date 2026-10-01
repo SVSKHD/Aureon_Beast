@@ -236,6 +236,18 @@ def notification_embed(screen: Any) -> Any:
                 value=facts["Agent consensus"],
                 inline=False,
             )
+        if facts.get("Model confidence"):
+            embed.add_field(
+                name="Model confidence",
+                value=facts["Model confidence"],
+                inline=False,
+            )
+        if facts.get("Combined view"):
+            embed.add_field(
+                name="Combined view",
+                value=facts["Combined view"],
+                inline=False,
+            )
     elif "Cross" in facts:
         embed.description = (
             f"**{facts.get('Price', '—')}** · {_readable(facts.get('Session', '—')).title()}\n"
@@ -260,6 +272,24 @@ def notification_embed(screen: Any) -> Any:
             )
         else:
             embed.add_field(name="Agent agreement", value="Unavailable", inline=False)
+        if facts.get("Model confidence"):
+            embed.add_field(
+                name="Model confidence",
+                value=facts["Model confidence"],
+                inline=False,
+            )
+        if facts.get("Combined view"):
+            embed.add_field(
+                name="Combined view",
+                value=facts["Combined view"],
+                inline=False,
+            )
+        if facts.get("Move since pre-cross"):
+            embed.add_field(
+                name="Move since pre-cross",
+                value=facts["Move since pre-cross"],
+                inline=False,
+            )
         # Pattern adds a distinct fact; the Analysis paragraph repeats the same readings.
         if facts.get("Pattern"):
             embed.add_field(

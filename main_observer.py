@@ -93,6 +93,8 @@ from aureon.services.daily_market_bias import (
     DailyBiasStateStore,
     DailyMarketBiasAgent,
 )
+from aureon.services.ema_journey_tracker import EMAMovementJourneyTracker
+from aureon.services.v3_ema_coordinator import V3EMALearningCoordinator
 from aureon.services.expansion_opportunity_agent import (
     ExpansionInputs,
     ExpansionOpportunityAgent,
@@ -159,6 +161,8 @@ class Observer:
         # because an outcome rule's thresholds are in the instrument's own money and its
         # conversion to points needs that symbol's tick (decision 141).
         self.outcome_trackers: dict[str, OutcomeTracker] = dict(outcome_trackers or {})
+        self.ema_journey_tracker: EMAMovementJourneyTracker | None = None
+        self.v3_ema_learning: V3EMALearningCoordinator | None = None
         self.heartbeat = heartbeat
         # 9C: the observer answers price alerts because it is the process with quotes --
         # Discord may not call the broker, and a second MT5 connection polling levels
@@ -332,6 +336,25 @@ class Observer:
             self._snapshot(detection.symbol, detection.timeframe).observe(detection)
         self._write_session_summaries(detections)
         self._track_outcomes(detections, persisted_detection_ids=ready)
+        if self.ema_journey_tracker is not None:
+            try:
+                for detection in detections:
+                    journey = self.ema_journey_tracker.on_detection(
+                        detection,
+                        same_candle=detections,
+                    )
+                    if (
+                        journey is not None
+                        and self.v3_ema_learning is not None
+                        and journey.latest_anchor is not None
+                        and journey.latest_anchor.detection_id == detection.detection_id
+                    ):
+                        self.v3_ema_learning.predict_anchor(
+                            journey,
+                            journey.latest_anchor,
+                        )
+            except Exception:
+                log.exception("V3 EMA journey detection tracking failed")
 
     def _track_outcomes(
         self,
@@ -446,6 +469,11 @@ class Observer:
                 log.exception("could not archive %s", candle.open_time.utc)
         self._cache_market_day(candle)
         self._advance_evaluations(candle)
+        if self.ema_journey_tracker is not None:
+            try:
+                self.ema_journey_tracker.on_closed_candle(candle)
+            except Exception:
+                log.exception("V3 EMA journey outcome tracking failed at %s", candle.open_time.utc)
         if self.learning_memory is not None:
             try:
                 self.learning_memory.on_closed_candle(candle)
@@ -2509,6 +2537,22 @@ def build_observer(config: AureonConfig) -> Observer:
     restored = observer.daily_bias_agent.restore(observer.daily_bias_store.load())
     if restored:
         log.info("daily bias state restored for %d stream(s)", restored)
+    observer.v3_ema_learning = V3EMALearningCoordinator(
+        learning=storage.v3_ema_learning,
+        models=storage.models,
+        min_model_samples=30,
+    )
+    observer.ema_journey_tracker = EMAMovementJourneyTracker(
+        repository=storage.ema_journeys,
+        max_horizon_bars=96,
+        max_link_bars=96,
+        on_journey_closed=observer.v3_ema_learning.resolve_journey,
+    )
+    open_journeys = []
+    for symbol in config.symbols:
+        open_journeys.extend(storage.ema_journeys.open_for_symbol(symbol))
+    observer.ema_journey_tracker.restore(open_journeys)
+
     observer.learning_memory = LearningMemoryService(
         storage.training_memory,
         models=storage.models,

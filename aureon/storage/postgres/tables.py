@@ -107,6 +107,99 @@ class Detection(Base):
     )
 
 
+class EMAMovementJourney(Base):
+    """V3 EMA movement journey, persisted as a stateful research object."""
+
+    __tablename__ = "ema_movement_journeys"
+
+    journey_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    account_scope: Mapped[str] = mapped_column(String)
+    symbol: Mapped[str] = mapped_column(String)
+    timeframe: Mapped[str] = mapped_column(String)
+    direction: Mapped[str] = mapped_column(String)
+    market_date: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String)
+    started_at: Mapped[datetime] = mapped_column()
+    ended_at: Mapped[datetime | None] = mapped_column()
+    end_reason: Mapped[str | None] = mapped_column(String)
+    payload: Mapped[dict[str, Any]] = mapped_column(Json)
+
+    __table_args__ = (
+        Index("ix_ema_journeys_stream", "symbol", "timeframe", "status", "started_at"),
+        Index("ix_ema_journeys_date", "symbol", "market_date"),
+    )
+
+
+class V3EMAExample(Base):
+    """Canonical no-lookahead EMA anchor example for V3 model training."""
+
+    __tablename__ = "v3_ema_examples"
+
+    example_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    journey_id: Mapped[str] = mapped_column(String)
+    detection_id: Mapped[str] = mapped_column(String)
+    symbol: Mapped[str] = mapped_column(String)
+    timeframe: Mapped[str] = mapped_column(String)
+    direction: Mapped[str] = mapped_column(String)
+    market_date: Mapped[str] = mapped_column(String)
+    anchor_type: Mapped[str] = mapped_column(String)
+    feature_schema: Mapped[str] = mapped_column(String)
+    label_schema: Mapped[str] = mapped_column(String)
+    payload: Mapped[dict[str, Any]] = mapped_column(Json)
+    generated_at: Mapped[datetime] = mapped_column()
+
+    __table_args__ = (
+        Index("ix_v3_ema_examples_symbol_date", "symbol", "market_date"),
+        Index("ix_v3_ema_examples_journey", "journey_id"),
+        UniqueConstraint("detection_id", "feature_schema", "label_schema", name="uq_v3_ema_example"),
+    )
+
+
+class V3EMAPrediction(Base):
+    """Frozen V3 prediction made before the anchor outcome is known."""
+
+    __tablename__ = "v3_ema_predictions"
+
+    prediction_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    model_id: Mapped[str] = mapped_column(String)
+    journey_id: Mapped[str] = mapped_column(String)
+    detection_id: Mapped[str] = mapped_column(String)
+    symbol: Mapped[str] = mapped_column(String)
+    predicted_at: Mapped[datetime] = mapped_column()
+    payload: Mapped[dict[str, Any]] = mapped_column(Json)
+    reconciled_at: Mapped[datetime | None] = mapped_column()
+    actual_outcome: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    outcome_class: Mapped[str | None] = mapped_column(String)
+
+    __table_args__ = (
+        Index("ix_v3_ema_predictions_symbol_time", "symbol", "predicted_at"),
+        UniqueConstraint("model_id", "detection_id", name="uq_v3_ema_prediction"),
+    )
+
+
+class V3EMAHoldoutDay(Base):
+    """One frozen next-day evaluation period withheld from V3 training."""
+
+    __tablename__ = "v3_ema_holdout_days"
+
+    holdout_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    symbol: Mapped[str] = mapped_column(String)
+    market_date: Mapped[str] = mapped_column(String)
+    frozen_model_id: Mapped[str | None] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column()
+    scored_at: Mapped[datetime | None] = mapped_column()
+    metrics: Mapped[dict[str, Any]] = mapped_column(Json)
+
+    __table_args__ = (
+        Index("ix_v3_ema_holdout_symbol_date", "symbol", "market_date", unique=True),
+    )
+
+
 class DetectionEvaluation(Base):
     """§9, §21. What a detection's outcome was, under ONE frozen rule.
 

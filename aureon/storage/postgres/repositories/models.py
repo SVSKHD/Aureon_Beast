@@ -89,6 +89,27 @@ class ModelRepository(PostgresRepository):
         rows = self._rows(statement)
         return None if not rows else ModelRegistryEntry.model_validate(self._model_dict(rows[0]))
 
+    def champion_for_contract(
+        self,
+        symbol: str,
+        *,
+        feature_schema: str,
+        label_schema: str,
+        model_schema: str,
+    ) -> ModelRegistryEntry | None:
+        statement = (
+            select(self.models)
+            .where(self.models.c.symbol == symbol.upper())
+            .where(self.models.c.status == ModelLifecycleStatus.CHAMPION.value)
+            .where(self.models.c.feature_schema_version == feature_schema)
+            .where(self.models.c.label_schema_version == label_schema)
+            .where(self.models.c.model_schema_version == model_schema)
+            .order_by(self.models.c.activated_at.desc(), self.models.c.created_at.desc())
+            .limit(1)
+        )
+        rows = self._rows(statement)
+        return None if not rows else ModelRegistryEntry.model_validate(self._model_dict(rows[0]))
+
     def challengers(self, symbol: str) -> list[ModelRegistryEntry]:
         statement = (
             select(self.models)
@@ -119,6 +140,40 @@ class ModelRepository(PostgresRepository):
         )
         rows = self._rows(statement)
         return None if not rows else ModelRegistryEntry.model_validate(self._model_dict(rows[0]))
+
+    def activate_shadow_for_contract(
+        self,
+        model_id: str,
+        *,
+        at: Any,
+    ) -> ModelRegistryEntry:
+        """Activate Shadow without retiring a different model family."""
+        with self._db.transaction() as connection:
+            row = self._row(model_id, table=self.models, connection=connection)
+            if row is None:
+                raise LookupError(f"no model {model_id}")
+            symbol = str(row["symbol"])
+            feature_schema = str(row["feature_schema_version"])
+            label_schema = str(row["label_schema_version"])
+            model_schema = str(row["model_schema_version"])
+            connection.execute(
+                update(self.models)
+                .where(self.models.c.symbol == symbol)
+                .where(self.models.c.status == "shadow")
+                .where(self.models.c.feature_schema_version == feature_schema)
+                .where(self.models.c.label_schema_version == label_schema)
+                .where(self.models.c.model_schema_version == model_schema)
+                .values(status="retired")
+            )
+            connection.execute(
+                update(self.models)
+                .where(self.models.c.model_id == model_id)
+                .values(status="shadow", activated_at=at)
+            )
+        refreshed = self.get_model(model_id)
+        if refreshed is None:
+            raise LookupError(f"model {model_id} disappeared after activation")
+        return refreshed
 
     def activate_shadow(self, model_id: str, *, at: Any) -> ModelRegistryEntry:
         with self._db.transaction() as connection:
@@ -173,6 +228,49 @@ class ModelRepository(PostgresRepository):
         refreshed = self.get_model(model_id)
         if refreshed is None:
             raise LookupError(f"model {model_id} disappeared after status update")
+        return refreshed
+
+    def promote_champion_for_contract(
+        self,
+        model_id: str,
+        *,
+        at: Any,
+        reason: str,
+    ) -> ModelRegistryEntry:
+        """Promote one model family without retiring another family's Champion."""
+        with self._db.transaction() as connection:
+            row = self._row(model_id, table=self.models, connection=connection)
+            if row is None:
+                raise LookupError(f"no model {model_id}")
+            if str(row["status"]) != ModelLifecycleStatus.SHADOW.value:
+                raise ValueError(
+                    f"model {model_id} is {row['status']}; only shadow may become champion"
+                )
+            symbol = str(row["symbol"])
+            feature_schema = str(row["feature_schema_version"])
+            label_schema = str(row["label_schema_version"])
+            model_schema = str(row["model_schema_version"])
+            connection.execute(
+                update(self.models)
+                .where(self.models.c.symbol == symbol)
+                .where(self.models.c.status == ModelLifecycleStatus.CHAMPION.value)
+                .where(self.models.c.feature_schema_version == feature_schema)
+                .where(self.models.c.label_schema_version == label_schema)
+                .where(self.models.c.model_schema_version == model_schema)
+                .values(status=ModelLifecycleStatus.RETIRED.value)
+            )
+            connection.execute(
+                update(self.models)
+                .where(self.models.c.model_id == model_id)
+                .values(
+                    status=ModelLifecycleStatus.CHAMPION.value,
+                    activated_at=at,
+                    promotion_reason=reason,
+                )
+            )
+        refreshed = self.get_model(model_id)
+        if refreshed is None:
+            raise LookupError(f"model {model_id} disappeared after promotion")
         return refreshed
 
     def promote_champion(

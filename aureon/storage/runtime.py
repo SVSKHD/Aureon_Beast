@@ -18,6 +18,7 @@ from aureon.storage.postgres.repositories.alerts import PriceAlertRepository
 from aureon.storage.postgres.repositories.control_requests import ControlRequestRepository
 from aureon.storage.postgres.repositories.detections import DetectionRepository
 from aureon.storage.postgres.repositories.evaluations import EvaluationRepository
+from aureon.storage.postgres.repositories.ema_journeys import EMAMovementJourneyRepository
 from aureon.storage.postgres.repositories.market_days import MarketDayRepository
 from aureon.storage.postgres.repositories.models import ModelRepository
 from aureon.storage.postgres.repositories.notifications import NotificationRepository
@@ -40,6 +41,7 @@ from aureon.storage.postgres.repositories.setups import SetupRepository
 from aureon.storage.postgres.repositories.trade_requests import TradeRequestRepository
 from aureon.storage.postgres.repositories.trades import TradeRepository
 from aureon.storage.postgres.repositories.training import TrainingMemoryRepository
+from aureon.storage.postgres.repositories.v3_ema_learning import V3EMALearningRepository
 
 
 class SetupReadAdapter:
@@ -145,6 +147,27 @@ class ModelReadAdapter:
         return self._repo.latest_prediction(symbol, model_id=champion.model_id)
 
 
+
+
+
+class V3EMAReadAdapter:
+    """Read-only V3 EMA learning surface exposed to Discord."""
+
+    def __init__(
+        self,
+        learning: V3EMALearningRepository,
+        journeys: EMAMovementJourneyRepository,
+    ) -> None:
+        self._learning = learning
+        self._journeys = journeys
+
+    def prediction_for_detection(self, detection_id: str) -> Any:
+        return self._learning.prediction_for_detection(detection_id)
+
+    def latest_journey(self, symbol: str) -> Any:
+        return self._journeys.latest_for_symbol(symbol)
+
+
 class SessionReadAdapter:
     """Read-only session shape exposed to Discord."""
 
@@ -212,6 +235,8 @@ class StorageRuntime:
     system_state: SystemStateRepository
     training_memory: TrainingMemoryRepository
     models: ModelRepository
+    ema_journeys: EMAMovementJourneyRepository
+    v3_ema_learning: V3EMALearningRepository
 
     @property
     def setup_reader(self) -> SetupReadAdapter:
@@ -228,6 +253,10 @@ class StorageRuntime:
     @property
     def model_reader(self) -> ModelReadAdapter:
         return ModelReadAdapter(self.models)
+
+    @property
+    def v3_ema_reader(self) -> V3EMAReadAdapter:
+        return V3EMAReadAdapter(self.v3_ema_learning, self.ema_journeys)
 
     @property
     def period_reader(self) -> PeriodReadAdapter:
@@ -271,6 +300,8 @@ def build_storage(
         system_state=SystemStateRepository(db, min_interval_seconds=state_heartbeat_seconds),
         training_memory=TrainingMemoryRepository(db),
         models=ModelRepository(db),
+        ema_journeys=EMAMovementJourneyRepository(db),
+        v3_ema_learning=V3EMALearningRepository(db),
     )
 
 
@@ -278,6 +309,7 @@ __all__ = [
     "PeriodReadAdapter",
     "SessionReadAdapter",
     "TrainingMemoryReadAdapter",
+    "V3EMAReadAdapter",
     "ModelReadAdapter",
     "SetupReadAdapter",
     "StorageRuntime",

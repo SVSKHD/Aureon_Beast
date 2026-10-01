@@ -183,10 +183,46 @@ class Notifier:
         session_ema_context = None
         if detection.agent_name == "session_trend":
             session_ema_context = await self._session_ema_context(detection)
+
+        model_confidence = None
+        movement_since_pre_cross = None
+        if (
+            detection.agent_name in {"ema200_pre_cross", "ema_cross", "ema200_cross"}
+            and context.v3_ema is not None
+        ):
+            prediction = await context.run(
+                context.v3_ema.prediction_for_detection,
+                detection.detection_id,
+            )
+            if prediction is not None:
+                model_confidence = prediction.get("payload") or {}
+            journey = await context.run(
+                context.v3_ema.latest_journey,
+                detection.symbol,
+            )
+            if journey is not None:
+                current = next(
+                    (
+                        anchor
+                        for anchor in journey.anchors
+                        if anchor.detection_id == detection.detection_id
+                    ),
+                    None,
+                )
+                if (
+                    current is not None
+                    and journey.anchors
+                    and journey.anchors[0].anchor_type.value == "pre_cross"
+                    and current.anchor_type.value != "pre_cross"
+                ):
+                    movement_since_pre_cross = current.movement_from_journey_start
+
         screen = build_notification(
             detection,
             consensus=consensus,
             session_ema_context=session_ema_context,
+            model_confidence=model_confidence,
+            movement_since_pre_cross=movement_since_pre_cross,
         )
         chart, filename = await self._detection_chart(detection)
         try:
