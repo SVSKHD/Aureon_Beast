@@ -445,10 +445,13 @@ class V3EMAModelTrainer:
         # is fixed before any event on that date is scored.
         from aureon.services.v3_ema_learning import EMAHoldoutDayV3
         from datetime import UTC, datetime, timedelta
-        next_date = (
+        next_day = (
             datetime.fromisoformat(entry.trained_through).replace(tzinfo=UTC)
             + timedelta(days=1)
-        ).date().isoformat()
+        )
+        while next_day.weekday() >= 5:
+            next_day += timedelta(days=1)
+        next_date = next_day.date().isoformat()
         holdout_id = hashlib.sha256(
             f"{symbol.upper()}|{next_date}|{entry.model_id}|V3_EMA_HOLDOUT".encode()
         ).hexdigest()
