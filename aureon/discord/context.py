@@ -96,6 +96,7 @@ class BotContext:
     sessions: Any | None = None
     training_memory: Any | None = None
     models: Any | None = None
+    v3_ema: Any | None = None
 
     @property
     def authorized_user_ids(self) -> tuple[str, ...]:
@@ -145,4 +146,5 @@ def build_context(config: AureonConfig, storage: Any) -> BotContext:
         sessions=storage.session_reader,
         training_memory=storage.training_reader,
         models=storage.model_reader,
+        v3_ema=storage.v3_ema_reader,
     )
