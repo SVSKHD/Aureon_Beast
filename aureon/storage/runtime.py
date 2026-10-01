@@ -18,6 +18,7 @@ from aureon.storage.postgres.repositories.alerts import PriceAlertRepository
 from aureon.storage.postgres.repositories.control_requests import ControlRequestRepository
 from aureon.storage.postgres.repositories.detections import DetectionRepository
 from aureon.storage.postgres.repositories.evaluations import EvaluationRepository
+from aureon.storage.postgres.repositories.ema_journeys import EMAMovementJourneyRepository
 from aureon.storage.postgres.repositories.market_days import MarketDayRepository
 from aureon.storage.postgres.repositories.models import ModelRepository
 from aureon.storage.postgres.repositories.notifications import NotificationRepository
@@ -212,6 +213,7 @@ class StorageRuntime:
     system_state: SystemStateRepository
     training_memory: TrainingMemoryRepository
     models: ModelRepository
+    ema_journeys: EMAMovementJourneyRepository
 
     @property
     def setup_reader(self) -> SetupReadAdapter:
@@ -271,6 +273,7 @@ def build_storage(
         system_state=SystemStateRepository(db, min_interval_seconds=state_heartbeat_seconds),
         training_memory=TrainingMemoryRepository(db),
         models=ModelRepository(db),
+        ema_journeys=EMAMovementJourneyRepository(db),
     )
 
 
