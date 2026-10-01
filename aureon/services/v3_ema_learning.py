@@ -86,6 +86,9 @@ class EMAModelConfidenceV3(AureonModel):
 
     model_id: str
     model_schema: str = EMA_MODEL_SCHEMA_V3
+    feature_schema: str = EMA_FEATURE_SCHEMA_V3
+    model_generation: int | None = None
+    trained_through: str | None = None
     sample_count: int = Field(ge=0)
     sufficient_data: bool
     out_of_distribution: bool = False
