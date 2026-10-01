@@ -88,6 +88,8 @@ UP_COLOUR = "#2e7d52"
 DOWN_COLOUR = "#b23a3a"
 FAST_COLOUR = "#1f6fb2"
 SLOW_COLOUR = "#8a6d3b"
+EMA20_SIGNAL_COLOUR = "#1565C0"
+EMA50_SIGNAL_COLOUR = "#F9A825"
 EMA200_COLOUR = "#D32F2F"
 LEVEL_COLOUR = "#666666"
 #: The invalidation line. Red, like a stop, and labelled so nobody reads it as one -- it is where
@@ -932,6 +934,9 @@ __all__ = [
     "CHART_BUDGET_SECONDS",
     "DEFAULT_WINDOW",
     "FOOTER_NOTE",
+    "EMA20_SIGNAL_COLOUR",
+    "EMA50_SIGNAL_COLOUR",
+    "EMA200_COLOUR",
     "MAX_DECIMALS",
     "MAX_WINDOW",
     "MIN_BARS",
