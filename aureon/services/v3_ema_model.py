@@ -616,19 +616,21 @@ def predict_v3(
             reason=f"INSUFFICIENT TRAINING DATA: {sample_count}/{min_samples}",
         )
 
-    base_rate_gate = (model.validation_metrics or {}).get("base_rate_gate") or {}
-    clean_gate = base_rate_gate.get("clean_10") or {}
-    if not clean_gate.get("beats_base_rate"):
-        return EMAModelConfidenceV3(
-            model_id=model.model_id,
-            model_generation=model.generation,
-            trained_through=model.trained_through,
-            sample_count=sample_count,
-            sufficient_data=False,
-            reason="BASE_RATE_GATE_FAILED: model has not beaten session+direction history",
-        )
-
     if direction is not None:
+        base_rate_gate = (model.validation_metrics or {}).get("base_rate_gate") or {}
+        clean_gate = base_rate_gate.get("clean_10") or {}
+        if not clean_gate.get("beats_base_rate"):
+            return EMAModelConfidenceV3(
+                model_id=model.model_id,
+                model_generation=model.generation,
+                trained_through=model.trained_through,
+                sample_count=sample_count,
+                sufficient_data=False,
+                reason=(
+                    "BASE_RATE_GATE_FAILED: model has not beaten "
+                    "session+direction history"
+                ),
+            )
         cell_key = f"{features.session}:{direction}"
         cell = (clean_gate.get("cells") or {}).get(cell_key)
         if cell is None or int(cell.get("samples") or 0) < min_cell_samples:
