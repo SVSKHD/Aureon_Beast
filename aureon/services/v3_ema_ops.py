@@ -220,3 +220,54 @@ class V3ChampionDriftMonitor:
             "rollback_model_id": rollback.model_id if rollback else None,
             "failures": failures,
         }
+
+
+class V3RetrainingPlanner:
+    """Weekly-or-evidence-driven retraining decision for one symbol.
+
+    A run is due when any one of these is true:
+    - seven calendar days passed since the latest V3 model;
+    - at least 30 newly resolved examples exist after its training cutoff;
+    - live Champion drift has been detected.
+    The resulting model still enters Candidate/Challenger governance; this never
+    promotes a model directly.
+    """
+
+    def __init__(
+        self,
+        *,
+        learning: Any,
+        models: Any,
+        policy: RetrainingPolicy | None = None,
+    ) -> None:
+        self.learning = learning
+        self.models = models
+        self.policy = policy or RetrainingPolicy()
+
+    def evaluate(
+        self,
+        symbol: str,
+        *,
+        now: datetime,
+        drift_detected: bool = False,
+    ) -> RetrainingDecision:
+        latest = self.models.latest_model(symbol)
+        if latest is None:
+            return RetrainingDecision(True, ("no_previous_training",))
+
+        rows = self.learning.examples_between(
+            symbol.upper(),
+            latest.trained_through,
+            "9999-12-31",
+        )
+        new_examples = sum(
+            row.market_date > latest.trained_through
+            for row in rows
+        )
+        return retraining_due(
+            last_trained_at=latest.created_at,
+            now=now,
+            new_examples=new_examples,
+            drift_detected=drift_detected,
+            policy=self.policy,
+        )
