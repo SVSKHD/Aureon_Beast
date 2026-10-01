@@ -160,6 +160,10 @@ class NotificationSettings(AureonDocument):
     #: EMA crosses plus one completed-session summary. Context agents still run and
     #: remain available to EMA consensus/research; they simply stop creating cards.
     signal_first_mode: bool = True
+    #: V3 presentation-only kill switch. False hides learned model probabilities
+    #: while leaving agent agreement, detections, trading_enabled and the model itself
+    #: untouched. This is deliberately independent of the trading kill switch.
+    model_confidence_enabled: bool = True
     #: 12 T-11. Which setup changes get a card, named from ``SETUP_ANNOUNCEMENTS``. A trigger is
     #: matched against either the setup's state or the event type that caused the change,
     #: whichever the change was -- see ``Notifier._setup_trigger``.
