@@ -43,7 +43,11 @@ class V3EMAGovernance:
         model = self._require_contract(model_id, "candidate")
         clean = model.target_metrics.get("clean_10")
         if clean is None:
-            return self.models.set_status(model_id, "rejected", promotion_reason="no clean_10 metrics")
+            return self.models.set_status(
+                model_id,
+                "rejected",
+                promotion_reason="no clean_10 metrics",
+            )
         failures = []
         if clean.samples < self.policy.min_validation_samples:
             failures.append(
