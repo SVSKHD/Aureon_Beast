@@ -1058,6 +1058,7 @@ def build_notification(
     session_ema_context: tuple[str, str] | None = None,
     model_confidence: dict | None = None,
     movement_since_pre_cross: float | None = None,
+    model_confidence_visible: bool = True,
 ) -> NotificationScreen:
     """The §59 detection embed: what the machine saw, and nothing it did not (9C).
 
@@ -1128,10 +1129,11 @@ def build_notification(
                 f"{consensus.conflicting} conflicting"
             )
             fields.append(("Agent consensus", counts))
-        fields.append(_v3_model_confidence_field(model_confidence))
-        combined = _combined_v3_confidence_field(consensus, model_confidence)
-        if combined is not None:
-            fields.append(combined)
+        if model_confidence_visible:
+            fields.append(_v3_model_confidence_field(model_confidence))
+            combined = _combined_v3_confidence_field(consensus, model_confidence)
+            if combined is not None:
+                fields.append(combined)
         fields.append(("Session", detection.session.session.value))
         screen.fields = fields
         screen.footer = (
@@ -1167,8 +1169,16 @@ def build_notification(
             detail += "\nAgreement meter only — not a win probability."
             consensus_field = ("Agent consensus", detail)
 
-        model_field = _v3_model_confidence_field(model_confidence)
-        combined_field = _combined_v3_confidence_field(consensus, model_confidence)
+        model_field = (
+            _v3_model_confidence_field(model_confidence)
+            if model_confidence_visible
+            else None
+        )
+        combined_field = (
+            _combined_v3_confidence_field(consensus, model_confidence)
+            if model_confidence_visible
+            else None
+        )
         movement_field = (
             (
                 "Move since pre-cross",
@@ -1194,7 +1204,7 @@ def build_notification(
                 ),
                 ("Analysis", analysis),
                 *([consensus_field] if consensus_field is not None else []),
-                model_field,
+                *([model_field] if model_field is not None else []),
                 *([combined_field] if combined_field is not None else []),
                 *([movement_field] if movement_field is not None else []),
                 ("Session", session),
@@ -1216,7 +1226,7 @@ def build_notification(
                 ),
                 ("Analysis", analysis),
                 *([consensus_field] if consensus_field is not None else []),
-                model_field,
+                *([model_field] if model_field is not None else []),
                 *([combined_field] if combined_field is not None else []),
                 *([movement_field] if movement_field is not None else []),
                 ("Session", session),
