@@ -107,6 +107,30 @@ class Detection(Base):
     )
 
 
+class EMAMovementJourney(Base):
+    """V3 EMA movement journey, persisted as a stateful research object."""
+
+    __tablename__ = "ema_movement_journeys"
+
+    journey_id: Mapped[str] = mapped_column(String, primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    account_scope: Mapped[str] = mapped_column(String)
+    symbol: Mapped[str] = mapped_column(String)
+    timeframe: Mapped[str] = mapped_column(String)
+    direction: Mapped[str] = mapped_column(String)
+    market_date: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String)
+    started_at: Mapped[datetime] = mapped_column()
+    ended_at: Mapped[datetime | None] = mapped_column()
+    end_reason: Mapped[str | None] = mapped_column(String)
+    payload: Mapped[dict[str, Any]] = mapped_column(Json)
+
+    __table_args__ = (
+        Index("ix_ema_journeys_stream", "symbol", "timeframe", "status", "started_at"),
+        Index("ix_ema_journeys_date", "symbol", "market_date"),
+    )
+
+
 class DetectionEvaluation(Base):
     """§9, §21. What a detection's outcome was, under ONE frozen rule.
 
