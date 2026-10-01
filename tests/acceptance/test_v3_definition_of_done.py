@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
-
 from aureon.models.enums import NotificationKind
 from aureon.models.settings import NotificationSettings
 from aureon.services.v3_ema_ops import DriftPolicy, RetrainingPolicy
