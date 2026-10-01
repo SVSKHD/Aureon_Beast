@@ -26,6 +26,7 @@ from aureon.models.ema_journey_v3 import (
 )
 from aureon.models.enums import Direction
 from aureon.models.market import Candle
+from aureon.services.v3_ema_learning import freeze_anchor_features
 
 EMA_ANCHOR_AGENTS: dict[str, EMAAnchorType] = {
     "ema200_pre_cross": EMAAnchorType.PRE_CROSS,
@@ -64,7 +65,12 @@ class EMAMovementJourneyTracker:
             if journey.status is JourneyStatus.OPEN:
                 self._active[(journey.symbol, journey.timeframe.value)] = journey
 
-    def on_detection(self, detection: Detection) -> EMAMovementJourney | None:
+    def on_detection(
+        self,
+        detection: Detection,
+        *,
+        same_candle: list[Detection] | None = None,
+    ) -> EMAMovementJourney | None:
         anchor_type = EMA_ANCHOR_AGENTS.get(detection.agent_name)
         if anchor_type is None or detection.direction is None:
             return None
@@ -110,6 +116,10 @@ class EMAMovementJourneyTracker:
             detected_at=detection.detected_at.utc,
             price=detection.price,
             movement_from_journey_start=movement,
+            features=freeze_anchor_features(
+                detection,
+                same_candle=same_candle,
+            ),
             outcome=self._empty_outcome(),
         )
         current.anchors = tuple((*current.anchors, anchor))
