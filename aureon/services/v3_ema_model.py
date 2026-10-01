@@ -635,9 +635,9 @@ def predict_v3(
 
     sample_count = int(model.training_samples)
     target_sample_counts = {
-            name: int(metric.samples)
-            for name, metric in model.target_metrics.items()
-        }
+        name: int(metric.samples)
+        for name, metric in model.target_metrics.items()
+    }
     if sample_count < min_samples:
         return EMAModelConfidenceV3(
             model_id=model.model_id,
@@ -658,6 +658,7 @@ def predict_v3(
                 model_generation=model.generation,
                 trained_through=model.trained_through,
                 sample_count=sample_count,
+                target_sample_counts=target_sample_counts,
                 sufficient_data=False,
                 reason=(
                     "BASE_RATE_GATE_FAILED: model has not beaten "
@@ -672,6 +673,7 @@ def predict_v3(
                 model_generation=model.generation,
                 trained_through=model.trained_through,
                 sample_count=sample_count,
+                target_sample_counts=target_sample_counts,
                 sufficient_data=False,
                 reason=(
                     "INSUFFICIENT CELL DATA: "
