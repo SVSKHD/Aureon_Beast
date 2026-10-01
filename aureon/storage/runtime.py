@@ -174,8 +174,11 @@ class V3EMAReadAdapter:
         return self._journeys.closed_since(since)
 
     def predictions_for_journey(self, journey_id: str) -> list[dict[str, Any]]:
+        journey = self._journeys.get(journey_id)
+        if journey is None:
+            return []
         rows = []
-        for anchor in self._journeys.get(journey_id).anchors:
+        for anchor in journey.anchors:
             prediction = self._learning.prediction_for_detection(anchor.detection_id)
             if prediction is not None:
                 rows.append(prediction)
