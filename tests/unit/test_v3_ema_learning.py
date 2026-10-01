@@ -142,12 +142,14 @@ def _example(index: int) -> CanonicalEMAExampleV3:
         features=_features(index),
         movement_from_journey_start=float(index % 10),
         outcome=EMAOutcomeV3(
+            reached_3=index % 7 != 0,
             reached_5=index % 5 != 0,
             reached_10=reached_10,
             reached_20=reached_20,
             reached_30=reached_30,
             reached_40=reached_40,
             clean_10=reached_10 and index % 6 != 0,
+            bars_to_3=1 if index % 7 != 0 else None,
             bars_to_5=2 if index % 5 != 0 else None,
             bars_to_10=4 if reached_10 else None,
             bars_to_20=8 if reached_20 else None,
@@ -266,6 +268,7 @@ def test_multi_output_model_is_monotonic_and_includes_mfe_mae() -> None:
 
     assert prediction.sufficient_data is True
     values = [
+        prediction.probability_reach_3,
         prediction.probability_reach_5,
         prediction.probability_reach_10,
         prediction.probability_reach_20,
@@ -322,6 +325,7 @@ def test_discord_keeps_agent_and_model_confidence_separate() -> None:
         model_confidence={
             "sufficient_data": True,
             "sample_count": 212,
+            "probability_reach_3": 0.91,
             "probability_reach_5": 0.84,
             "probability_reach_10": 0.71,
             "probability_reach_20": 0.48,

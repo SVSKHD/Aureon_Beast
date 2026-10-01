@@ -38,12 +38,14 @@ class EMAOutcomeV3(AureonModel):
     model_config = ConfigDict(frozen=True)
 
     label_schema: str = EMA_LABEL_SCHEMA_V3
+    reached_3: bool
     reached_5: bool
     reached_10: bool
     reached_20: bool
     reached_30: bool
     reached_40: bool
     clean_10: bool
+    bars_to_3: int | None = None
     bars_to_5: int | None = None
     bars_to_10: int | None = None
     bars_to_20: int | None = None
@@ -51,6 +53,12 @@ class EMAOutcomeV3(AureonModel):
     bars_to_40: int | None = None
     mfe: float = Field(ge=0)
     mae: float = Field(ge=0)
+    first_favourable_bar: int | None = None
+    dollars_per_bar: float | None = Field(default=None, ge=0)
+    adverse_before_targets: dict[str, float] = Field(default_factory=dict)
+    reference_price: float | None = None
+    reference_price_kind: str = "detection_close"
+    spread_accounted: bool = False
     failure_type: EMAFailureType = EMAFailureType.NONE
     resolved_at: UtcDatetime
 
@@ -68,6 +76,7 @@ class CanonicalEMAExampleV3(AureonDocument):
     label_schema: str = EMA_LABEL_SCHEMA_V3
     features: EMAAnchorFeaturesV3
     movement_from_journey_start: float
+    independence_weight: float = Field(default=1.0, gt=0, le=1.0)
     outcome: EMAOutcomeV3
     generated_at: UtcDatetime
 
@@ -77,9 +86,13 @@ class EMAModelConfidenceV3(AureonModel):
 
     model_id: str
     model_schema: str = EMA_MODEL_SCHEMA_V3
+    feature_schema: str = EMA_FEATURE_SCHEMA_V3
+    model_generation: int | None = None
+    trained_through: str | None = None
     sample_count: int = Field(ge=0)
     sufficient_data: bool
     out_of_distribution: bool = False
+    probability_reach_3: float | None = Field(default=None, ge=0, le=1)
     probability_reach_5: float | None = Field(default=None, ge=0, le=1)
     probability_reach_10: float | None = Field(default=None, ge=0, le=1)
     probability_reach_20: float | None = Field(default=None, ge=0, le=1)
@@ -183,6 +196,19 @@ def freeze_anchor_features(
         rsi_change=numeric.get("rsi_change"),
         atr=atr,
         volatility_regime=volatility_regime,
+        tick_volume=numeric.get("tick_volume"),
+        volume_ratio_to_median=numeric.get("tick_volume_ratio_to_median"),
+        volume_percentile=numeric.get("tick_volume_percentile"),
+        volume_state=str(categorical.get("volume_state", "UNKNOWN")),
+        volume_price_alignment=str(
+            categorical.get("volume_price_alignment", "UNKNOWN")
+        ),
+        pre_cross_volume_3bar_mean=numeric.get("tick_volume_3bar_mean"),
+        pre_cross_volume_5bar_mean=numeric.get("tick_volume_5bar_mean"),
+        spread_points=numeric.get("spread_points"),
+        high_impact_news=bool(evidence.flags.get("high_impact_news", False)),
+        news_event=categorical.get("news_event"),
+        minutes_to_news=numeric.get("minutes_to_news"),
         session=detection.session.session.value,
         session_phase=session_phase,
         market_structure=str(
@@ -227,16 +253,22 @@ def canonical_example(
 ) -> CanonicalEMAExampleV3:
     if not anchor.outcome.completed or anchor.outcome.completed_at is None:
         raise ValueError("EMA anchor outcome must be complete before training")
+    if not anchor.outcome.valid:
+        raise ValueError(
+            f"EMA anchor outcome is invalid: {anchor.outcome.invalid_reason or 'unknown'}"
+        )
     targets = anchor.outcome.targets
     reached = lambda key: bool(targets.get(key) and targets[key].reached)
     clean_10 = reached("10") and anchor.outcome.mae <= clean_max_mae
     outcome = EMAOutcomeV3(
+        reached_3=reached("3"),
         reached_5=reached("5"),
         reached_10=reached("10"),
         reached_20=reached("20"),
         reached_30=reached("30"),
         reached_40=reached("40"),
         clean_10=clean_10,
+        bars_to_3=targets.get("3").bars_to if targets.get("3") else None,
         bars_to_5=targets.get("5").bars_to if targets.get("5") else None,
         bars_to_10=targets.get("10").bars_to if targets.get("10") else None,
         bars_to_20=targets.get("20").bars_to if targets.get("20") else None,
@@ -244,6 +276,15 @@ def canonical_example(
         bars_to_40=targets.get("40").bars_to if targets.get("40") else None,
         mfe=anchor.outcome.mfe,
         mae=anchor.outcome.mae,
+        first_favourable_bar=anchor.outcome.first_favourable_bar,
+        dollars_per_bar=anchor.outcome.dollars_per_bar,
+        adverse_before_targets={
+            key: value.adverse_before_reach
+            for key, value in targets.items()
+        },
+        reference_price=anchor.outcome.reference_price,
+        reference_price_kind=anchor.outcome.reference_price_kind,
+        spread_accounted=anchor.outcome.spread_accounted,
         failure_type=classify_failure(anchor),
         resolved_at=to_utc(anchor.outcome.completed_at),
     )
@@ -264,6 +305,7 @@ def canonical_example(
         anchor_type=anchor.anchor_type.value,
         features=anchor.features,
         movement_from_journey_start=anchor.movement_from_journey_start,
+        independence_weight=1.0 / max(1, len(journey.anchors)),
         outcome=outcome,
         generated_at=to_utc(generated_at),
     )

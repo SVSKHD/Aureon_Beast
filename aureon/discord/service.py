@@ -1026,9 +1026,10 @@ def _v3_model_confidence_field(payload: dict | None) -> tuple[str, str]:
 
     sample_count = int(payload.get("sample_count") or 0)
     value = (
+        f"+3 {pct('probability_reach_3')} · "
         f"+5 {pct('probability_reach_5')} · "
-        f"+10 {pct('probability_reach_10')} · "
-        f"+20 {pct('probability_reach_20')}\n"
+        f"+10 {pct('probability_reach_10')}\n"
+        f"+20 {pct('probability_reach_20')} · "
         f"+30 {pct('probability_reach_30')} · "
         f"+40 {pct('probability_reach_40')} · "
         f"clean +10 {pct('probability_clean_10')}\n"

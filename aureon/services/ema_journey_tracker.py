@@ -47,6 +47,8 @@ class EMAMovementJourneyTracker:
         max_link_bars: int = 96,
         gap_tolerance_bars: int = 2,
         on_journey_closed: object | None = None,
+        point_size_by_symbol: dict[str, float] | None = None,
+        news_tagger: object | None = None,
     ) -> None:
         if max_horizon_bars < 1:
             raise ValueError("max_horizon_bars must be positive")
@@ -59,6 +61,11 @@ class EMAMovementJourneyTracker:
         self.max_link_bars = max_link_bars
         self.gap_tolerance_bars = gap_tolerance_bars
         self.on_journey_closed = on_journey_closed
+        self.point_size_by_symbol = {
+            key.upper(): float(value)
+            for key, value in (point_size_by_symbol or {}).items()
+        }
+        self.news_tagger = news_tagger
         self._active: dict[tuple[str, str], EMAMovementJourney] = {}
 
     def restore(self, journeys: list[EMAMovementJourney]) -> None:
@@ -111,18 +118,56 @@ class EMAMovementJourneyTracker:
         movement = self._directional_move(
             current.direction, current.start_price, detection.price
         )
+        point_size = self.point_size_by_symbol.get(detection.symbol.upper())
+        spread_points = detection.evidence.numeric.get("spread_points")
+        spread_price = (
+            float(spread_points) * point_size
+            if spread_points is not None and point_size is not None
+            else 0.0
+        )
+        reference_price = (
+            detection.price + spread_price
+            if detection.direction is Direction.BUY
+            else detection.price
+        )
+        features = freeze_anchor_features(
+            detection,
+            same_candle=same_candle,
+        )
+        if self.news_tagger is not None:
+            news = self.news_tagger.context_at(detection.detected_at.utc)
+            features = features.model_copy(
+                update={
+                    "high_impact_news": bool(news.high_impact),
+                    "news_event": news.event,
+                    "minutes_to_news": news.minutes_to_event,
+                }
+            )
         anchor = EMAJourneyAnchor(
             detection_id=detection.detection_id,
             anchor_type=anchor_type,
             direction=detection.direction,
             detected_at=detection.detected_at.utc,
             price=detection.price,
-            movement_from_journey_start=movement,
-            features=freeze_anchor_features(
-                detection,
-                same_candle=same_candle,
+            reference_price=reference_price,
+            reference_price_kind=(
+                "ask_at_detection" if detection.direction is Direction.BUY
+                else "bid_at_detection"
             ),
-            outcome=self._empty_outcome(),
+            spread_points=(
+                float(spread_points) if spread_points is not None else None
+            ),
+            point_size=point_size,
+            movement_from_journey_start=movement,
+            features=features,
+            outcome=self._empty_outcome(
+                reference_price=reference_price,
+                reference_price_kind=(
+                    "ask_at_detection" if detection.direction is Direction.BUY
+                    else "bid_at_detection"
+                ),
+                spread_accounted=spread_points is not None and point_size is not None,
+            ),
         )
         current.anchors = tuple((*current.anchors, anchor))
         self._save(current)
@@ -237,9 +282,23 @@ class EMAMovementJourneyTracker:
     ) -> EMAAnchorOutcome:
         outcome = anchor.outcome.model_copy(deep=True)
         outcome.bars_observed += 1
-        favourable, adverse = self._candle_moves(anchor.direction, anchor.price, candle)
+        reference = anchor.reference_price if anchor.reference_price is not None else anchor.price
+        favourable, adverse = self._candle_moves(
+            anchor.direction,
+            reference,
+            candle,
+            point_size=anchor.point_size,
+            fallback_spread_points=anchor.spread_points,
+        )
         outcome.mfe = max(outcome.mfe, favourable)
         outcome.mae = max(outcome.mae, adverse)
+        if outcome.first_favourable_bar is None and favourable > 0:
+            outcome.first_favourable_bar = outcome.bars_observed
+        outcome.dollars_per_bar = (
+            outcome.mfe / outcome.bars_observed
+            if outcome.bars_observed > 0
+            else None
+        )
 
         elapsed = max(
             0.0,
@@ -254,9 +313,17 @@ class EMAMovementJourneyTracker:
                     reached=True,
                     bars_to=outcome.bars_observed,
                     seconds_to=elapsed,
+                    adverse_before_reach=max(existing.adverse_before_reach, adverse),
                 )
-            elif key not in targets:
-                targets[key] = existing
+            elif not existing.reached:
+                targets[key] = existing.model_copy(
+                    update={
+                        "adverse_before_reach": max(
+                            existing.adverse_before_reach,
+                            adverse,
+                        )
+                    }
+                )
         outcome.targets = targets
 
         if outcome.bars_observed >= self.max_horizon_bars:
@@ -283,6 +350,8 @@ class EMAMovementJourneyTracker:
                     "completed": True,
                     "end_reason": reason,
                     "completed_at": to_utc(at),
+                    "valid": not invalid,
+                    "invalid_reason": reason.value if invalid else None,
                 }
             )
             updated.append(anchor.model_copy(update={"outcome": outcome}))
@@ -295,8 +364,17 @@ class EMAMovementJourneyTracker:
         if self.on_journey_closed is not None:
             self.on_journey_closed(journey)
 
-    def _empty_outcome(self) -> EMAAnchorOutcome:
+    def _empty_outcome(
+        self,
+        *,
+        reference_price: float,
+        reference_price_kind: str,
+        spread_accounted: bool,
+    ) -> EMAAnchorOutcome:
         return EMAAnchorOutcome(
+            reference_price=reference_price,
+            reference_price_kind=reference_price_kind,
+            spread_accounted=spread_accounted,
             targets={
                 self._target_key(target): TargetOutcome()
                 for target in EMA_MOVEMENT_TARGETS
@@ -308,13 +386,24 @@ class EMAMovementJourneyTracker:
         direction: Direction,
         reference: float,
         candle: Candle,
+        *,
+        point_size: float | None = None,
+        fallback_spread_points: float | None = None,
     ) -> tuple[float, float]:
+        spread_points = (
+            float(candle.spread)
+            if candle.spread is not None
+            else float(fallback_spread_points or 0.0)
+        )
+        spread_price = spread_points * float(point_size or 0.0)
         if direction is Direction.BUY:
+            # MT5 bars are bid-based: BUY enters at ask and exits against bid.
             favourable = max(0.0, candle.high - reference)
             adverse = max(0.0, reference - candle.low)
         else:
-            favourable = max(0.0, reference - candle.low)
-            adverse = max(0.0, candle.high - reference)
+            # SELL enters at bid and exits against ask, so add spread to future bars.
+            favourable = max(0.0, reference - (candle.low + spread_price))
+            adverse = max(0.0, (candle.high + spread_price) - reference)
         return favourable, adverse
 
     @staticmethod

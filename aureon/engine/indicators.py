@@ -195,3 +195,110 @@ def crossed_at_last(fast: pd.Series, slow: pd.Series) -> int:
         previous_side = 1 if previous > 0 else -1
         return current_side if previous_side != current_side else 0
     return 0
+
+
+
+class IncrementalEMA:
+    """O(1) EMA updater for chronological backfills and walk-forward research.
+
+    This uses the same recursive formula as :func:`ema`. It is intentionally not
+    substituted into the fixed-window live-agent contract, where changing seed history
+    would move historical crosses. V3 chronological research can use this state because
+    it consumes the full stream in order.
+    """
+
+    def __init__(self, period: int) -> None:
+        if period <= 0:
+            raise ValueError("period must be positive")
+        self.period = period
+        self.alpha = 2.0 / (period + 1.0)
+        self.count = 0
+        self.value: float | None = None
+        self.previous: float | None = None
+
+    def update(self, value: float) -> float | None:
+        number = float(value)
+        self.previous = self.value
+        self.count += 1
+        if self.value is None:
+            self.value = number
+        else:
+            self.value = self.alpha * number + (1.0 - self.alpha) * self.value
+        return self.value if self.count >= self.period else None
+
+
+class IncrementalWilderRSI:
+    """O(1) Wilder RSI updater with the same full-stream seed as :func:`rsi`."""
+
+    def __init__(self, period: int = 14) -> None:
+        if period <= 0:
+            raise ValueError("period must be positive")
+        self.period = period
+        self.previous_close: float | None = None
+        self.seed_gains: list[float] = []
+        self.seed_losses: list[float] = []
+        self.avg_gain: float | None = None
+        self.avg_loss: float | None = None
+        self.value: float | None = None
+        self.previous: float | None = None
+
+    def update(self, close: float) -> float | None:
+        number = float(close)
+        self.previous = self.value
+        if self.previous_close is None:
+            self.previous_close = number
+            return None
+
+        change = number - self.previous_close
+        self.previous_close = number
+        gain = max(change, 0.0)
+        loss = max(-change, 0.0)
+
+        if self.avg_gain is None or self.avg_loss is None:
+            self.seed_gains.append(gain)
+            self.seed_losses.append(loss)
+            if len(self.seed_gains) < self.period:
+                return None
+            self.avg_gain = sum(self.seed_gains) / self.period
+            self.avg_loss = sum(self.seed_losses) / self.period
+        else:
+            self.avg_gain += (gain - self.avg_gain) / self.period
+            self.avg_loss += (loss - self.avg_loss) / self.period
+
+        if self.avg_loss == 0.0 and self.avg_gain == 0.0:
+            self.value = 50.0
+        elif self.avg_loss == 0.0:
+            self.value = 100.0
+        else:
+            rs = self.avg_gain / self.avg_loss
+            self.value = 100.0 - (100.0 / (1.0 + rs))
+        return self.value
+
+
+class StreamingIndicators:
+    """Shared O(1) EMA20/50/200 + RSI14 state for V3 chronological research."""
+
+    def __init__(
+        self,
+        *,
+        fast_period: int = 20,
+        slow_period: int = 50,
+        ema200_period: int = 200,
+        rsi_period: int = 14,
+    ) -> None:
+        self.fast = IncrementalEMA(fast_period)
+        self.slow = IncrementalEMA(slow_period)
+        self.ema200 = IncrementalEMA(ema200_period)
+        self.rsi = IncrementalWilderRSI(rsi_period)
+
+    def update(self, close: float) -> dict[str, float | None]:
+        return {
+            "ema_fast": self.fast.update(close),
+            "ema_slow": self.slow.update(close),
+            "ema200": self.ema200.update(close),
+            "rsi": self.rsi.update(close),
+            "previous_ema_fast": self.fast.previous,
+            "previous_ema_slow": self.slow.previous,
+            "previous_ema200": self.ema200.previous,
+            "previous_rsi": self.rsi.previous,
+        }

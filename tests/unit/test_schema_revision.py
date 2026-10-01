@@ -15,30 +15,45 @@ from aureon.storage.postgres.schema import SchemaState, SchemaStatus
 
 #: C-5's list, verbatim from the phase prompt, pinned as a literal.
 EXPECTED_TABLES = {
-    "detections",
-    "detection_evaluations",
-    "setups",
-    "setup_events",
-    "setup_evaluations",
-    "sessions",
-    "trade_requests",
-    "trades",
-    "control_requests",
-    "audit_logs",
-    "heartbeats",
-    "system_state",
-    "settings",
-    "symbol_specs",
-    "daily_reviews",
-    "weekly_reviews",
-    "notifications",
     "alerts",
     "assessments",
-    "trade_notes",
-    "ops_events",
-    "market_days",
+    "audit_logs",
+    "canonical_training_examples",
+    "control_requests",
+    "daily_reviews",
+    "daily_training_status",
+    "detection_evaluations",
+    "detections",
+    "ema_movement_journeys",
+    "heartbeats",
+    "learning_exams",
     "market_day_frames",
+    "market_days",
+    "model_backtests",
+    "model_evolution_log",
+    "model_predictions",
+    "model_registry",
+    "model_training_runs",
+    "notifications",
+    "ops_events",
+    "pending_learning_setups",
+    "sessions",
+    "settings",
+    "setup_evaluations",
+    "setup_events",
+    "setups",
+    "symbol_specs",
     "sync_batches",
+    "system_state",
+    "trade_management_events",
+    "trade_notes",
+    "trade_requests",
+    "trades",
+    "training_examples",
+    "v3_ema_examples",
+    "v3_ema_holdout_days",
+    "v3_ema_predictions",
+    "weekly_reviews",
 }
 
 #: C-7's four: additive-only, no destructive downgrade, ever.
@@ -60,11 +75,11 @@ def test_every_table_the_plan_names_exists() -> None:
     assert set(Base.metadata.tables) == EXPECTED_TABLES
 
 
-def test_there_are_exactly_twenty_four() -> None:
+def test_there_are_exactly_thirty_nine() -> None:
     """Stated as a number too, because a set comparison passes if BOTH sides drift."""
     import aureon.storage.postgres.tables  # noqa: F401
 
-    assert len(Base.metadata.tables) == 24
+    assert len(Base.metadata.tables) == 39
 
 
 def test_every_table_has_a_primary_key() -> None:

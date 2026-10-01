@@ -168,6 +168,7 @@ class V3EMAPrediction(Base):
     journey_id: Mapped[str] = mapped_column(String)
     detection_id: Mapped[str] = mapped_column(String)
     symbol: Mapped[str] = mapped_column(String)
+    market_date: Mapped[str] = mapped_column(String)
     predicted_at: Mapped[datetime] = mapped_column()
     payload: Mapped[dict[str, Any]] = mapped_column(Json)
     reconciled_at: Mapped[datetime | None] = mapped_column()
@@ -175,7 +176,12 @@ class V3EMAPrediction(Base):
     outcome_class: Mapped[str | None] = mapped_column(String)
 
     __table_args__ = (
-        Index("ix_v3_ema_predictions_symbol_time", "symbol", "predicted_at"),
+        Index(
+            "ix_v3_ema_predictions_symbol_date",
+            "symbol",
+            "market_date",
+            "predicted_at",
+        ),
         UniqueConstraint("model_id", "detection_id", name="uq_v3_ema_prediction"),
     )
 

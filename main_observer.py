@@ -2522,6 +2522,7 @@ def build_observer(config: AureonConfig) -> Observer:
     # 11D, and assigned the same way for the same reason: a test of observation should not
     # have to stand up a day cache to watch a candle close.
     observer.market_days = storage.market_days
+    from aureon.services.high_impact_news import HighImpactNewsTagger
     from aureon.services.learning_memory import LearningMemoryService
     from aureon.services.prediction_service import PredictionService
     from aureon.services.shadow_model import ShadowModelService
@@ -2547,6 +2548,11 @@ def build_observer(config: AureonConfig) -> Observer:
         max_horizon_bars=96,
         max_link_bars=96,
         on_journey_closed=observer.v3_ema_learning.resolve_journey,
+        point_size_by_symbol={
+            symbol: SymbolIntelligenceAgent().resolve_tuning(symbol).point
+            for symbol in config.symbols
+        },
+        news_tagger=HighImpactNewsTagger.from_file(),
     )
     open_journeys = []
     for symbol in config.symbols:

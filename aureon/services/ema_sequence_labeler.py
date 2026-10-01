@@ -260,7 +260,10 @@ class EMASequenceLabeler:
         """First independently supported candidate using only that candle's state."""
         for index in range(max(0, start_bar - 1), min(len(future), len(states))):
             state = states[index] or {}
-            evidence = state.get("detections") or []
+            try:
+                evidence = state["detections"] or []
+            except KeyError:
+                evidence = []
             supporting = [
                 item for item in evidence
                 if _direction_value(item.get("direction")) is wanted

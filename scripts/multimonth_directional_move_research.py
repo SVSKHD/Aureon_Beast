@@ -8,7 +8,6 @@ ROOT=Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 from aureon.config import AureonConfig
 from aureon.models.enums import Timeframe
-from aureon.models.base import to_utc
 from aureon.services.multimonth_causal_ema_scanner import scan,one_position
 from aureon.services.jan23_reentry_move_research import trace_signal,summarize
 from aureon.services.monthly_move_economics import monthly_report

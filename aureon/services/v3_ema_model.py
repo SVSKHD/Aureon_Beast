@@ -28,6 +28,7 @@ from aureon.services.v3_ema_learning import (
 
 V3_BINARY_TARGETS = (
     "clean_10",
+    "reach_3",
     "reach_5",
     "reach_10",
     "reach_20",
@@ -47,6 +48,13 @@ def raw_v3_features(features: EMAAnchorFeaturesV3) -> tuple[dict[str, float], di
         "rsi": float(features.rsi if features.rsi is not None else 50.0),
         "rsi_change": float(features.rsi_change or 0.0),
         "atr": float(features.atr or 0.0),
+        "tick_volume": float(features.tick_volume or 0.0),
+        "volume_ratio_to_median": float(features.volume_ratio_to_median or 0.0),
+        "volume_percentile": float(features.volume_percentile or 0.0),
+        "volume_3bar_mean": float(features.pre_cross_volume_3bar_mean or 0.0),
+        "volume_5bar_mean": float(features.pre_cross_volume_5bar_mean or 0.0),
+        "spread_points": float(features.spread_points or 0.0),
+        "minutes_to_news": float(features.minutes_to_news or 9999.0),
         "agent_supportive": float(features.agent_confidence.supportive),
         "agent_neutral": float(features.agent_confidence.neutral),
         "agent_conflicting": float(features.agent_confidence.conflicting),
@@ -59,6 +67,10 @@ def raw_v3_features(features: EMAAnchorFeaturesV3) -> tuple[dict[str, float], di
         "price_vs_ema200": features.price_vs_ema200,
         "ema20_50_relation": features.ema20_50_relation,
         "volatility_regime": features.volatility_regime,
+        "volume_state": features.volume_state,
+        "volume_price_alignment": features.volume_price_alignment,
+        "news_event": features.news_event or "NONE",
+        "high_impact_news": "yes" if features.high_impact_news else "no",
         "session": features.session,
         "session_phase": features.session_phase,
         "market_structure": features.market_structure,
@@ -74,6 +86,7 @@ def _target(example: CanonicalEMAExampleV3, name: str) -> bool:
     outcome = example.outcome
     return {
         "clean_10": outcome.clean_10,
+        "reach_3": outcome.reached_3,
         "reach_5": outcome.reached_5,
         "reach_10": outcome.reached_10,
         "reach_20": outcome.reached_20,
@@ -89,12 +102,23 @@ def _constant(labels: list[int]) -> dict[str, Any]:
     }
 
 
-def _fit_binary(vectors: list[list[float]], labels: list[int]) -> dict[str, Any]:
+def _fit_binary(
+    vectors: list[list[float]],
+    labels: list[int],
+    sample_weights: list[float] | None = None,
+) -> dict[str, Any]:
     if not labels:
         raise ValueError("cannot fit empty target")
     if all(label == labels[0] for label in labels):
         return _constant(labels)
-    return {"kind": "logistic", "model": fit_logistic(vectors, labels).to_dict()}
+    return {
+        "kind": "logistic",
+        "model": fit_logistic(
+            vectors,
+            labels,
+            sample_weights=sample_weights,
+        ).to_dict(),
+    }
 
 
 def _predict_binary(payload: dict[str, Any], vector: list[float]) -> float:
@@ -198,6 +222,7 @@ def fit_v3_bundle(
     raw_train = [raw_v3_features(e.features) for e in train]
     encoder = V1FeatureEncoder.fit(raw_train)
     train_vectors = [encoder.transform(*row) for row in raw_train]
+    train_weights = [float(e.independence_weight) for e in train]
     validation_vectors = [
         encoder.transform(*raw_v3_features(e.features))
         for e in validation
@@ -208,7 +233,11 @@ def fit_v3_bundle(
     calibration: dict[str, Any] = {}
     for target in V3_BINARY_TARGETS:
         train_labels = [1 if _target(e, target) else 0 for e in train]
-        fitted = _fit_binary(train_vectors, train_labels)
+        fitted = _fit_binary(
+            train_vectors,
+            train_labels,
+            sample_weights=train_weights,
+        )
         targets[target] = fitted
         labels = [1 if _target(e, target) else 0 for e in validation]
         probs = [_predict_binary(fitted, vector) for vector in validation_vectors]
@@ -416,10 +445,13 @@ class V3EMAModelTrainer:
         # is fixed before any event on that date is scored.
         from aureon.services.v3_ema_learning import EMAHoldoutDayV3
         from datetime import UTC, datetime, timedelta
-        next_date = (
+        next_day = (
             datetime.fromisoformat(entry.trained_through).replace(tzinfo=UTC)
             + timedelta(days=1)
-        ).date().isoformat()
+        )
+        while next_day.weekday() >= 5:
+            next_day += timedelta(days=1)
+        next_date = next_day.date().isoformat()
         holdout_id = hashlib.sha256(
             f"{symbol.upper()}|{next_date}|{entry.model_id}|V3_EMA_HOLDOUT".encode()
         ).hexdigest()
@@ -453,6 +485,8 @@ def predict_v3(
     if sample_count < min_samples:
         return EMAModelConfidenceV3(
             model_id=model.model_id,
+            model_generation=model.generation,
+            trained_through=model.trained_through,
             sample_count=sample_count,
             sufficient_data=False,
             reason=f"INSUFFICIENT TRAINING DATA: {sample_count}/{min_samples}",
@@ -464,6 +498,8 @@ def predict_v3(
     if is_ood:
         return EMAModelConfidenceV3(
             model_id=model.model_id,
+            model_generation=model.generation,
+            trained_through=model.trained_through,
             sample_count=sample_count,
             sufficient_data=False,
             out_of_distribution=True,
@@ -476,14 +512,17 @@ def predict_v3(
         for name, payload in model.artifact["targets"].items()
     }
     previous = 1.0
-    for name in ("reach_5", "reach_10", "reach_20", "reach_30", "reach_40"):
+    for name in ("reach_3", "reach_5", "reach_10", "reach_20", "reach_30", "reach_40"):
         probs[name] = min(previous, probs[name])
         previous = probs[name]
 
     return EMAModelConfidenceV3(
         model_id=model.model_id,
+        model_generation=model.generation,
+        trained_through=model.trained_through,
         sample_count=sample_count,
         sufficient_data=True,
+        probability_reach_3=probs.get("reach_3"),
         probability_reach_5=probs.get("reach_5"),
         probability_reach_10=probs.get("reach_10"),
         probability_reach_20=probs.get("reach_20"),

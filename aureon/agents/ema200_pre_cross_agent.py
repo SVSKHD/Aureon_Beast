@@ -19,6 +19,7 @@ from aureon.services.cross_analysis import (
     recent_atr,
     simple_trend_direction,
 )
+from aureon.services.volume_features import volume_features
 
 EVENT_BULLISH = "bullish_pressure"
 EVENT_BEARISH = "bearish_pressure"
@@ -101,6 +102,7 @@ class Ema200PreCrossPressureAgent(BaseAgent):
         side = Direction.BUY if direction == "bullish" else Direction.SELL
         price = float(window[self.price_field].iloc[-1])
 
+        volume_numeric, volume_categorical, volume_flags = volume_features(window)
         evidence = AgentEvidence(
             numeric={
                 "ema200": float(current["ema200"]),
@@ -114,6 +116,7 @@ class Ema200PreCrossPressureAgent(BaseAgent):
                 "rsi": float(current["rsi"]),
                 "rsi_change": float(current["rsi_change"]),
                 "supporting_conditions": float(current["supporting"]),
+                **volume_numeric,
             },
             categorical={
                 "pressure_direction": str(direction),
@@ -121,6 +124,7 @@ class Ema200PreCrossPressureAgent(BaseAgent):
                 "pre_cross_pattern": str(current["pattern"]),
                 "price_relation": str(current["price_relation"]),
                 "ema20_50_context": str(current["ema20_50_context"]),
+                **volume_categorical,
             },
             flags={
                 "distance_closing": bool(current["distance_closing"]),
@@ -129,6 +133,7 @@ class Ema200PreCrossPressureAgent(BaseAgent):
                 "rsi_moving_with_pressure": bool(current["rsi_aligned"]),
                 "directional_candle": bool(current["directional_candle"]),
                 "trend_aligned": bool(current["trend_aligned"]),
+                **volume_flags,
             },
         )
 

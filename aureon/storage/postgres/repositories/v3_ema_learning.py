@@ -78,6 +78,7 @@ class V3EMALearningRepository(PostgresRepository):
         journey_id: str,
         detection_id: str,
         symbol: str,
+        market_date: str,
         predicted_at: Any,
         payload: dict[str, Any],
     ) -> None:
@@ -89,6 +90,7 @@ class V3EMALearningRepository(PostgresRepository):
                 "journey_id": journey_id,
                 "detection_id": detection_id,
                 "symbol": symbol.upper(),
+                "market_date": market_date,
                 "predicted_at": predicted_at,
                 "payload": payload,
                 "reconciled_at": None,
@@ -171,6 +173,25 @@ class V3EMALearningRepository(PostgresRepository):
         statement = statement.order_by(self.predictions.c.predicted_at)
         return [dict(row) for row in self._rows(statement)]
 
+    def predictions_for_market_date(
+        self,
+        symbol: str,
+        market_date: str,
+        *,
+        model_id: str | None = None,
+        reconciled_only: bool = True,
+    ) -> list[dict[str, Any]]:
+        statement = (
+            select(self.predictions)
+            .where(self.predictions.c.symbol == symbol.upper())
+            .where(self.predictions.c.market_date == market_date)
+        )
+        if model_id is not None:
+            statement = statement.where(self.predictions.c.model_id == model_id)
+        if reconciled_only:
+            statement = statement.where(self.predictions.c.reconciled_at.is_not(None))
+        return [dict(row) for row in self._rows(statement)]
+
     def false_positive_detection_ids(self, symbol: str) -> set[str]:
         statement = (
             select(self.predictions.c.detection_id)
@@ -217,12 +238,18 @@ class V3EMALearningRepository(PostgresRepository):
         rows = self._rows(statement)
         return None if not rows else EMAHoldoutDayV3.model_validate(dict(rows[0]))
 
+    def update_holdout(
+        self,
+        holdout: EMAHoldoutDayV3,
+    ) -> EMAHoldoutDayV3:
+        return self.write_holdout(holdout)
+
     def is_held_out(self, symbol: str, market_date: str) -> bool:
         statement = (
             select(self.holdouts.c.holdout_id)
             .where(self.holdouts.c.symbol == symbol.upper())
             .where(self.holdouts.c.market_date == market_date)
-            .where(self.holdouts.c.status == "open")
+            .where(self.holdouts.c.status.in_(("open", "scored")))
             .limit(1)
         )
         return bool(self._rows(statement))

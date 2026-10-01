@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from aureon.services.profit_protection_runner_research import simulate,summarize
+from aureon.services.profit_protection_runner_research import simulate
 def b(h,l,c):return SimpleNamespace(high=h,low=l,close=c)
 S={"sequence_id":"x","timestamp":"2023-01-01T00:00:00+00:00","direction":"BUY","entry_price":100}
 def test_target():

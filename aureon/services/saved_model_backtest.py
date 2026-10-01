@@ -47,7 +47,6 @@ def _payoff(rows: list[dict[str, Any]], target_move: float, stop_move: float) ->
 
 
 def _period_classification(model: Any, start: str, end: str) -> str:
-    trained_from = str(getattr(model, "trained_from", "") or "")
     trained_through = str(getattr(model, "trained_through", "") or "")
     if not trained_through:
         return "UNKNOWN"

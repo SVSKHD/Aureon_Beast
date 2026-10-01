@@ -18,6 +18,7 @@ from aureon.services.cross_analysis import (
     cross_candle_quality,
     simple_trend_direction,
 )
+from aureon.services.volume_features import volume_features
 
 EVENT_BULLISH = "bullish"
 EVENT_BEARISH = "bearish"
@@ -99,6 +100,7 @@ class Ema200CrossAgent(BaseAgent):
             direction=event_key,
         )
 
+        volume_numeric, volume_categorical, volume_flags = volume_features(window)
         evidence = AgentEvidence(
             numeric={
                 "ema200": ema_now,
@@ -110,6 +112,7 @@ class Ema200CrossAgent(BaseAgent):
                 "cross_body_range_ratio": float(quality["body_range_ratio"]),
                 "ema_fast": fast_now,
                 "ema_slow": slow_now,
+                **volume_numeric,
             },
             categorical={
                 "cross_direction": event_key,
@@ -118,6 +121,7 @@ class Ema200CrossAgent(BaseAgent):
                 "cross_quality": str(quality["quality"]),
                 "pre_cross_pattern": pattern,
                 "ema20_50_context": ema20_50_relation,
+                **volume_categorical,
             },
             flags={
                 "clean_cross_close": bool(quality["clean_close"]),
@@ -127,6 +131,7 @@ class Ema200CrossAgent(BaseAgent):
                     if bullish
                     else ema20_50_relation == "fast_below"
                 ),
+                **volume_flags,
             },
         )
 
