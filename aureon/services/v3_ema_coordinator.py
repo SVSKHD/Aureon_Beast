@@ -91,6 +91,7 @@ class V3EMALearningCoordinator:
             journey_id=journey.journey_id,
             detection_id=anchor.detection_id,
             symbol=journey.symbol,
+            market_date=journey.market_date,
             predicted_at=anchor.detected_at,
             payload=confidence.model_dump(mode="json"),
         )
