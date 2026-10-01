@@ -15,7 +15,7 @@ from aureon.models.base import AureonDocument, AureonModel, UtcDatetime
 from aureon.models.enums import Direction, Timeframe
 
 EMA_JOURNEY_SCHEMA_V1 = "AUREON_EMA_JOURNEY_V1"
-EMA_MOVEMENT_TARGETS: tuple[float, ...] = (5.0, 10.0, 20.0, 30.0, 40.0)
+EMA_MOVEMENT_TARGETS: tuple[float, ...] = (3.0, 5.0, 10.0, 20.0, 30.0, 40.0)
 EMA_FEATURE_SCHEMA_V3 = "AUREON_EMA_FEATURES_V3"
 EMA_LABEL_SCHEMA_V3 = "AUREON_EMA_MOVEMENT_V3"
 EMA_MODEL_SCHEMA_V3 = "AUREON_EMA_MODEL_V3"
@@ -61,6 +61,17 @@ class EMAAnchorFeaturesV3(AureonModel):
 
     atr: float | None = None
     volatility_regime: str = "UNKNOWN"
+    tick_volume: float | None = None
+    volume_ratio_to_median: float | None = None
+    volume_percentile: float | None = None
+    volume_state: str = "UNKNOWN"
+    volume_price_alignment: str = "UNKNOWN"
+    pre_cross_volume_3bar_mean: float | None = None
+    pre_cross_volume_5bar_mean: float | None = None
+    spread_points: float | None = None
+    high_impact_news: bool = False
+    news_event: str | None = None
+    minutes_to_news: float | None = None
     session: str = "UNKNOWN"
     session_phase: str = "UNKNOWN"
     market_structure: str = "UNKNOWN"
@@ -97,6 +108,7 @@ class TargetOutcome(AureonModel):
     reached: bool = False
     bars_to: int | None = Field(default=None, ge=1)
     seconds_to: float | None = Field(default=None, ge=0)
+    adverse_before_reach: float = Field(default=0.0, ge=0)
 
 
 class EMAAnchorOutcome(AureonModel):
@@ -107,6 +119,13 @@ class EMAAnchorOutcome(AureonModel):
     bars_observed: int = Field(default=0, ge=0)
     mfe: float = Field(default=0.0, ge=0)
     mae: float = Field(default=0.0, ge=0)
+    first_favourable_bar: int | None = Field(default=None, ge=1)
+    dollars_per_bar: float | None = Field(default=None, ge=0)
+    reference_price: float | None = None
+    reference_price_kind: str = "detection_close"
+    spread_accounted: bool = False
+    valid: bool = True
+    invalid_reason: str | None = None
     targets: dict[str, TargetOutcome] = Field(default_factory=dict)
     completed: bool = False
     end_reason: JourneyEndReason | None = None
@@ -123,6 +142,10 @@ class EMAJourneyAnchor(AureonModel):
     direction: Direction
     detected_at: UtcDatetime
     price: float
+    reference_price: float | None = None
+    reference_price_kind: str = "detection_close"
+    spread_points: float | None = None
+    point_size: float | None = None
     movement_from_journey_start: float = 0.0
     features: EMAAnchorFeaturesV3 = Field(default_factory=EMAAnchorFeaturesV3)
     outcome: EMAAnchorOutcome = Field(default_factory=EMAAnchorOutcome)
