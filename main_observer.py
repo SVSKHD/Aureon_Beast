@@ -432,6 +432,8 @@ class Observer:
         for detection in detections:
             if detection.agent_name != SessionTrendAgent.agent_name:
                 continue
+            if detection.evidence.categorical.get("session_event", "close") != "close":
+                continue
             try:
                 summary = summary_from_detection(detection)
                 self.session_repository.upsert(summary)  # type: ignore[attr-defined]
