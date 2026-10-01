@@ -410,6 +410,57 @@ def test_the_module_never_touches_pyplot() -> None:
     assert any("backend_agg" in name for name in imported), imported
 
 
+
+
+def test_signal_ema_chart_uses_blue_yellow_red_lines_with_visible_labels() -> None:
+    made = bars("XAUUSD", 60)
+    ema20 = tuple(2400.0 + index * 0.04 for index in range(60))
+    ema50 = tuple(2399.0 + index * 0.03 for index in range(60))
+    ema200 = tuple(2395.0 + index * 0.01 for index in range(60))
+    overlay = cr.Overlays(
+        ema_fast=ema20,
+        ema_slow=ema50,
+        ema200=ema200,
+        ema_fast_label="EMA20",
+        ema_slow_label="EMA50",
+        ema200_label="EMA200",
+        ema_fast_colour=cr.EMA20_SIGNAL_COLOUR,
+        ema_slow_colour=cr.EMA50_SIGNAL_COLOUR,
+        ema200_colour=cr.EMA200_COLOUR,
+        show_ema_end_labels=True,
+    )
+
+    figure = cr.build("XAUUSD", "M5", made, spec_for("XAUUSD"), overlay)
+    price_axis = figure.axes[0]
+    colours = {line.get_color() for line in price_axis.lines}
+    drawn = texts(figure)
+
+    assert cr.EMA20_SIGNAL_COLOUR in colours
+    assert cr.EMA50_SIGNAL_COLOUR in colours
+    assert cr.EMA200_COLOUR in colours
+    assert "EMA20" in drawn
+    assert "EMA50" in drawn
+    assert "EMA200" in drawn
+
+
+def test_session_boundaries_are_visible_without_extra_indicator_bands() -> None:
+    made = bars("XAUUSD", 40)
+    overlay = cr.Overlays(
+        session_boundaries=(
+            cr.ChartBoundary(at=made[10].at, label="ASIA CLOSE"),
+            cr.ChartBoundary(at=made[10].at, label="LONDON OPEN"),
+        ),
+    )
+
+    figure = cr.build("XAUUSD", "M5", made, spec_for("XAUUSD"), overlay)
+    drawn = texts(figure)
+
+    assert "ASIA CLOSE" in drawn
+    assert "LONDON OPEN" in drawn
+    assert overlay.value_area is None
+    assert overlay.poc_price is None
+
+
 # ── the small decisions ───────────────────────────────────────────────────────
 
 
