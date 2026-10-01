@@ -137,11 +137,14 @@ class V3EMALearningCoordinator:
         Market-day construction remains broker-time responsibility upstream; this
         helper is deterministic for an already-normalized YYYY-MM-DD market_date.
         """
-        next_date = (
+        next_day = (
             datetime.fromisoformat(after_market_date)
             .replace(tzinfo=UTC)
             + timedelta(days=1)
-        ).date().isoformat()
+        )
+        while next_day.weekday() >= 5:
+            next_day += timedelta(days=1)
+        next_date = next_day.date().isoformat()
         model = self.models.champion_for_contract(
             symbol,
             feature_schema=EMA_FEATURE_SCHEMA_V3,
