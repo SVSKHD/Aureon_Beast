@@ -85,6 +85,7 @@ def upgrade() -> None:
         sa.Column("journey_id", sa.String(), nullable=False),
         sa.Column("detection_id", sa.String(), nullable=False),
         sa.Column("symbol", sa.String(), nullable=False),
+        sa.Column("market_date", sa.String(), nullable=False),
         sa.Column("predicted_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("payload", json_type, nullable=False),
         sa.Column("reconciled_at", sa.DateTime(timezone=True), nullable=True),
@@ -93,9 +94,9 @@ def upgrade() -> None:
         sa.UniqueConstraint("model_id", "detection_id", name="uq_v3_ema_prediction"),
     )
     op.create_index(
-        "ix_v3_ema_predictions_symbol_time",
+        "ix_v3_ema_predictions_symbol_date",
         "v3_ema_predictions",
-        ["symbol", "predicted_at"],
+        ["symbol", "market_date", "predicted_at"],
     )
 
     op.create_table(
