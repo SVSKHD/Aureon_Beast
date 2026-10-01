@@ -7,8 +7,9 @@ promote, shadow, or execute any model.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 from aureon.models.base import to_utc
 from aureon.models.enums import Direction
@@ -87,7 +88,7 @@ class EMASequenceLabeler:
         cross_price = float(detection.price)
         sequence_id = hashlib.sha256(
             f"{detection.symbol}|{detection.timeframe.value}|{at.isoformat()}|"
-            f"{direction.value}|{cross_price:.8f}".encode("utf-8")
+            f"{direction.value}|{cross_price:.8f}".encode()
         ).hexdigest()[:24]
 
         ema_fast = float(indicators.ema["fast"])
