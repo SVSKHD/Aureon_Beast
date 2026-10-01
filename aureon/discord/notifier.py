@@ -503,10 +503,11 @@ class Notifier:
         self,
         detection: Detection,
     ) -> tuple[bytes | None, str | None]:
-        """Reuse the existing Aureon chart renderer for EMA cross cards.
+        """Render the clean EMA20/50/200 chart from stored closed bars.
 
-        The chart renderer computes no indicators. EMA lines and labels come from the
-        frozen detection, while candle bars come from the market-day frame cache.
+        The renderer computes no indicators. A shared visualization-preparation service
+        uses Aureon's canonical EMA implementation so the picture shows the actual EMA
+        paths and cross locations rather than only horizontal current-value lines.
         """
         context = self.context
         if (
@@ -519,12 +520,23 @@ class Notifier:
             from aureon.visuals import chart_renderer
 
             market_date = detection.detected_at.market_date
+            complete_days = await context.run(
+                context.market_days.complete_days,
+                detection.symbol,
+                limit=3,
+            )
+            market_dates = [
+                day.market_date
+                for day in complete_days
+                if day.market_date != market_date
+            ]
+            market_dates.append(market_date)
             bars = await context.run(
                 chart_renderer.bars_for,
                 context.market_days,
                 symbol=detection.symbol,
                 timeframe=detection.timeframe,
-                market_dates=[market_date],
+                market_dates=market_dates,
                 include_today=market_date,
             )
             spec = await context.run(context.symbols.get, detection.symbol)
@@ -533,6 +545,7 @@ class Notifier:
                 detection,
                 bars,
                 spec,
+                context.config.market_tz,
             )
         except Exception:  # noqa: BLE001 - picture failure must not suppress the alert
             log.exception("could not draw detection chart %s", detection.detection_id)
@@ -1088,8 +1101,17 @@ def _render_chart(
     )
 
 
-def _render_detection_chart(detection: Detection, bars: Any, spec: Any) -> bytes:
-    """Draw an EMA-cross chart using the existing renderer and frozen values only."""
+def _render_detection_chart(
+    detection: Detection,
+    bars: Any,
+    spec: Any,
+    market_tz: str,
+) -> bytes:
+    """Draw EMA paths, exact cross markers and session boundaries."""
+    from aureon.services.ema_chart_series import (
+        prepare_ema_chart_series,
+        session_boundaries_for_bars,
+    )
     from aureon.visuals import chart_renderer
 
     evidence = detection.evidence
