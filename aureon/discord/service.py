@@ -1018,6 +1018,64 @@ def build_notification(
     ema = detection.indicators.ema or {}
     fast, slow = ema.get("fast"), ema.get("slow")
 
+    if detection.agent_name == "ema200_pre_cross":
+        evidence = detection.evidence
+        bias = (
+            "BULLISH"
+            if detection.direction and detection.direction.value == "buy"
+            else "BEARISH"
+        )
+        trend = str(evidence.categorical.get("trend_direction", UNKNOWN))
+        pattern = str(evidence.categorical.get("pre_cross_pattern", UNKNOWN))
+        relation = str(evidence.categorical.get("ema20_50_context", UNKNOWN))
+        distance = evidence.numeric.get("distance_to_ema200")
+        distance_atr = evidence.numeric.get("distance_to_ema200_atr")
+        fast_slope = evidence.numeric.get("fast_slope", 0.0)
+        gap_change = evidence.numeric.get("ema_gap_change", 0.0)
+        rsi_change = evidence.numeric.get("rsi_change", 0.0)
+        screen.title = f"{detection.symbol} · EMA200 PRE-CROSS PRESSURE · {bias}"
+        # Early pressure is context, not a confirmed cross: never prefill Execute.
+        screen.side = None
+
+        gap_now = evidence.numeric.get("ema_gap", 0.0)
+        gap_prev = gap_now - gap_change
+        gap_state = "contracting" if abs(gap_now) < abs(gap_prev) else "expanding"
+        momentum = " · ".join(
+            (
+                f"EMA20 slope {'UP' if fast_slope > 0 else 'DOWN'}",
+                f"EMA20/50 gap {gap_state}",
+                f"RSI {'rising' if rsi_change > 0 else 'falling'}",
+            )
+        )
+        fields = [
+            ("Price", _fmt(detection.price)),
+            ("Bias", bias),
+            ("Status", "EMA200 cross NOT confirmed"),
+            ("Trend", trend),
+            ("Pattern", pattern),
+            (
+                "Distance to EMA200",
+                f"{_fmt(distance)} · {_fmt(distance_atr, digits=2)} ATR",
+            ),
+            ("EMA20 / EMA50", f"{_fmt(fast)} / {_fmt(slow)} · {relation}"),
+            ("Momentum", momentum),
+        ]
+        if consensus is not None:
+            counts = (
+                f"{consensus.meter}  {consensus.label}\n"
+                f"{consensus.supportive} supportive · "
+                f"{consensus.neutral} neutral · "
+                f"{consensus.conflicting} conflicting"
+            )
+            fields.append(("Agent consensus", counts))
+        fields.append(("Session", detection.session.session.value))
+        screen.fields = fields
+        screen.footer = (
+            f"{RESEARCH_ONLY} · early pressure ≠ confirmed cross · "
+            f"{detection.detection_id}"
+        )
+        return screen
+
     if detection.agent_name in {"ema_cross", "ema200_cross"}:
         direction_label = (
             "BULLISH" if detection.direction and detection.direction.value == "buy"

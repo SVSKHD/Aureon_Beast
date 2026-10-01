@@ -148,7 +148,7 @@ class Notifier:
         announced: list[str] = []
         for symbol in context.config.symbols:
             recent = await context.run(
-                context.detections.recent_for_symbol, symbol, since=since, limit=25
+                context.detections.recent_for_symbol, symbol, since=since, limit=100
             )
             # Oldest first, so a burst reads in the order it happened.
             for detection in sorted(recent, key=lambda d: d.detected_at.utc):
@@ -171,7 +171,7 @@ class Notifier:
         if claim is None:
             return False  # already announced, here or by a previous process
         consensus = None
-        if detection.agent_name in {"ema_cross", "ema200_cross"}:
+        if detection.agent_name in {"ema200_pre_cross", "ema_cross", "ema200_cross"}:
             since = detection.detected_at.utc - timedelta(seconds=1)
             peers = await context.run(
                 context.detections.recent_for_symbol,
@@ -270,7 +270,7 @@ class Notifier:
         """
         context = self.context
         if (
-            detection.agent_name not in {"ema_cross", "ema200_cross"}
+            detection.agent_name not in {"ema200_pre_cross", "ema_cross", "ema200_cross"}
             or context.market_days is None
             or not self.charts
         ):
@@ -875,11 +875,12 @@ def _render_detection_chart(detection: Detection, bars: Any, spec: Any) -> bytes
     if isinstance(ema200, (int, float)):
         levels.append(chart_renderer.ChartLevel(price=float(ema200), label="EMA200 now"))
 
-    label = (
-        f"EMA20/50 {detection.event_key.upper()} · {session}"
-        if detection.agent_name == "ema_cross"
-        else f"EMA200 {detection.event_key.upper()} · {session}"
-    )
+    if detection.agent_name == "ema_cross":
+        label = f"EMA20/50 {detection.event_key.upper()} · {session}"
+    elif detection.agent_name == "ema200_pre_cross":
+        label = f"PRE-CROSS {detection.event_key.upper()} · {session}"
+    else:
+        label = f"EMA200 {detection.event_key.upper()} · {session}"
     mark = chart_renderer.ChartMark(
         at=detection.candle_open_time.utc,
         price=detection.price,
@@ -888,7 +889,11 @@ def _render_detection_chart(detection: Detection, bars: Any, spec: Any) -> bytes
     )
 
     trend = str(evidence.categorical.get("trend_direction", "SIDEWAYS"))
-    quality = str(evidence.categorical.get("cross_quality", "WEAK"))
+    quality = (
+        "PRESSURE"
+        if detection.agent_name == "ema200_pre_cross"
+        else str(evidence.categorical.get("cross_quality", "WEAK"))
+    )
     pattern = str(evidence.categorical.get("pre_cross_pattern", "CHOPPY"))
     companion = (
         str(evidence.categorical.get("ema200_context", "unknown"))
@@ -906,7 +911,7 @@ def _render_detection_chart(detection: Detection, bars: Any, spec: Any) -> bytes
         detections=(mark,),
         analysis_lines=(
             f"TREND    {trend}",
-            f"QUALITY  {quality}",
+            f"STATE    {quality}",
             f"PATTERN  {pattern}",
             f"CONTEXT  {companion}",
         ),

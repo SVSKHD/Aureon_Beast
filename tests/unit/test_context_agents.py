@@ -189,8 +189,9 @@ def test_default_roster_contains_agents_9_11() -> None:
     # Agent 20 (EMA-RSI eligibility) joined the roster beside the six detectors and the
     # three context agents; the context agents still close the list.
     assert "ema_rsi_eligibility" in names
+    assert "ema200_pre_cross" in names
     assert "ema200_cross" in names
-    assert len(names) == 11
+    assert len(names) == 12
 
 
 def test_context_agents_publish_into_live_status_panel() -> None:

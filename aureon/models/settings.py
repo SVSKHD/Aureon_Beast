@@ -66,6 +66,7 @@ class ResolvedLimits(AureonModel):
 #: deliberately absent -- they are context, and an alert for every RSI reading is an alert
 #: for nothing.
 SIGNAL_FIRST_NOTIFIED_AGENTS: tuple[str, ...] = (
+    "ema200_pre_cross",
     "ema_cross",
     "ema200_cross",
     "session_trend",

@@ -205,11 +205,38 @@ def notification_embed(screen: Any) -> Any:
     """
     facts = dict(screen.fields)
     session_summary = "SESSION CLOSED" in screen.title
+    pre_cross = "PRE-CROSS PRESSURE" in screen.title
     direction = facts.get("Trend") if session_summary else screen.side
     icon, colour = _direction_style(direction)
+    if pre_cross:
+        icon, colour = "🟡", COLOUR_WARN
     embed = _embed(f"{icon} {screen.title}", colour=colour)
 
-    if "Cross" in facts:
+    if pre_cross:
+        embed.description = (
+            f"**{facts.get('Price', '—')}** · "
+            f"{_readable(facts.get('Session', '—')).title()}\n"
+            f"Bias **{facts.get('Bias', '—')}** · "
+            f"Trend **{facts.get('Trend', '—')}**\n"
+            f"**{facts.get('Status', 'EMA200 cross NOT confirmed')}**"
+        )
+        embed.add_field(
+            name="Pressure context",
+            value=(
+                f"**Pattern:** {_readable(facts.get('Pattern', '—'))}\n"
+                f"**Distance:** {facts.get('Distance to EMA200', '—')}\n"
+                f"**EMA20 / EMA50:** {_readable(facts.get('EMA20 / EMA50', '—'))}\n"
+                f"**Momentum:** {facts.get('Momentum', '—')}"
+            ),
+            inline=False,
+        )
+        if facts.get("Agent consensus"):
+            embed.add_field(
+                name="Agent agreement",
+                value=facts["Agent consensus"],
+                inline=False,
+            )
+    elif "Cross" in facts:
         embed.description = (
             f"**{facts.get('Price', '—')}** · {_readable(facts.get('Session', '—')).title()}\n"
             f"Trend **{_readable(facts.get('Trend', '—'))}** · "
@@ -257,8 +284,10 @@ def notification_embed(screen: Any) -> Any:
         )[:4096]
 
     footer = "Research only · not a recommendation · colour = direction"
-    if "Cross" in facts:
+    if "Cross" in facts or pre_cross:
         footer += " · agreement ≠ win probability"
+    if pre_cross:
+        footer += " · early pressure ≠ confirmed cross"
     if any("volume" in name.lower() for name in facts) and not session_summary:
         footer += " · MT5 tick volume, not exchange volume"
     footer += f" · ref {screen.detection_id[:12]}"
