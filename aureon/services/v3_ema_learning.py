@@ -140,7 +140,7 @@ def freeze_anchor_features(
     volatility_regime = "UNKNOWN"
     atr = None
     if detection.volatility is not None:
-        atr = getattr(detection.volatility, "atr", None)
+        atr = getattr(detection.volatility, "atr_14", None)
         volatility_regime = str(
             getattr(detection.volatility, "regime", None)
             or getattr(detection.volatility, "state", None)
