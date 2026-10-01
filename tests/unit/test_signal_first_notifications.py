@@ -110,7 +110,12 @@ def test_completed_session_card_is_compact_and_contains_ema_context() -> None:
                     "range_points": 2600.0,
                     "candle_count": 96.0,
                 },
-                categorical={"completed_session": "london", "trend": "up"},
+                categorical={
+                    "session_event": "close",
+                    "completed_session": "london",
+                    "next_session": "new_york",
+                    "trend": "up",
+                },
             ),
         }
     )
@@ -125,7 +130,81 @@ def test_completed_session_card_is_compact_and_contains_ema_context() -> None:
     fields = dict(card.fields)
 
     assert card.title == "XAUUSD · LONDON SESSION CLOSED"
-    assert fields["Trend"] == "UP"
+    assert fields["Trend / Next"] == "UP · NEW_YORK"
     assert "BULLISH" in fields["Latest EMA20 / EMA50"]
     assert "BULLISH" in fields["Latest Price / EMA200"]
     assert len(card.fields) <= 9
+
+
+def test_session_open_card_is_compact_and_contains_active_ema_context() -> None:
+    trigger = _ema_detection()
+    session_detection = trigger.model_copy(
+        update={
+            "agent_name": "session_trend",
+            "direction": None,
+            "event_key": "open|london",
+            "evidence": AgentEvidence(
+                numeric={
+                    "open": 4188.0,
+                    "previous_close": 4187.5,
+                    "previous_change": 12.0,
+                    "previous_range": 31.0,
+                },
+                categorical={
+                    "session_event": "open",
+                    "opened_session": "london",
+                    "previous_session": "asia",
+                    "previous_trend": "up",
+                },
+            ),
+        }
+    )
+
+    card = build_notification(
+        session_detection,
+        session_ema_context=(
+            "BULLISH · UP · STRONG · CONSOLIDATION · 09:55",
+            "BULLISH · UP · NORMAL · TRENDING · 09:40",
+        ),
+    )
+    fields = dict(card.fields)
+
+    assert card.title == "XAUUSD · LONDON SESSION OPENED"
+    assert fields["Open"] == "4188.00"
+    assert "ASIA · UP" in fields["Previous session"]
+    assert "BULLISH" in fields["Active EMA20 / EMA50"]
+    assert "BULLISH" in fields["Active Price / EMA200"]
+    assert len(card.fields) <= 7
+
+
+
+def test_session_cards_can_add_confidence_rows_without_redesign() -> None:
+    trigger = _ema_detection()
+    session_detection = trigger.model_copy(
+        update={
+            "agent_name": "session_trend",
+            "direction": None,
+            "event_key": "open|london",
+            "evidence": AgentEvidence(
+                numeric={"open": 4188.0, "previous_close": 4187.5},
+                categorical={
+                    "session_event": "open",
+                    "opened_session": "london",
+                    "previous_session": "asia",
+                    "previous_trend": "up",
+                },
+            ),
+        }
+    )
+
+    card = build_notification(
+        session_detection,
+        session_ema_context=("BULLISH · UP · STRONG · 09:55", "—"),
+        session_agent_confidence="HIGH · 4 supportive",
+        session_model_confidence="P(+10) 64% (n=212)",
+    )
+    fields = dict(card.fields)
+
+    assert fields["Agent confidence"] == "HIGH · 4 supportive"
+    assert fields["Model confidence"] == "P(+10) 64% (n=212)"
+

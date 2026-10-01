@@ -88,6 +88,9 @@ UP_COLOUR = "#2e7d52"
 DOWN_COLOUR = "#b23a3a"
 FAST_COLOUR = "#1f6fb2"
 SLOW_COLOUR = "#8a6d3b"
+EMA20_SIGNAL_COLOUR = "#1565C0"
+EMA50_SIGNAL_COLOUR = "#F9A825"
+EMA200_COLOUR = "#D32F2F"
 LEVEL_COLOUR = "#666666"
 #: The invalidation line. Red, like a stop, and labelled so nobody reads it as one -- it is where
 #: the structure stops being true, and nothing in this system places an order from it.
@@ -137,6 +140,14 @@ class ChartLevel:
 
 
 @dataclass(frozen=True)
+class ChartBoundary:
+    """A vertical session boundary supplied by the session/context layer."""
+
+    at: datetime
+    label: str
+
+
+@dataclass(frozen=True)
 class ChartMark:
     """Something that happened at a bar: a detection, or a setup event."""
 
@@ -163,9 +174,17 @@ class Overlays:
     subtitle: str = ""
     ema_fast: tuple[float | None, ...] = ()
     ema_slow: tuple[float | None, ...] = ()
+    ema200: tuple[float | None, ...] = ()
     ema_fast_label: str = "EMA fast"
     ema_slow_label: str = "EMA slow"
+    ema200_label: str = "EMA200"
+    ema_fast_colour: str = FAST_COLOUR
+    ema_slow_colour: str = SLOW_COLOUR
+    ema200_colour: str = EMA200_COLOUR
+    show_ema_end_labels: bool = False
+    show_structure: bool = True
     levels: tuple[ChartLevel, ...] = ()
+    session_boundaries: tuple[ChartBoundary, ...] = ()
     #: ``(low, high)`` of the value area, shaded. Not a range to trade.
     value_area: tuple[float, float] | None = None
     poc_price: float | None = None
@@ -465,7 +484,7 @@ def build(
 
     decimals = _decimals(spec, bars)
     figure = _figure()
-    right_edge = 0.70 if overlays.analysis_lines else 0.88
+    right_edge = 0.74 if overlays.analysis_lines else 0.88
     grid = figure.add_gridspec(
         PRICE_HEIGHT_RATIO + 1,
         1,
@@ -524,86 +543,143 @@ def build(
             )
         )
 
-    # ── confirmed market-structure path ───────────────────────────────────────
-    # Connect confirmed swing highs to highs and lows to lows. Keeping the two paths separate
-    # avoids drawing a fake zig-zag through alternating pivots that would imply an order of
-    # structure the detector never claimed.
-    swing_highs = [
-        (index, bar.high)
-        for index, bar in enumerate(bars)
-        if any(label in {"SH", "HH", "LH", "EH"} for label in bar.structure_labels)
-    ]
-    swing_lows = [
-        (index, bar.low)
-        for index, bar in enumerate(bars)
-        if any(label in {"SL", "HL", "LL", "EL"} for label in bar.structure_labels)
-    ]
-    if len(swing_highs) >= 2:
-        price.plot(
-            [one[0] for one in swing_highs],
-            [one[1] for one in swing_highs],
-            linestyle="--",
-            linewidth=0.9,
-            color=LEVEL_COLOUR,
-            alpha=0.65,
-            zorder=3,
-            label="swing highs",
-        )
-    if len(swing_lows) >= 2:
-        price.plot(
-            [one[0] for one in swing_lows],
-            [one[1] for one in swing_lows],
-            linestyle="--",
-            linewidth=0.9,
-            color=ANCHOR_COLOUR,
-            alpha=0.55,
-            zorder=3,
-            label="swing lows",
-        )
-
-    # ── confirmed market-structure labels ─────────────────────────────────────
-    for index, bar in enumerate(bars):
-        if not bar.structure_labels:
-            continue
-        for offset, label in enumerate(bar.structure_labels):
-            is_high = label in {"SH", "HH", "LH", "EH"}
-            y = bar.high if is_high else bar.low
-            y_offset = 10 + offset * 10 if is_high else -16 - offset * 10
-            price.annotate(
-                label,
-                xy=(index, y),
-                xytext=(0, y_offset),
-                textcoords="offset points",
-                ha="center",
-                fontsize=7,
-                fontweight="bold",
-                color="#222222",
-                zorder=7,
-                bbox=dict(
-                    boxstyle="round,pad=0.12",
-                    fc="white",
-                    ec="#555555",
-                    alpha=0.78,
-                ),
+    if overlays.show_structure:
+        # ── confirmed market-structure path ───────────────────────────────────────
+        # Connect confirmed swing highs to highs and lows to lows. Keeping the two paths separate
+        # avoids drawing a fake zig-zag through alternating pivots that would imply an order of
+        # structure the detector never claimed.
+        swing_highs = [
+            (index, bar.high)
+            for index, bar in enumerate(bars)
+            if any(label in {"SH", "HH", "LH", "EH"} for label in bar.structure_labels)
+        ]
+        swing_lows = [
+            (index, bar.low)
+            for index, bar in enumerate(bars)
+            if any(label in {"SL", "HL", "LL", "EL"} for label in bar.structure_labels)
+        ]
+        if len(swing_highs) >= 2:
+            price.plot(
+                [one[0] for one in swing_highs],
+                [one[1] for one in swing_highs],
+                linestyle="--",
+                linewidth=0.9,
+                color=LEVEL_COLOUR,
+                alpha=0.65,
+                zorder=3,
+                label="swing highs",
             )
+        if len(swing_lows) >= 2:
+            price.plot(
+                [one[0] for one in swing_lows],
+                [one[1] for one in swing_lows],
+                linestyle="--",
+                linewidth=0.9,
+                color=ANCHOR_COLOUR,
+                alpha=0.55,
+                zorder=3,
+                label="swing lows",
+            )
+
+        # ── confirmed market-structure labels ─────────────────────────────────────
+        for index, bar in enumerate(bars):
+            if not bar.structure_labels:
+                continue
+            for offset, label in enumerate(bar.structure_labels):
+                is_high = label in {"SH", "HH", "LH", "EH"}
+                y = bar.high if is_high else bar.low
+                y_offset = 10 + offset * 10 if is_high else -16 - offset * 10
+                price.annotate(
+                    label,
+                    xy=(index, y),
+                    xytext=(0, y_offset),
+                    textcoords="offset points",
+                    ha="center",
+                    fontsize=7,
+                    fontweight="bold",
+                    color="#222222",
+                    zorder=7,
+                    bbox=dict(
+                        boxstyle="round,pad=0.12",
+                        fc="white",
+                        ec="#555555",
+                        alpha=0.78,
+                    ),
+                )
 
     # ── the indicator lines, as they were computed elsewhere ──────────────────
     for series, colour, name in (
-        (overlays.ema_fast, FAST_COLOUR, overlays.ema_fast_label),
-        (overlays.ema_slow, SLOW_COLOUR, overlays.ema_slow_label),
+        (overlays.ema_fast, overlays.ema_fast_colour, overlays.ema_fast_label),
+        (overlays.ema_slow, overlays.ema_slow_colour, overlays.ema_slow_label),
+        (overlays.ema200, overlays.ema200_colour, overlays.ema200_label),
     ):
         if not series:
             continue
         aligned = _pad(series, len(bars))
         if not _finite(aligned):
             continue
+        plotted = [
+            v if v is not None and math.isfinite(v) else float("nan")
+            for v in aligned
+        ]
         price.plot(
             xs,
-            [v if v is not None and math.isfinite(v) else float("nan") for v in aligned],
+            plotted,
             color=colour,
-            linewidth=1.3,
+            linewidth=1.8 if name == overlays.ema200_label else 1.45,
             label=name,
             zorder=4,
+        )
+        finite_pairs = [
+            (index, value)
+            for index, value in enumerate(aligned)
+            if value is not None and math.isfinite(value)
+        ]
+        if finite_pairs and overlays.show_ema_end_labels:
+            last_index, last_value = finite_pairs[-1]
+            price.annotate(
+                name,
+                xy=(last_index, last_value),
+                xytext=(6, 0),
+                textcoords="offset points",
+                fontsize=7.2,
+                fontweight="bold",
+                color=colour,
+                va="center",
+                bbox=dict(
+                    boxstyle="round,pad=0.12",
+                    fc="white",
+                    ec=colour,
+                    alpha=0.88,
+                ),
+                zorder=8,
+            )
+
+
+    # ── session open/close boundaries ──────────────────────────────────────────
+    times = [bar.at for bar in bars]
+    for boundary in overlays.session_boundaries:
+        index = _nearest(times, boundary.at)
+        if index is None:
+            continue
+        price.axvline(
+            index,
+            color="#777777",
+            linestyle=":",
+            linewidth=0.9,
+            alpha=0.75,
+            zorder=1,
+        )
+        price.annotate(
+            boundary.label,
+            xy=(index, 1.0),
+            xycoords=("data", "axes fraction"),
+            xytext=(3, -4),
+            textcoords="offset points",
+            fontsize=6.5,
+            color="#555555",
+            va="top",
+            rotation=90,
         )
 
     # ── the named levels, labelled in the right margin ────────────────────────
@@ -655,14 +731,21 @@ def build(
     # All stored detections remain visible as small markers, but only the highest-value
     # annotations get text. Labelling every wick/liquidity/breakout event made active-session
     # charts unreadable and hid the candles the marks were meant to explain.
-    times = [bar.at for bar in bars]
     visible_detections = [
         mark for mark in overlays.detections if _nearest(times, mark.at) is not None
     ]
     priority = [
         mark
         for mark in visible_detections
-        if mark.label.upper().startswith(("BULL CROSS", "BEAR CROSS", "EMA CROSS"))
+        if mark.label.upper().startswith(
+            (
+                "BULL CROSS",
+                "BEAR CROSS",
+                "EMA CROSS",
+                "EMA20",
+                "PRICE",
+            )
+        )
     ]
     recent_other = [
         mark for mark in visible_detections
@@ -733,7 +816,7 @@ def build(
     # ── the right-side analysis panel ──────────────────────────────────────────
     if overlays.analysis_lines:
         figure.text(
-            0.735,
+            0.765,
             0.885,
             "MARKET CONTEXT",
             fontsize=11,
@@ -741,14 +824,14 @@ def build(
             color="#222222",
             va="top",
         )
-        panel_lines = overlays.analysis_lines[:18]
+        panel_lines = overlays.analysis_lines[:10]
         truncated = len(overlays.analysis_lines) > len(panel_lines)
         if truncated:
             panel_lines = panel_lines[:-1]
         panel_font = 7.8
         panel_spacing = 1.30
         figure.text(
-            0.735,
+            0.765,
             0.845,
             "\n".join(panel_lines),
             fontsize=panel_font,
@@ -762,7 +845,7 @@ def build(
             # and a reader (or a test) should find it as a distinct string.
             line_height = panel_font * panel_spacing / 72.0 / figure.get_figheight()
             figure.text(
-                0.735,
+                0.765,
                 0.845 - line_height * (len(panel_lines) + 0.4),
                 "… more context on Discord card",
                 fontsize=panel_font,
@@ -853,11 +936,15 @@ __all__ = [
     "CHART_BUDGET_SECONDS",
     "DEFAULT_WINDOW",
     "FOOTER_NOTE",
+    "EMA20_SIGNAL_COLOUR",
+    "EMA50_SIGNAL_COLOUR",
+    "EMA200_COLOUR",
     "MAX_DECIMALS",
     "MAX_WINDOW",
     "MIN_BARS",
     "VOLUME_LABEL",
     "ChartBar",
+    "ChartBoundary",
     "ChartLevel",
     "ChartMark",
     "Overlays",

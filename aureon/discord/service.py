@@ -1116,6 +1116,8 @@ def build_notification(
     model_confidence: dict | None = None,
     movement_since_pre_cross: float | None = None,
     model_confidence_visible: bool = True,
+    session_agent_confidence: str | None = None,
+    session_model_confidence: str | None = None,
 ) -> NotificationScreen:
     """The §59 detection embed: what the machine saw, and nothing it did not (9C).
 
@@ -1291,14 +1293,66 @@ def build_notification(
         return screen
     if detection.agent_name == "session_trend":
         evidence = detection.evidence
-        completed = str(evidence.categorical.get("completed_session", UNKNOWN)).upper()
-        trend = str(evidence.categorical.get("trend", UNKNOWN)).upper()
+        event = str(evidence.categorical.get("session_event", "close"))
         numbers = evidence.numeric
         ema20_50, ema200 = session_ema_context or (UNKNOWN, UNKNOWN)
-        screen.title = f"{detection.symbol} · {completed} SESSION CLOSED"
         screen.side = None
+
+        if event == "open":
+            opened = str(
+                evidence.categorical.get(
+                    "opened_session",
+                    detection.session.session.value,
+                )
+            ).upper()
+            previous = str(
+                evidence.categorical.get("previous_session", UNKNOWN)
+            ).upper()
+            previous_trend = str(
+                evidence.categorical.get("previous_trend", UNKNOWN)
+            ).upper()
+            screen.title = f"{detection.symbol} · {opened} SESSION OPENED"
+            screen.fields = [
+                ("Open", _fmt(numbers.get("open"))),
+                (
+                    "Previous session",
+                    f"{previous} · {previous_trend} · close "
+                    f"{_fmt(numbers.get('previous_close'))}",
+                ),
+                ("Active EMA20 / EMA50", ema20_50),
+                ("Active Price / EMA200", ema200),
+                ("Volatility", _volatility_line(detection)),
+                ("Tick-volume profile", _volume_line(detection)),
+                *(
+                    [("Agent confidence", session_agent_confidence)]
+                    if session_agent_confidence
+                    else []
+                ),
+                *(
+                    [("Model confidence", session_model_confidence)]
+                    if session_model_confidence
+                    else []
+                ),
+            ]
+            screen.footer = (
+                f"{RESEARCH_ONLY} · session-open context · "
+                f"{detection.detection_id}"
+            )
+            return screen
+
+        completed = str(
+            evidence.categorical.get("completed_session", UNKNOWN)
+        ).upper()
+        next_session = str(
+            evidence.categorical.get(
+                "next_session",
+                detection.session.session.value,
+            )
+        ).upper()
+        trend = str(evidence.categorical.get("trend", UNKNOWN)).upper()
+        screen.title = f"{detection.symbol} · {completed} SESSION CLOSED"
         screen.fields = [
-            ("Trend", trend),
+            ("Trend / Next", f"{trend} · {next_session}"),
             (
                 "Change / Range",
                 f"{_fmt(numbers.get('change'))} / {_fmt(numbers.get('range'))}",
@@ -1314,10 +1368,19 @@ def build_notification(
             ("Latest Price / EMA200", ema200),
             ("Volatility", _volatility_line(detection)),
             ("Tick-volume profile", _volume_line(detection)),
-            ("Now entering", detection.session.session.value.upper()),
+            *(
+                [("Agent confidence", session_agent_confidence)]
+                if session_agent_confidence
+                else []
+            ),
+            *(
+                [("Model confidence", session_model_confidence)]
+                if session_model_confidence
+                else []
+            ),
         ]
         screen.footer = (
-            f"{RESEARCH_ONLY} · one summary per completed session · "
+            f"{RESEARCH_ONLY} · completed-session summary · "
             f"{detection.detection_id}"
         )
         return screen

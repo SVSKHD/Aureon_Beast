@@ -503,10 +503,11 @@ class Notifier:
         self,
         detection: Detection,
     ) -> tuple[bytes | None, str | None]:
-        """Reuse the existing Aureon chart renderer for EMA cross cards.
+        """Render the clean EMA20/50/200 chart from stored closed bars.
 
-        The chart renderer computes no indicators. EMA lines and labels come from the
-        frozen detection, while candle bars come from the market-day frame cache.
+        The renderer computes no indicators. A shared visualization-preparation service
+        uses Aureon's canonical EMA implementation so the picture shows the actual EMA
+        paths and cross locations rather than only horizontal current-value lines.
         """
         context = self.context
         if (
@@ -519,12 +520,23 @@ class Notifier:
             from aureon.visuals import chart_renderer
 
             market_date = detection.detected_at.market_date
+            complete_days = await context.run(
+                context.market_days.complete_days,
+                detection.symbol,
+                limit=3,
+            )
+            market_dates = [
+                day.market_date
+                for day in complete_days
+                if day.market_date != market_date
+            ]
+            market_dates.append(market_date)
             bars = await context.run(
                 chart_renderer.bars_for,
                 context.market_days,
                 symbol=detection.symbol,
                 timeframe=detection.timeframe,
-                market_dates=[market_date],
+                market_dates=market_dates,
                 include_today=market_date,
             )
             spec = await context.run(context.symbols.get, detection.symbol)
@@ -533,6 +545,7 @@ class Notifier:
                 detection,
                 bars,
                 spec,
+                context.config.market_tz,
             )
         except Exception:  # noqa: BLE001 - picture failure must not suppress the alert
             log.exception("could not draw detection chart %s", detection.detection_id)
@@ -1088,8 +1101,17 @@ def _render_chart(
     )
 
 
-def _render_detection_chart(detection: Detection, bars: Any, spec: Any) -> bytes:
-    """Draw an EMA-cross chart using the existing renderer and frozen values only."""
+def _render_detection_chart(
+    detection: Detection,
+    bars: Any,
+    spec: Any,
+    market_tz: str,
+) -> bytes:
+    """Draw EMA paths, exact cross markers and session boundaries."""
+    from aureon.services.ema_chart_series import (
+        prepare_ema_chart_series,
+        session_boundaries_for_bars,
+    )
     from aureon.visuals import chart_renderer
 
     evidence = detection.evidence
@@ -1101,31 +1123,54 @@ def _render_detection_chart(detection: Detection, bars: Any, spec: Any) -> bytes
         else None
     )
     session = detection.session.session.value
-    levels: list[Any] = []
-    ema_values = detection.indicators.ema or {}
-
-    fast = ema_values.get("fast")
-    slow = ema_values.get("slow")
-    ema200 = ema_values.get("ema200") or detection.indicators.extras.get("ema200")
-
-    if isinstance(fast, (int, float)):
-        levels.append(chart_renderer.ChartLevel(price=float(fast), label="EMA20 now"))
-    if isinstance(slow, (int, float)):
-        levels.append(chart_renderer.ChartLevel(price=float(slow), label="EMA50 now"))
-    if isinstance(ema200, (int, float)):
-        levels.append(chart_renderer.ChartLevel(price=float(ema200), label="EMA200 now"))
+    series = prepare_ema_chart_series(tuple(bars))
+    boundaries = session_boundaries_for_bars(
+        tuple(bars),
+        market_tz=market_tz,
+    )
 
     if detection.agent_name == "ema_cross":
-        label = f"EMA20/50 {detection.event_key.upper()} · {session}"
+        label = (
+            "EMA20↑EMA50"
+            if direction == "bullish"
+            else "EMA20↓EMA50"
+            if direction == "bearish"
+            else "EMA20/EMA50 CROSS"
+        )
+        cross_kind = "ema20_50"
     elif detection.agent_name == "ema200_pre_cross":
-        label = f"PRE-CROSS {detection.event_key.upper()} · {session}"
+        label = f"PRE-CROSS {detection.event_key.upper()}"
+        cross_kind = None
     else:
-        label = f"EMA200 {detection.event_key.upper()} · {session}"
-    mark = chart_renderer.ChartMark(
-        at=detection.candle_open_time.utc,
-        price=detection.price,
-        label=label,
-        direction_context=direction,
+        label = (
+            "Price↑EMA200"
+            if direction == "bullish"
+            else "Price↓EMA200"
+            if direction == "bearish"
+            else "PRICE/EMA200 CROSS"
+        )
+        cross_kind = "price_ema200"
+
+    marks = [
+        chart_renderer.ChartMark(
+            at=point.at,
+            price=point.price,
+            label=point.label,
+            direction_context="bullish" if point.bullish else "bearish",
+        )
+        for point in series.crosses[-10:]
+        if not (
+            cross_kind == point.kind
+            and point.at == detection.candle_open_time.utc
+        )
+    ]
+    marks.append(
+        chart_renderer.ChartMark(
+            at=detection.candle_open_time.utc,
+            price=detection.price,
+            label=label,
+            direction_context=direction,
+        )
     )
 
     trend = str(evidence.categorical.get("trend_direction", "SIDEWAYS"))
@@ -1147,12 +1192,27 @@ def _render_detection_chart(detection: Detection, bars: Any, spec: Any) -> bytes
             f"{detection.agent_name.replace('_', ' ').upper()}"
         ),
         subtitle=f"{detection.event_key.upper()} · {quality} · {pattern}",
-        levels=tuple(levels),
-        detections=(mark,),
+        ema_fast=series.ema20,
+        ema_slow=series.ema50,
+        ema200=series.ema200,
+        ema_fast_label="EMA20",
+        ema_slow_label="EMA50",
+        ema200_label="EMA200",
+        ema_fast_colour=chart_renderer.EMA20_SIGNAL_COLOUR,
+        ema_slow_colour=chart_renderer.EMA50_SIGNAL_COLOUR,
+        ema200_colour=chart_renderer.EMA200_COLOUR,
+        show_ema_end_labels=True,
+        show_structure=False,
+        session_boundaries=tuple(
+            chart_renderer.ChartBoundary(at=item.at, label=item.label)
+            for item in boundaries
+        ),
+        detections=tuple(marks),
         analysis_lines=(
             f"TREND    {trend}",
             f"STATE    {quality}",
             f"PATTERN  {pattern}",
+            f"SESSION  {session.upper()}",
             f"CONTEXT  {companion}",
         ),
     )

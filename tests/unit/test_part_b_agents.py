@@ -205,13 +205,19 @@ def test_session_summaries_are_context_only(candles: list[Candle]) -> None:
 
 
 def test_a_session_is_summarised_once_at_its_close(candles: list[Candle]) -> None:
-    detections = run(SessionTrendAgent(), candles)
+    detections = [
+        d
+        for d in run(SessionTrendAgent(), candles)
+        if d.evidence.categorical.get("session_event") == "close"
+    ]
     keys = [(d.detected_at.market_date, d.event_key.split("|")[0]) for d in detections]
     assert len(keys) == len(set(keys)), "a session was summarised more than once"
 
 
 def test_session_ohlc_is_internally_coherent(candles: list[Candle]) -> None:
     for detection in run(SessionTrendAgent(), candles):
+        if detection.evidence.categorical.get("session_event") != "close":
+            continue
         extras = detection.indicators.extras
         assert extras["low"] <= extras["open"] <= extras["high"]
         assert extras["low"] <= extras["close"] <= extras["high"]
@@ -222,6 +228,8 @@ def test_session_ohlc_is_internally_coherent(candles: list[Candle]) -> None:
 def test_session_trend_label_matches_its_numbers(candles: list[Candle]) -> None:
     agent = SessionTrendAgent()
     for detection in run(agent, candles):
+        if detection.evidence.categorical.get("session_event") != "close":
+            continue
         trend = detection.event_key.split("|")[1]
         change = detection.indicators.extras["change_points"]
         if trend == "flat":
@@ -234,11 +242,47 @@ def test_session_trend_label_matches_its_numbers(candles: list[Candle]) -> None:
 
 def test_a_session_summary_document_can_be_built(candles: list[Candle]) -> None:
     """The observer writes sessions/; the agent stays pure and only supplies numbers."""
-    detections = run(SessionTrendAgent(), candles)
+    detections = [
+        d
+        for d in run(SessionTrendAgent(), candles)
+        if d.evidence.categorical.get("session_event") == "close"
+    ]
     summary = summary_from_detection(detections[0])
     assert summary.session_id == f"{summary.market_date}__{summary.session.value}"
     assert summary.candle_count >= 1
     assert summary.ended_at.utc > summary.started_at.utc
+
+
+
+def test_session_boundary_emits_close_and_open_context(candles: list[Candle]) -> None:
+    detections = run(SessionTrendAgent(), candles)
+    close_events = [
+        d for d in detections
+        if d.evidence.categorical.get("session_event") == "close"
+    ]
+    open_events = [
+        d for d in detections
+        if d.evidence.categorical.get("session_event") == "open"
+    ]
+
+    assert close_events
+    assert open_events
+    assert all(d.event_key.startswith("open|") for d in open_events)
+    assert all("opened_session" in d.evidence.categorical for d in open_events)
+    assert all("previous_session" in d.evidence.categorical for d in open_events)
+    assert all("open" in d.evidence.numeric for d in open_events)
+
+
+def test_session_open_detection_does_not_build_completed_summary(
+    candles: list[Candle],
+) -> None:
+    opened = next(
+        d
+        for d in run(SessionTrendAgent(), candles)
+        if d.evidence.categorical.get("session_event") == "open"
+    )
+    with pytest.raises(ValueError, match="session-open"):
+        summary_from_detection(opened)
 
 
 def test_summary_rejects_a_foreign_detection(candles: list[Candle]) -> None:

@@ -123,7 +123,9 @@ class SessionTrendAgent(BaseAgent):
         evidence = AgentEvidence(
             numeric=dict(summary_values),
             categorical={
+                "session_event": "close",
                 "completed_session": previous.value,
+                "next_session": current.value,
                 "trend": trend,
             },
             flags={
@@ -132,23 +134,61 @@ class SessionTrendAgent(BaseAgent):
                 "trend_flat": trend == TREND_FLAT,
             },
         )
-        return [
-            self.build_detection(
-                ctx=ctx,
-                event_key=f"{previous.value}|{trend}",
-                price=summary_values["close"],
-                # Context only -- see the module docstring.
-                direction=None,
-                indicators=IndicatorSnapshot(extras=summary_values),
-                levels={
-                    "session_open": summary_values["open"],
-                    "session_high": summary_values["high"],
-                    "session_low": summary_values["low"],
-                    "session_close": summary_values["close"],
+        closed = self.build_detection(
+            ctx=ctx,
+            event_key=f"{previous.value}|{trend}",
+            price=summary_values["close"],
+            # Context only -- see the module docstring.
+            direction=None,
+            indicators=IndicatorSnapshot(extras=summary_values),
+            levels={
+                "session_open": summary_values["open"],
+                "session_high": summary_values["high"],
+                "session_low": summary_values["low"],
+                "session_close": summary_values["close"],
+            },
+            evidence=evidence,
+        )
+
+        detections = [closed]
+        if current is not SessionName.OFF or self.include_off_session:
+            current_open = float(window["open"].iloc[-1])
+            open_evidence = AgentEvidence(
+                numeric={
+                    "open": current_open,
+                    "previous_close": summary_values["close"],
+                    "previous_change": summary_values["change"],
+                    "previous_range": summary_values["range"],
                 },
-                evidence=evidence,
+                categorical={
+                    "session_event": "open",
+                    "opened_session": current.value,
+                    "previous_session": previous.value,
+                    "previous_trend": trend,
+                },
+                flags={
+                    "previous_trend_up": trend == TREND_UP,
+                    "previous_trend_down": trend == TREND_DOWN,
+                    "previous_trend_flat": trend == TREND_FLAT,
+                },
             )
-        ]
+            detections.append(
+                self.build_detection(
+                    ctx=ctx,
+                    event_key=f"open|{current.value}",
+                    price=current_open,
+                    direction=None,
+                    indicators=IndicatorSnapshot(
+                        extras={
+                            "open": current_open,
+                            "previous_close": summary_values["close"],
+                        }
+                    ),
+                    levels={"session_open": current_open},
+                    evidence=open_evidence,
+                )
+            )
+        return detections
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -214,6 +254,8 @@ def summary_from_detection(detection: Detection) -> SessionSummary:
         raise ValueError(
             f"expected a {SessionTrendAgent.agent_name} detection, got {detection.agent_name}"
         )
+    if detection.evidence.categorical.get("session_event", "close") != "close":
+        raise ValueError("session-open detections do not produce completed SessionSummary rows")
     session_label, trend = detection.event_key.split("|", 1)
     extras = detection.indicators.extras
     # The session ran from its first candle's open to this boundary candle's open,
