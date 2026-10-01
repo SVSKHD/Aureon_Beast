@@ -17,6 +17,7 @@ from aureon.services.v3_ema_learning import (
     EMAHoldoutDayV3,
     calibration_buckets,
 )
+from aureon.services.v3_ema_ops import rolling_unseen_summary
 
 TARGETS = (
     ("3", "probability_reach_3", "reached_3"),
@@ -121,6 +122,20 @@ class V3EMAValidationService:
             }
         )
         return self.learning.update_holdout(scored)
+
+    def rolling_unseen(
+        self,
+        symbol: str,
+        *,
+        window_days: int = 15,
+    ) -> dict[str, Any]:
+        """Aggregate scored/released unseen days over a 10-20 day window."""
+        return rolling_unseen_summary(
+            self.learning.holdouts_for(symbol),
+            window_days=window_days,
+            min_days=10,
+            max_days=20,
+        )
 
     def release_holdout(self, symbol: str, market_date: str) -> EMAHoldoutDayV3:
         holdout = self.learning.holdout_for(symbol, market_date)
