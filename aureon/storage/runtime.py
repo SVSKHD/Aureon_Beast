@@ -147,6 +147,23 @@ class ModelReadAdapter:
         return self._repo.latest_prediction(symbol, model_id=champion.model_id)
 
 
+
+
+
+class V3EMAReadAdapter:
+    """Read-only V3 EMA learning surface exposed to Discord."""
+
+    def __init__(self, learning: V3EMALearningRepository, journeys: EMAMovementJourneyRepository) -> None:
+        self._learning = learning
+        self._journeys = journeys
+
+    def prediction_for_detection(self, detection_id: str) -> Any:
+        return self._learning.prediction_for_detection(detection_id)
+
+    def latest_journey(self, symbol: str) -> Any:
+        return self._journeys.latest_for_symbol(symbol)
+
+
 class SessionReadAdapter:
     """Read-only session shape exposed to Discord."""
 
@@ -234,6 +251,10 @@ class StorageRuntime:
         return ModelReadAdapter(self.models)
 
     @property
+    def v3_ema_reader(self) -> V3EMAReadAdapter:
+        return V3EMAReadAdapter(self.v3_ema_learning, self.ema_journeys)
+
+    @property
     def period_reader(self) -> PeriodReadAdapter:
         return PeriodReadAdapter(self)
 
@@ -284,6 +305,7 @@ __all__ = [
     "PeriodReadAdapter",
     "SessionReadAdapter",
     "TrainingMemoryReadAdapter",
+    "V3EMAReadAdapter",
     "ModelReadAdapter",
     "SetupReadAdapter",
     "StorageRuntime",
