@@ -167,6 +167,23 @@ class V3EMAReadAdapter:
     def latest_journey(self, symbol: str) -> Any:
         return self._journeys.latest_for_symbol(symbol)
 
+    def journey_for_detection(self, detection_id: str) -> Any:
+        return self._journeys.for_detection(detection_id)
+
+    def closed_journeys_since(self, since: datetime) -> list[Any]:
+        return self._journeys.closed_since(since)
+
+    def predictions_for_journey(self, journey_id: str) -> list[dict[str, Any]]:
+        journey = self._journeys.get(journey_id)
+        if journey is None:
+            return []
+        rows = []
+        for anchor in journey.anchors:
+            prediction = self._learning.prediction_for_detection(anchor.detection_id)
+            if prediction is not None:
+                rows.append(prediction)
+        return rows
+
 
 class SessionReadAdapter:
     """Read-only session shape exposed to Discord."""

@@ -2,7 +2,7 @@
 """Fast multi-month causal EMA directional research from raw XAUUSD M5."""
 from __future__ import annotations
 import argparse,json,sys
-from datetime import datetime,timedelta,timezone
+from datetime import UTC,datetime,timedelta
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
@@ -14,7 +14,7 @@ from aureon.services.monthly_move_economics import monthly_report
 from main_backtest import _fetch_mt5_chunked
 
 def stamp(v):
- if isinstance(v,datetime): return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+ if isinstance(v,datetime): return v if v.tzinfo else v.replace(tzinfo=UTC)
  return datetime.fromisoformat(str(v).replace("Z","+00:00"))
 
 def trace_all(signals,candles,hold):

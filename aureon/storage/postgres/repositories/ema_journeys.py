@@ -1,6 +1,8 @@
 """Persistence for V3 EMA movement journeys."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import select
 
 from aureon.models.ema_journey_v3 import EMAMovementJourney
@@ -43,6 +45,28 @@ class EMAMovementJourneyRepository(PostgresRepository):
             .where(self.table.c.symbol == symbol)
             .where(self.table.c.status == "open")
             .order_by(self.table.c.started_at)
+        )
+        return [
+            EMAMovementJourney.model_validate(dict(row)["payload"])
+            for row in self._rows(statement)
+        ]
+
+    def for_detection(self, detection_id: str) -> EMAMovementJourney | None:
+        """Find the journey containing one EMA anchor detection."""
+        statement = select(self.table).order_by(self.table.c.started_at.desc())
+        for row in self._rows(statement):
+            journey = EMAMovementJourney.model_validate(dict(row)["payload"])
+            if any(anchor.detection_id == detection_id for anchor in journey.anchors):
+                return journey
+        return None
+
+    def closed_since(self, since: datetime) -> list[EMAMovementJourney]:
+        statement = (
+            select(self.table)
+            .where(self.table.c.status.in_(("closed", "invalid")))
+            .where(self.table.c.ended_at.is_not(None))
+            .where(self.table.c.ended_at >= since)
+            .order_by(self.table.c.ended_at)
         )
         return [
             EMAMovementJourney.model_validate(dict(row)["payload"])

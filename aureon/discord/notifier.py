@@ -37,13 +37,19 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from aureon.discord.context import BotContext
-from aureon.discord.embeds import notification_embed, reminder_embed, setup_embed
+from aureon.discord.embeds import (
+    notice_embed,
+    notification_embed,
+    reminder_embed,
+    setup_embed,
+)
 from aureon.discord.service import (
     build_notification,
     build_reminder,
     build_setup_card,
     build_setup_confirmation,
     build_setup_trend_context,
+    build_v3_journey_outcome_summary,
     should_notify,
     symbol_state_of,
 )
@@ -70,10 +76,16 @@ class Posted:
     #: card is one message for the life of the setup and "we said something about this setup"
     #: is the fact worth counting; whether it was the first thing said is in the log.
     setups: list[str] = field(default_factory=list)
+    journeys: list[str] = field(default_factory=list)
 
     @property
     def total(self) -> int:
-        return len(self.detections) + len(self.reminders) + len(self.setups)
+        return (
+            len(self.detections)
+            + len(self.reminders)
+            + len(self.setups)
+            + len(self.journeys)
+        )
 
 
 class Notifier:
@@ -88,6 +100,7 @@ class Notifier:
         window_seconds: float | None = None,
         poll_seconds: float = DEFAULT_POLL_SECONDS,
         edit: Any = None,
+        create_thread: Any = None,
         charts: bool = True,
     ) -> None:
         self.context = context
@@ -108,6 +121,9 @@ class Notifier:
         #: default is not silently a no-op: ``_post_setup`` treats a missing ``edit`` as a
         #: configuration error and says so once.
         self.edit = edit
+        #: V3 journey threads are transport-only. Injected so notifier tests do not
+        #: require a Discord gateway; when absent, alerts safely fall back to the parent.
+        self.create_thread = create_thread
         #: 12 T-10/T-11. False renders no chart at all -- for a deployment without the ``charts``
         #: extra, and for the tests, which assert the card's words rather than its picture.
         self.charts = charts
@@ -129,12 +145,15 @@ class Notifier:
         posted.detections = await self._sweep_detections(moment)
         posted.reminders = await self._sweep_reminders(moment)
         posted.setups = await self._sweep_setups(moment)
+        posted.journeys = await self._sweep_journey_outcomes(moment)
         if posted.total:
             log.info(
-                "announced %d detection(s), %d reminder(s) and %d setup card(s)",
+                "announced %d detection(s), %d reminder(s), %d setup card(s) "
+                "and %d journey closeout(s)",
                 len(posted.detections),
                 len(posted.reminders),
                 len(posted.setups),
+                len(posted.journeys),
             )
         return posted
 
@@ -154,18 +173,43 @@ class Notifier:
             for detection in sorted(recent, key=lambda d: d.detected_at.utc):
                 if not should_notify(detection, settings):
                     continue
-                if await self._post_detection(detection, now=now):
+                if await self._post_detection(
+                    detection,
+                    now=now,
+                    settings=settings,
+                ):
                     announced.append(detection.detection_id)
         return announced
 
-    async def _post_detection(self, detection: Detection, *, now: datetime) -> bool:
+    async def _post_detection(
+        self,
+        detection: Detection,
+        *,
+        now: datetime,
+        settings: Any,
+    ) -> bool:
         context = self.context
+        journey = None
+        target = self.channel_id
+        if (
+            detection.agent_name in {"ema200_pre_cross", "ema_cross", "ema200_cross"}
+            and context.v3_ema is not None
+        ):
+            journey = await context.run(
+                context.v3_ema.journey_for_detection,
+                detection.detection_id,
+            )
+            if journey is not None:
+                thread_id = await self._ensure_journey_thread(journey, now=now)
+                if thread_id is not None:
+                    target = thread_id
+
         claim = await context.run(
             context.notifications.claim,
             NotificationKind.DETECTION,
             detection.detection_id,
             symbol=detection.symbol,
-            channel_id=str(self.channel_id),
+            channel_id=str(target),
             now=now,
         )
         if claim is None:
@@ -190,16 +234,13 @@ class Notifier:
             detection.agent_name in {"ema200_pre_cross", "ema_cross", "ema200_cross"}
             and context.v3_ema is not None
         ):
-            prediction = await context.run(
-                context.v3_ema.prediction_for_detection,
-                detection.detection_id,
-            )
-            if prediction is not None:
-                model_confidence = prediction.get("payload") or {}
-            journey = await context.run(
-                context.v3_ema.latest_journey,
-                detection.symbol,
-            )
+            if getattr(settings, "model_confidence_enabled", True):
+                prediction = await context.run(
+                    context.v3_ema.prediction_for_detection,
+                    detection.detection_id,
+                )
+                if prediction is not None:
+                    model_confidence = prediction.get("payload") or {}
             if journey is not None:
                 current = next(
                     (
@@ -223,11 +264,16 @@ class Notifier:
             session_ema_context=session_ema_context,
             model_confidence=model_confidence,
             movement_since_pre_cross=movement_since_pre_cross,
+            model_confidence_visible=getattr(
+                settings,
+                "model_confidence_enabled",
+                True,
+            ),
         )
         chart, filename = await self._detection_chart(detection)
         try:
             await self.send(
-                self.channel_id,
+                target,
                 embed=notification_embed(screen),
                 view=NotificationView(
                     context,
@@ -244,6 +290,164 @@ class Notifier:
                 context.notifications.mark_failed,
                 NotificationKind.DETECTION,
                 detection.detection_id,
+                message=str(exc),
+            )
+            return False
+        return True
+
+
+    async def _ensure_journey_thread(
+        self,
+        journey: Any,
+        *,
+        now: datetime,
+    ) -> str | None:
+        """Create one Discord thread per EMA movement journey and reuse it after restart."""
+        context = self.context
+        if context.notifications is None or self.create_thread is None:
+            return None
+
+        existing = await context.run(
+            context.notifications.get,
+            NotificationKind.JOURNEY,
+            journey.journey_id,
+        )
+        if existing is not None:
+            return existing.message_id
+
+        claim = await context.run(
+            context.notifications.claim,
+            NotificationKind.JOURNEY,
+            journey.journey_id,
+            symbol=journey.symbol,
+            channel_id=str(self.channel_id),
+            now=now,
+        )
+        if claim is None:
+            existing = await context.run(
+                context.notifications.get,
+                NotificationKind.JOURNEY,
+                journey.journey_id,
+            )
+            return None if existing is None else existing.message_id
+
+        direction = journey.direction.value.upper()
+        root = notice_embed(
+            f"{journey.symbol} · {direction} EMA JOURNEY",
+            (
+                f"Journey `{journey.journey_id[:12]}`\n"
+                "Pre-cross, EMA20/50 and EMA200 updates for this movement "
+                "continue in one thread."
+            ),
+        )
+        try:
+            root_message_id = await self.send(self.channel_id, embed=root)
+            if root_message_id is None:
+                raise RuntimeError("Discord did not return a journey root message id")
+            thread_id = await self.create_thread(
+                self.channel_id,
+                root_message_id,
+                name=(
+                    f"{journey.symbol} {direction} EMA "
+                    f"{journey.journey_id[:8]}"
+                )[:100],
+            )
+            if thread_id is None:
+                raise RuntimeError("Discord did not return a journey thread id")
+            await context.run(
+                context.notifications.record_message,
+                NotificationKind.JOURNEY,
+                journey.journey_id,
+                str(thread_id),
+            )
+            return str(thread_id)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("could not create journey thread %s", journey.journey_id)
+            await context.run(
+                context.notifications.mark_failed,
+                NotificationKind.JOURNEY,
+                journey.journey_id,
+                message=str(exc),
+            )
+            return None
+
+    async def _sweep_journey_outcomes(self, now: datetime) -> list[str]:
+        context = self.context
+        if (
+            context.v3_ema is None
+            or context.notifications is None
+            or context.notification_settings is None
+        ):
+            return []
+        settings = await context.run(context.notification_settings.read_or_default)
+        since = now - timedelta(seconds=self.window_seconds)
+        journeys = await context.run(context.v3_ema.closed_journeys_since, since)
+        announced: list[str] = []
+        for journey in journeys:
+            if await self._post_journey_outcome(
+                journey,
+                now=now,
+                show_model_confidence=getattr(
+                    settings,
+                    "model_confidence_enabled",
+                    True,
+                ),
+            ):
+                announced.append(journey.journey_id)
+        return announced
+
+    async def _post_journey_outcome(
+        self,
+        journey: Any,
+        *,
+        now: datetime,
+        show_model_confidence: bool,
+    ) -> bool:
+        context = self.context
+        thread_record = await context.run(
+            context.notifications.get,
+            NotificationKind.JOURNEY,
+            journey.journey_id,
+        )
+        target = (
+            thread_record.message_id
+            if thread_record is not None and thread_record.message_id
+            else self.channel_id
+        )
+        claim = await context.run(
+            context.notifications.claim,
+            NotificationKind.JOURNEY_OUTCOME,
+            journey.journey_id,
+            symbol=journey.symbol,
+            channel_id=str(target),
+            now=now,
+        )
+        if claim is None:
+            return False
+
+        predictions: dict[str, dict[str, Any]] = {}
+        if show_model_confidence:
+            for anchor in journey.anchors:
+                row = await context.run(
+                    context.v3_ema.prediction_for_detection,
+                    anchor.detection_id,
+                )
+                if row is not None:
+                    predictions[anchor.detection_id] = row
+
+        title, body = build_v3_journey_outcome_summary(
+            journey,
+            predictions,
+            show_model_confidence=show_model_confidence,
+        )
+        try:
+            await self.send(target, embed=notice_embed(title, body))
+        except Exception as exc:  # noqa: BLE001
+            log.exception("could not post journey outcome %s", journey.journey_id)
+            await context.run(
+                context.notifications.mark_failed,
+                NotificationKind.JOURNEY_OUTCOME,
+                journey.journey_id,
                 message=str(exc),
             )
             return False

@@ -12,7 +12,7 @@ from typing import Any
 from aureon.ml.logistic import binary_metrics
 from aureon.models.base import to_utc, utc_now
 from aureon.models.ema_journey_v3 import EMAAnchorFeaturesV3
-from aureon.services.v3_ema_learning import CanonicalEMAExampleV3, calibration_buckets
+from aureon.services.v3_ema_learning import calibration_buckets
 from aureon.services.v3_ema_model import expected_calibration_error, predict_v3
 from aureon.services.v3_reproducibility import stable_payload_hash
 

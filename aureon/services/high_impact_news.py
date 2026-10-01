@@ -38,7 +38,7 @@ class HighImpactNewsTagger:
         path: str | Path | None = None,
         *,
         window_minutes: int = 30,
-    ) -> "HighImpactNewsTagger":
+    ) -> HighImpactNewsTagger:
         target = Path(path or os.getenv(NEWS_PATH_ENV) or DEFAULT_NEWS_PATH)
         if not target.exists():
             return cls((), window_minutes=window_minutes)

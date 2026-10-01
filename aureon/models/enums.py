@@ -453,6 +453,11 @@ class NotificationStatus(StrEnum):
 class NotificationKind(StrEnum):
     DETECTION = "detection"
     ALERT = "alert"
+    #: V3: one root thread per EMA movement journey. The notification's message_id
+    #: stores the Discord thread id so a restart can continue the same conversation.
+    JOURNEY = "journey"
+    #: V3: exactly one prediction-vs-actual closing follow-up per completed journey.
+    JOURNEY_OUTCOME = "journey_outcome"
     #: 12 T-11. One document per SETUP, not per transition: the card is edited in place as the
     #: setup advances, so "have we said anything about this setup" is one question with one
     #: answer, and the document carries the message id that answer needs.
