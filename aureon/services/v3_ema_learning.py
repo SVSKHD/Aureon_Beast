@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from math import sqrt
 from typing import Any
 
 from pydantic import ConfigDict, Field
@@ -250,7 +248,10 @@ def canonical_example(
         resolved_at=to_utc(anchor.outcome.completed_at),
     )
     example_id = hashlib.sha256(
-        f"{journey.journey_id}|{anchor.detection_id}|{EMA_FEATURE_SCHEMA_V3}|{EMA_LABEL_SCHEMA_V3}".encode()
+        (
+            f"{journey.journey_id}|{anchor.detection_id}|"
+            f"{EMA_FEATURE_SCHEMA_V3}|{EMA_LABEL_SCHEMA_V3}"
+        ).encode()
     ).hexdigest()
     return CanonicalEMAExampleV3(
         example_id=example_id,
