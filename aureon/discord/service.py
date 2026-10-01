@@ -1020,21 +1020,26 @@ def _v3_model_confidence_field(payload: dict | None) -> tuple[str, str]:
         reason = str(payload.get("reason") or "INSUFFICIENT TRAINING DATA")
         return ("Model confidence", reason)
 
-    def pct(key: str) -> str:
-        value = payload.get(key)
-        return "—" if value is None else f"{float(value) * 100:.0f}%"
-
+    target_counts = payload.get("target_sample_counts") or {}
     sample_count = int(payload.get("sample_count") or 0)
+
+    def pct(key: str, target: str) -> str:
+        value = payload.get(key)
+        if value is None:
+            return "—"
+        n = int(target_counts.get(target) or sample_count)
+        return f"{float(value) * 100:.0f}% (n={n})"
+
     value = (
-        f"+3 {pct('probability_reach_3')} · "
-        f"+5 {pct('probability_reach_5')} · "
-        f"+10 {pct('probability_reach_10')}\n"
-        f"+20 {pct('probability_reach_20')} · "
-        f"+30 {pct('probability_reach_30')} · "
-        f"+40 {pct('probability_reach_40')} · "
-        f"clean +10 {pct('probability_clean_10')}\n"
+        f"+3 {pct('probability_reach_3', 'reach_3')} · "
+        f"+5 {pct('probability_reach_5', 'reach_5')}\n"
+        f"+10 {pct('probability_reach_10', 'reach_10')} · "
+        f"+20 {pct('probability_reach_20', 'reach_20')}\n"
+        f"+30 {pct('probability_reach_30', 'reach_30')} · "
+        f"+40 {pct('probability_reach_40', 'reach_40')}\n"
+        f"clean +10 {pct('probability_clean_10', 'clean_10')}\n"
         f"Expected MFE {_fmt(payload.get('expected_mfe'))} · "
-        f"MAE {_fmt(payload.get('expected_mae'))} · n={sample_count}\n"
+        f"MAE {_fmt(payload.get('expected_mae'))}\n"
         "Historical model estimate — not a guarantee."
     )
     return ("Model confidence", value)
