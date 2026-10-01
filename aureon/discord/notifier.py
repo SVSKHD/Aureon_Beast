@@ -1101,31 +1101,54 @@ def _render_detection_chart(detection: Detection, bars: Any, spec: Any) -> bytes
         else None
     )
     session = detection.session.session.value
-    levels: list[Any] = []
-    ema_values = detection.indicators.ema or {}
-
-    fast = ema_values.get("fast")
-    slow = ema_values.get("slow")
-    ema200 = ema_values.get("ema200") or detection.indicators.extras.get("ema200")
-
-    if isinstance(fast, (int, float)):
-        levels.append(chart_renderer.ChartLevel(price=float(fast), label="EMA20 now"))
-    if isinstance(slow, (int, float)):
-        levels.append(chart_renderer.ChartLevel(price=float(slow), label="EMA50 now"))
-    if isinstance(ema200, (int, float)):
-        levels.append(chart_renderer.ChartLevel(price=float(ema200), label="EMA200 now"))
+    series = prepare_ema_chart_series(tuple(bars))
+    boundaries = session_boundaries_for_bars(
+        tuple(bars),
+        market_tz=market_tz,
+    )
 
     if detection.agent_name == "ema_cross":
-        label = f"EMA20/50 {detection.event_key.upper()} · {session}"
+        label = (
+            "EMA20↑EMA50"
+            if direction == "bullish"
+            else "EMA20↓EMA50"
+            if direction == "bearish"
+            else "EMA20/EMA50 CROSS"
+        )
+        cross_kind = "ema20_50"
     elif detection.agent_name == "ema200_pre_cross":
-        label = f"PRE-CROSS {detection.event_key.upper()} · {session}"
+        label = f"PRE-CROSS {detection.event_key.upper()}"
+        cross_kind = None
     else:
-        label = f"EMA200 {detection.event_key.upper()} · {session}"
-    mark = chart_renderer.ChartMark(
-        at=detection.candle_open_time.utc,
-        price=detection.price,
-        label=label,
-        direction_context=direction,
+        label = (
+            "Price↑EMA200"
+            if direction == "bullish"
+            else "Price↓EMA200"
+            if direction == "bearish"
+            else "PRICE/EMA200 CROSS"
+        )
+        cross_kind = "price_ema200"
+
+    marks = [
+        chart_renderer.ChartMark(
+            at=point.at,
+            price=point.price,
+            label=point.label,
+            direction_context="bullish" if point.bullish else "bearish",
+        )
+        for point in series.crosses[-10:]
+        if not (
+            cross_kind == point.kind
+            and point.at == detection.candle_open_time.utc
+        )
+    ]
+    marks.append(
+        chart_renderer.ChartMark(
+            at=detection.candle_open_time.utc,
+            price=detection.price,
+            label=label,
+            direction_context=direction,
+        )
     )
 
     trend = str(evidence.categorical.get("trend_direction", "SIDEWAYS"))
@@ -1147,12 +1170,22 @@ def _render_detection_chart(detection: Detection, bars: Any, spec: Any) -> bytes
             f"{detection.agent_name.replace('_', ' ').upper()}"
         ),
         subtitle=f"{detection.event_key.upper()} · {quality} · {pattern}",
-        levels=tuple(levels),
-        detections=(mark,),
+        ema_fast=series.ema20,
+        ema_slow=series.ema50,
+        ema200=series.ema200,
+        ema_fast_label="EMA20",
+        ema_slow_label="EMA50",
+        ema200_label="EMA200",
+        session_boundaries=tuple(
+            chart_renderer.ChartBoundary(at=item.at, label=item.label)
+            for item in boundaries
+        ),
+        detections=tuple(marks),
         analysis_lines=(
             f"TREND    {trend}",
             f"STATE    {quality}",
             f"PATTERN  {pattern}",
+            f"SESSION  {session.upper()}",
             f"CONTEXT  {companion}",
         ),
     )
