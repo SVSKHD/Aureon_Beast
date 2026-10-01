@@ -157,6 +157,17 @@ class V3EMALearningRepository(PostgresRepository):
                 )
             )
 
+    def false_positive_detection_ids(self, symbol: str) -> set[str]:
+        statement = (
+            select(self.predictions.c.detection_id)
+            .where(self.predictions.c.symbol == symbol.upper())
+            .where(self.predictions.c.outcome_class == "false_positive")
+        )
+        return {
+            str(row[0] if not hasattr(row, "keys") else dict(row)["detection_id"])
+            for row in self._rows(statement)
+        }
+
     def write_holdout(self, holdout: EMAHoldoutDayV3) -> EMAHoldoutDayV3:
         self._upsert(
             {
