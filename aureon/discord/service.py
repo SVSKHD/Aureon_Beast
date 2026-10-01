@@ -1116,6 +1116,8 @@ def build_notification(
     model_confidence: dict | None = None,
     movement_since_pre_cross: float | None = None,
     model_confidence_visible: bool = True,
+    session_agent_confidence: str | None = None,
+    session_model_confidence: str | None = None,
 ) -> NotificationScreen:
     """The §59 detection embed: what the machine saw, and nothing it did not (9C).
 
@@ -1321,6 +1323,16 @@ def build_notification(
                 ("Active Price / EMA200", ema200),
                 ("Volatility", _volatility_line(detection)),
                 ("Tick-volume profile", _volume_line(detection)),
+                *(
+                    [("Agent confidence", session_agent_confidence)]
+                    if session_agent_confidence
+                    else []
+                ),
+                *(
+                    [("Model confidence", session_model_confidence)]
+                    if session_model_confidence
+                    else []
+                ),
             ]
             screen.footer = (
                 f"{RESEARCH_ONLY} · session-open context · "
@@ -1356,6 +1368,16 @@ def build_notification(
             ("Latest Price / EMA200", ema200),
             ("Volatility", _volatility_line(detection)),
             ("Tick-volume profile", _volume_line(detection)),
+            *(
+                [("Agent confidence", session_agent_confidence)]
+                if session_agent_confidence
+                else []
+            ),
+            *(
+                [("Model confidence", session_model_confidence)]
+                if session_model_confidence
+                else []
+            ),
         ]
         screen.footer = (
             f"{RESEARCH_ONLY} · completed-session summary · "
