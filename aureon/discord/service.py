@@ -993,11 +993,45 @@ def _ema_cross_analysis(detection: Detection) -> str:
     )
 
 
+
+def _v3_model_confidence_field(payload: dict | None) -> tuple[str, str]:
+    """Compact trained-model readout, kept distinct from agent agreement."""
+    if not payload:
+        return (
+            "Model confidence",
+            "INSUFFICIENT TRAINING DATA · no validated V3 EMA prediction yet",
+        )
+    sufficient = bool(payload.get("sufficient_data"))
+    if not sufficient:
+        reason = str(payload.get("reason") or "INSUFFICIENT TRAINING DATA")
+        return ("Model confidence", reason)
+
+    def pct(key: str) -> str:
+        value = payload.get(key)
+        return "—" if value is None else f"{float(value) * 100:.0f}%"
+
+    sample_count = int(payload.get("sample_count") or 0)
+    value = (
+        f"+5 {pct('probability_reach_5')} · "
+        f"+10 {pct('probability_reach_10')} · "
+        f"+20 {pct('probability_reach_20')}\n"
+        f"+30 {pct('probability_reach_30')} · "
+        f"+40 {pct('probability_reach_40')} · "
+        f"clean +10 {pct('probability_clean_10')}\n"
+        f"Expected MFE {_fmt(payload.get('expected_mfe'))} · "
+        f"MAE {_fmt(payload.get('expected_mae'))} · n={sample_count}\n"
+        "Historical model estimate — not a guarantee."
+    )
+    return ("Model confidence", value)
+
+
 def build_notification(
     detection: Detection,
     *,
     consensus: AgentConsensus | None = None,
     session_ema_context: tuple[str, str] | None = None,
+    model_confidence: dict | None = None,
+    movement_since_pre_cross: float | None = None,
 ) -> NotificationScreen:
     """The §59 detection embed: what the machine saw, and nothing it did not (9C).
 
@@ -1068,6 +1102,7 @@ def build_notification(
                 f"{consensus.conflicting} conflicting"
             )
             fields.append(("Agent consensus", counts))
+        fields.append(_v3_model_confidence_field(model_confidence))
         fields.append(("Session", detection.session.session.value))
         screen.fields = fields
         screen.footer = (
@@ -1103,6 +1138,16 @@ def build_notification(
             detail += "\nAgreement meter only — not a win probability."
             consensus_field = ("Agent consensus", detail)
 
+        model_field = _v3_model_confidence_field(model_confidence)
+        movement_field = (
+            (
+                "Move since pre-cross",
+                f"{movement_since_pre_cross:+.2f} dollars",
+            )
+            if movement_since_pre_cross is not None
+            else None
+        )
+
         if detection.agent_name == "ema_cross":
             screen.title = f"{detection.symbol} · EMA 20/50 CROSS · {direction_label}"
             relation = evidence.categorical.get("ema_relation", UNKNOWN)
@@ -1119,6 +1164,8 @@ def build_notification(
                 ),
                 ("Analysis", analysis),
                 *([consensus_field] if consensus_field is not None else []),
+                model_field,
+                *([movement_field] if movement_field is not None else []),
                 ("Session", session),
             ]
         else:
@@ -1138,6 +1185,8 @@ def build_notification(
                 ),
                 ("Analysis", analysis),
                 *([consensus_field] if consensus_field is not None else []),
+                model_field,
+                *([movement_field] if movement_field is not None else []),
                 ("Session", session),
             ]
         return screen
