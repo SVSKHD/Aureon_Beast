@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 from aureon.discord.service import _v3_model_confidence_field
 from aureon.models.ema_journey_v3 import EMAAnchorFeaturesV3
-from aureon.models.ml import ModelRegistryEntry, TargetMetrics
 from aureon.services.v3_ema_ops import (
     DriftPolicy,
     RetrainingPolicy,
