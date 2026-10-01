@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from aureon.ml.logistic import LogisticModel, binary_metrics, fit_logistic
@@ -35,6 +37,89 @@ V3_BINARY_TARGETS = (
     "reach_30",
     "reach_40",
 )
+
+
+
+
+def journey_weights(examples: list[CanonicalEMAExampleV3]) -> list[float]:
+    """Give every underlying movement journey total training weight 1.0."""
+    counts = Counter(example.journey_id for example in examples)
+    return [1.0 / counts[example.journey_id] for example in examples]
+
+
+def expected_calibration_error(
+    buckets: dict[str, dict[str, float | int | None]],
+) -> float | None:
+    total = sum(int(bucket.get("n") or 0) for bucket in buckets.values())
+    if total <= 0:
+        return None
+    error = 0.0
+    for bucket in buckets.values():
+        n = int(bucket.get("n") or 0)
+        predicted = bucket.get("predicted")
+        actual = bucket.get("actual")
+        if not n or predicted is None or actual is None:
+            continue
+        error += n * abs(float(predicted) - float(actual))
+    return error / total
+
+
+def _base_rate_validation(
+    train: list[CanonicalEMAExampleV3],
+    validation: list[CanonicalEMAExampleV3],
+    model_probabilities: dict[str, list[float]],
+    *,
+    min_cell_samples: int,
+) -> dict[str, Any]:
+    """Compare V3 against plain session+direction historical hit rates."""
+    result: dict[str, Any] = {}
+    for target in V3_BINARY_TARGETS:
+        cells: dict[tuple[str, str], list[int]] = {}
+        for example in train:
+            key = (example.features.session, example.direction.value)
+            cells.setdefault(key, []).append(1 if _target(example, target) else 0)
+
+        labels: list[int] = []
+        baseline_probs: list[float] = []
+        candidate_probs: list[float] = []
+        eligible_cells: dict[str, dict[str, float | int]] = {}
+        for example, model_p in zip(
+            validation,
+            model_probabilities.get(target, []),
+            strict=True,
+        ):
+            key = (example.features.session, example.direction.value)
+            history = cells.get(key, [])
+            if len(history) < min_cell_samples:
+                continue
+            rate = sum(history) / len(history)
+            labels.append(1 if _target(example, target) else 0)
+            baseline_probs.append(rate)
+            candidate_probs.append(float(model_p))
+            eligible_cells[f"{key[0]}:{key[1]}"] = {
+                "samples": len(history),
+                "base_rate": rate,
+            }
+
+        baseline = binary_metrics(labels, baseline_probs)
+        candidate = binary_metrics(labels, candidate_probs)
+        baseline_brier = baseline.get("brier")
+        candidate_brier = candidate.get("brier")
+        improvement = (
+            float(baseline_brier) - float(candidate_brier)
+            if baseline_brier is not None and candidate_brier is not None
+            else None
+        )
+        result[target] = {
+            "eligible_validation_samples": len(labels),
+            "min_cell_samples": min_cell_samples,
+            "cells": eligible_cells,
+            "baseline": baseline,
+            "candidate": candidate,
+            "brier_improvement": improvement,
+            "beats_base_rate": improvement is not None and improvement > 0.0,
+        }
+    return result
 
 
 def raw_v3_features(features: EMAAnchorFeaturesV3) -> tuple[dict[str, float], dict[str, str]]:
@@ -208,6 +293,7 @@ def fit_v3_bundle(
     *,
     min_samples: int = 30,
     train_fraction: float = 0.8,
+    min_cell_samples: int = 20,
 ) -> V3Bundle:
     ordered = sorted(examples, key=lambda e: (e.generated_at, e.detection_id))
     if len(ordered) < min_samples:
@@ -222,7 +308,7 @@ def fit_v3_bundle(
     raw_train = [raw_v3_features(e.features) for e in train]
     encoder = V1FeatureEncoder.fit(raw_train)
     train_vectors = [encoder.transform(*row) for row in raw_train]
-    train_weights = [float(e.independence_weight) for e in train]
+    train_weights = journey_weights(train)
     validation_vectors = [
         encoder.transform(*raw_v3_features(e.features))
         for e in validation
@@ -231,6 +317,7 @@ def fit_v3_bundle(
     targets: dict[str, dict[str, Any]] = {}
     metrics: dict[str, TargetMetrics] = {}
     calibration: dict[str, Any] = {}
+    validation_probabilities: dict[str, list[float]] = {}
     for target in V3_BINARY_TARGETS:
         train_labels = [1 if _target(e, target) else 0 for e in train]
         fitted = _fit_binary(
@@ -241,6 +328,7 @@ def fit_v3_bundle(
         targets[target] = fitted
         labels = [1 if _target(e, target) else 0 for e in validation]
         probs = [_predict_binary(fitted, vector) for vector in validation_vectors]
+        validation_probabilities[target] = probs
         metric = binary_metrics(labels, probs)
         positives = [e for e, y in zip(validation, labels, strict=True) if y]
         metric["average_mae"] = (
@@ -257,6 +345,12 @@ def fit_v3_bundle(
     mfe_model = _fit_linear(train_vectors, [e.outcome.mfe for e in train])
     mae_model = _fit_linear(train_vectors, [e.outcome.mae for e in train])
 
+    base_rate_gate = _base_rate_validation(
+        train,
+        validation,
+        validation_probabilities,
+        min_cell_samples=min_cell_samples,
+    )
     validation_payload = {
         "chronological": {
             "train_samples": len(train),
@@ -267,6 +361,12 @@ def fit_v3_bundle(
             "validation_through": validation[-1].market_date,
         },
         "calibration": calibration,
+        "calibration_error": {
+            target: expected_calibration_error(buckets)
+            for target, buckets in calibration.items()
+        },
+        "base_rate_gate": base_rate_gate,
+        "min_cell_samples": min_cell_samples,
         "walk_forward_ready": True,
     }
     return V3Bundle(
@@ -304,8 +404,11 @@ def walk_forward_v3(
     *,
     min_train_samples: int = 30,
     test_days: int = 1,
+    embargo_bars: int = 96,
+    timeframe_seconds: int = 300,
+    min_cell_samples: int = 20,
 ) -> dict[str, Any]:
-    """Expanding-window chronological validation by market day."""
+    """Expanding-window validation with purge + embargo before every test fold."""
     ordered = sorted(examples, key=lambda e: (e.market_date, e.generated_at, e.detection_id))
     dates = sorted({e.market_date for e in ordered})
     folds: list[dict[str, Any]] = []
@@ -322,7 +425,16 @@ def walk_forward_v3(
         if len(train) < min_train_samples or not test:
             continue
         first_test_time = min(e.generated_at for e in test)
-        train = [e for e in train if e.outcome.resolved_at <= first_test_time]
+        embargo_cutoff = first_test_time - timedelta(
+            seconds=max(0, embargo_bars) * timeframe_seconds
+        )
+        before_purge = len(train)
+        train = [
+            e
+            for e in train
+            if e.outcome.resolved_at <= embargo_cutoff
+        ]
+        purged_or_embargoed = before_purge - len(train)
         if len(train) < min_train_samples:
             continue
 
@@ -330,6 +442,7 @@ def walk_forward_v3(
             train,
             min_samples=min_train_samples,
             train_fraction=0.8,
+            min_cell_samples=min_cell_samples,
         )
         artifact = bundle.artifact()
         score = _score_artifact(artifact, test)
@@ -341,6 +454,8 @@ def walk_forward_v3(
                 "test_through": max(test_dates),
                 "train_samples": len(train),
                 "test_samples": len(test),
+                "purged_or_embargoed": purged_or_embargoed,
+                "embargo_bars": embargo_bars,
                 "metrics": score["metrics"],
             }
         )
@@ -391,14 +506,18 @@ class V3EMAModelTrainer:
             if not self.examples.is_held_out(row.symbol, row.market_date)
         ]
         false_positive_ids = self.examples.false_positive_detection_ids(symbol.upper())
-        weighted_rows = list(rows) + [
-            row for row in rows if row.detection_id in false_positive_ids
-        ]
-        bundle = fit_v3_bundle(weighted_rows, min_samples=min_samples)
+        bundle = fit_v3_bundle(
+            rows,
+            min_samples=min_samples,
+            min_cell_samples=20,
+        )
         walk_forward = walk_forward_v3(
             rows,
             min_train_samples=min_samples,
             test_days=1,
+            embargo_bars=96,
+            timeframe_seconds=300,
+            min_cell_samples=20,
         )
         created = to_utc(self._now())
         artifact = bundle.artifact()
@@ -434,7 +553,10 @@ class V3EMAModelTrainer:
             validation_metrics={
                 **bundle.validation,
                 "walk_forward": walk_forward,
-                "false_positive_replay_weighted": len(weighted_rows) - len(rows),
+                "false_positive_examples_present": sum(
+                    row.detection_id in false_positive_ids for row in rows
+                ),
+                "journey_weighting": "each journey totals 1.0 training weight",
             },
             artifact=artifact,
             created_at=created,
@@ -473,6 +595,8 @@ def predict_v3(
     features: EMAAnchorFeaturesV3,
     *,
     min_samples: int = 30,
+    direction: str | None = None,
+    min_cell_samples: int = 20,
 ) -> EMAModelConfidenceV3:
     if (
         model.feature_schema_version != EMA_FEATURE_SCHEMA_V3
@@ -491,6 +615,34 @@ def predict_v3(
             sufficient_data=False,
             reason=f"INSUFFICIENT TRAINING DATA: {sample_count}/{min_samples}",
         )
+
+    base_rate_gate = (model.validation_metrics or {}).get("base_rate_gate") or {}
+    clean_gate = base_rate_gate.get("clean_10") or {}
+    if not clean_gate.get("beats_base_rate"):
+        return EMAModelConfidenceV3(
+            model_id=model.model_id,
+            model_generation=model.generation,
+            trained_through=model.trained_through,
+            sample_count=sample_count,
+            sufficient_data=False,
+            reason="BASE_RATE_GATE_FAILED: model has not beaten session+direction history",
+        )
+
+    if direction is not None:
+        cell_key = f"{features.session}:{direction}"
+        cell = (clean_gate.get("cells") or {}).get(cell_key)
+        if cell is None or int(cell.get("samples") or 0) < min_cell_samples:
+            return EMAModelConfidenceV3(
+                model_id=model.model_id,
+                model_generation=model.generation,
+                trained_through=model.trained_through,
+                sample_count=sample_count,
+                sufficient_data=False,
+                reason=(
+                    "INSUFFICIENT CELL DATA: "
+                    f"{cell_key} requires n>={min_cell_samples}"
+                ),
+            )
 
     encoder = V1FeatureEncoder.from_dict(model.artifact["encoder"])
     raw = raw_v3_features(features)
