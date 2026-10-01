@@ -35,11 +35,13 @@ class V3EMALearningCoordinator:
         models: Any,
         now: Any = utc_now,
         min_model_samples: int = 30,
+        drift_monitor: Any | None = None,
     ) -> None:
         self.learning = learning
         self.models = models
         self._now = now
         self.min_model_samples = min_model_samples
+        self.drift_monitor = drift_monitor
 
     def predict_anchor(
         self,
@@ -126,6 +128,16 @@ class V3EMALearningCoordinator:
                     outcome=actual,
                     at=when,
                 )
+
+        if self.drift_monitor is not None:
+            champion = self.models.champion_for_contract(
+                journey.symbol,
+                feature_schema=EMA_FEATURE_SCHEMA_V3,
+                label_schema=EMA_LABEL_SCHEMA_V3,
+                model_schema=EMA_MODEL_SCHEMA_V3,
+            )
+            if champion is not None:
+                self.drift_monitor.evaluate(champion.model_id)
         return written
 
     def freeze_next_day(
