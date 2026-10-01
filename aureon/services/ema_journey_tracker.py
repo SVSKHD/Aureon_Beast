@@ -15,18 +15,19 @@ from datetime import datetime
 from aureon.models.base import to_utc
 from aureon.models.detection import Detection
 from aureon.models.ema_journey_v3 import (
-    EMA_MOVEMENT_TARGETS,
     EMAAnchorOutcome,
     EMAAnchorType,
     EMAJourneyAnchor,
     EMAMovementJourney,
     JourneyEndReason,
+    JourneyOrigin,
     JourneyStatus,
     TargetOutcome,
 )
 from aureon.models.enums import Direction
 from aureon.models.market import Candle
 from aureon.services.v3_ema_learning import freeze_anchor_features
+from aureon.services.v3_target_ladder import target_ladder_for_symbol
 
 EMA_ANCHOR_AGENTS: dict[str, EMAAnchorType] = {
     "ema200_pre_cross": EMAAnchorType.PRE_CROSS,
@@ -143,6 +144,10 @@ class EMAMovementJourneyTracker:
                     "minutes_to_news": news.minutes_to_event,
                 }
             )
+        ladder = target_ladder_for_symbol(
+            detection.symbol,
+            point_size=point_size,
+        )
         anchor = EMAJourneyAnchor(
             detection_id=detection.detection_id,
             anchor_type=anchor_type,
@@ -167,6 +172,8 @@ class EMAMovementJourneyTracker:
                     else "bid_at_detection"
                 ),
                 spread_accounted=spread_points is not None and point_size is not None,
+                target_ladder=ladder.targets,
+                target_ladder_source=ladder.source,
             ),
         )
         current.anchors = tuple((*current.anchors, anchor))
@@ -226,10 +233,16 @@ class EMAMovementJourneyTracker:
         journey.anchors = tuple(updated_anchors)
 
         if journey.bars_observed >= self.max_horizon_bars:
+            reason = (
+                JourneyEndReason.PRE_CROSS_EXPIRED
+                if journey.origin is JourneyOrigin.PRE_CROSS
+                and not journey.has_confirmed_cross
+                else JourneyEndReason.MAX_HORIZON
+            )
             self._close(
                 journey,
                 at=candle.close_time,
-                reason=JourneyEndReason.MAX_HORIZON,
+                reason=reason,
             )
         else:
             self._save(journey)
@@ -240,6 +253,11 @@ class EMAMovementJourneyTracker:
 
     def _new_journey(self, detection: Detection) -> EMAMovementJourney:
         journey_id = self._journey_id(detection)
+        origin = (
+            JourneyOrigin.PRE_CROSS
+            if detection.agent_name == "ema200_pre_cross"
+            else JourneyOrigin.CONFIRMED_CROSS
+        )
         journey = EMAMovementJourney(
             journey_id=journey_id,
             account_scope=detection.account_scope,
@@ -249,6 +267,7 @@ class EMAMovementJourneyTracker:
             market_date=detection.detected_at.market_date,
             started_at=detection.detected_at.utc,
             start_price=detection.price,
+            origin=origin,
             anchors=(),
         )
         self._save(journey)
@@ -305,7 +324,7 @@ class EMAMovementJourneyTracker:
             (candle.close_time - to_utc(anchor.detected_at)).total_seconds(),
         )
         targets = dict(outcome.targets)
-        for target in EMA_MOVEMENT_TARGETS:
+        for target in outcome.target_ladder:
             key = self._target_key(target)
             existing = targets.get(key, TargetOutcome())
             if not existing.reached and favourable >= target:
@@ -370,15 +389,19 @@ class EMAMovementJourneyTracker:
         reference_price: float,
         reference_price_kind: str,
         spread_accounted: bool,
+        target_ladder: tuple[float, ...],
+        target_ladder_source: str,
     ) -> EMAAnchorOutcome:
         return EMAAnchorOutcome(
             reference_price=reference_price,
             reference_price_kind=reference_price_kind,
             spread_accounted=spread_accounted,
+            target_ladder=target_ladder,
+            target_ladder_source=target_ladder_source,
             targets={
                 self._target_key(target): TargetOutcome()
-                for target in EMA_MOVEMENT_TARGETS
-            }
+                for target in target_ladder
+            },
         )
 
     @staticmethod
