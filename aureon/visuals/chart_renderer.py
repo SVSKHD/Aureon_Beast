@@ -182,6 +182,7 @@ class Overlays:
     ema_slow_colour: str = SLOW_COLOUR
     ema200_colour: str = EMA200_COLOUR
     show_ema_end_labels: bool = False
+    show_structure: bool = True
     levels: tuple[ChartLevel, ...] = ()
     session_boundaries: tuple[ChartBoundary, ...] = ()
     #: ``(low, high)`` of the value area, shaded. Not a range to trade.
@@ -542,68 +543,69 @@ def build(
             )
         )
 
-    # ── confirmed market-structure path ───────────────────────────────────────
-    # Connect confirmed swing highs to highs and lows to lows. Keeping the two paths separate
-    # avoids drawing a fake zig-zag through alternating pivots that would imply an order of
-    # structure the detector never claimed.
-    swing_highs = [
-        (index, bar.high)
-        for index, bar in enumerate(bars)
-        if any(label in {"SH", "HH", "LH", "EH"} for label in bar.structure_labels)
-    ]
-    swing_lows = [
-        (index, bar.low)
-        for index, bar in enumerate(bars)
-        if any(label in {"SL", "HL", "LL", "EL"} for label in bar.structure_labels)
-    ]
-    if len(swing_highs) >= 2:
-        price.plot(
-            [one[0] for one in swing_highs],
-            [one[1] for one in swing_highs],
-            linestyle="--",
-            linewidth=0.9,
-            color=LEVEL_COLOUR,
-            alpha=0.65,
-            zorder=3,
-            label="swing highs",
-        )
-    if len(swing_lows) >= 2:
-        price.plot(
-            [one[0] for one in swing_lows],
-            [one[1] for one in swing_lows],
-            linestyle="--",
-            linewidth=0.9,
-            color=ANCHOR_COLOUR,
-            alpha=0.55,
-            zorder=3,
-            label="swing lows",
-        )
-
-    # ── confirmed market-structure labels ─────────────────────────────────────
-    for index, bar in enumerate(bars):
-        if not bar.structure_labels:
-            continue
-        for offset, label in enumerate(bar.structure_labels):
-            is_high = label in {"SH", "HH", "LH", "EH"}
-            y = bar.high if is_high else bar.low
-            y_offset = 10 + offset * 10 if is_high else -16 - offset * 10
-            price.annotate(
-                label,
-                xy=(index, y),
-                xytext=(0, y_offset),
-                textcoords="offset points",
-                ha="center",
-                fontsize=7,
-                fontweight="bold",
-                color="#222222",
-                zorder=7,
-                bbox=dict(
-                    boxstyle="round,pad=0.12",
-                    fc="white",
-                    ec="#555555",
-                    alpha=0.78,
-                ),
+    if overlays.show_structure:
+        # ── confirmed market-structure path ───────────────────────────────────────
+        # Connect confirmed swing highs to highs and lows to lows. Keeping the two paths separate
+        # avoids drawing a fake zig-zag through alternating pivots that would imply an order of
+        # structure the detector never claimed.
+        swing_highs = [
+            (index, bar.high)
+            for index, bar in enumerate(bars)
+            if any(label in {"SH", "HH", "LH", "EH"} for label in bar.structure_labels)
+        ]
+        swing_lows = [
+            (index, bar.low)
+            for index, bar in enumerate(bars)
+            if any(label in {"SL", "HL", "LL", "EL"} for label in bar.structure_labels)
+        ]
+        if len(swing_highs) >= 2:
+            price.plot(
+                [one[0] for one in swing_highs],
+                [one[1] for one in swing_highs],
+                linestyle="--",
+                linewidth=0.9,
+                color=LEVEL_COLOUR,
+                alpha=0.65,
+                zorder=3,
+                label="swing highs",
             )
+        if len(swing_lows) >= 2:
+            price.plot(
+                [one[0] for one in swing_lows],
+                [one[1] for one in swing_lows],
+                linestyle="--",
+                linewidth=0.9,
+                color=ANCHOR_COLOUR,
+                alpha=0.55,
+                zorder=3,
+                label="swing lows",
+            )
+
+        # ── confirmed market-structure labels ─────────────────────────────────────
+        for index, bar in enumerate(bars):
+            if not bar.structure_labels:
+                continue
+            for offset, label in enumerate(bar.structure_labels):
+                is_high = label in {"SH", "HH", "LH", "EH"}
+                y = bar.high if is_high else bar.low
+                y_offset = 10 + offset * 10 if is_high else -16 - offset * 10
+                price.annotate(
+                    label,
+                    xy=(index, y),
+                    xytext=(0, y_offset),
+                    textcoords="offset points",
+                    ha="center",
+                    fontsize=7,
+                    fontweight="bold",
+                    color="#222222",
+                    zorder=7,
+                    bbox=dict(
+                        boxstyle="round,pad=0.12",
+                        fc="white",
+                        ec="#555555",
+                        alpha=0.78,
+                    ),
+                )
 
     # ── the indicator lines, as they were computed elsewhere ──────────────────
     for series, colour, name in (
