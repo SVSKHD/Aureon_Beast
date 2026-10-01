@@ -176,3 +176,35 @@ def test_session_open_card_is_compact_and_contains_active_ema_context() -> None:
     assert "BULLISH" in fields["Active Price / EMA200"]
     assert len(card.fields) <= 7
 
+
+
+def test_session_cards_can_add_confidence_rows_without_redesign() -> None:
+    trigger = _ema_detection()
+    session_detection = trigger.model_copy(
+        update={
+            "agent_name": "session_trend",
+            "direction": None,
+            "event_key": "open|london",
+            "evidence": AgentEvidence(
+                numeric={"open": 4188.0, "previous_close": 4187.5},
+                categorical={
+                    "session_event": "open",
+                    "opened_session": "london",
+                    "previous_session": "asia",
+                    "previous_trend": "up",
+                },
+            ),
+        }
+    )
+
+    card = build_notification(
+        session_detection,
+        session_ema_context=("BULLISH · UP · STRONG · 09:55", "—"),
+        session_agent_confidence="HIGH · 4 supportive",
+        session_model_confidence="P(+10) 64% (n=212)",
+    )
+    fields = dict(card.fields)
+
+    assert fields["Agent confidence"] == "HIGH · 4 supportive"
+    assert fields["Model confidence"] == "P(+10) 64% (n=212)"
+
