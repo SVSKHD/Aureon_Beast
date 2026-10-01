@@ -611,3 +611,68 @@ one is, the test is named.
 | how to run it, and what to do when it breaks | `docs/RUNBOOK.md` |
 | what is proven and what is still owed | `docs/PHASES.md` |
 | what a phrase in the docs must never claim | `docs/DOCS_CHECK.md` |
+
+
+---
+
+## Aureon V3 EMA journey intelligence
+
+V3 groups pre-cross pressure, EMA20/50 confirmation, EMA200 confirmation and the
+subsequent movement into one immutable `EMAMovementJourney`. A journey has one
+direction, broker market date, deterministic end reason and one or more event anchors.
+
+Each anchor freezes:
+- trend, pattern and cross quality;
+- EMA20/50/200 structure, RSI, ATR and market structure;
+- normalized MT5 tick-volume context;
+- session and higher-timeframe context;
+- spread-aware reference price;
+- internal-agent agreement;
+- the model id/schema/generation used before the future outcome exists.
+
+Future candles update only the anchor outcome: target ladder, MFE, MAE, adverse move before
+target, speed and end reason. Frozen features and prior predictions are never rewritten.
+
+### Learning and validation
+
+V3 canonical examples are created only after a valid journey outcome closes. Linked anchors
+from one underlying movement are journey-weighted so one market move does not become several
+independent observations. Training is chronological, with purge/embargo around test folds.
+
+Every model stores:
+- exact dataset snapshot SHA-256,
+- random seed,
+- Git commit,
+- feature/label/model schema versions,
+- chronological and walk-forward validation evidence.
+
+The lifecycle remains:
+
+```
+Candidate -> Challenger -> Shadow -> Champion
+```
+
+A Candidate must beat the historical same-session/same-direction base rate. Shadow promotion
+has hard Brier, log-loss, calibration, precision, false-positive and sample-count gates.
+Live Champion drift is evaluated from reconciled unseen predictions; a degraded Champion is
+retired and the previous compatible Champion is restored when one exists.
+
+Unseen evaluation is aggregated across a rolling 10-20 broker-market-day window rather than
+interpreting one sparse day as sufficient evidence.
+
+### Discord journey presentation
+
+Discord is presentation only. It does not compute EMA values, model features, probabilities or
+outcomes.
+
+The first V3 EMA event for a movement creates one journey thread. Pre-cross, EMA20/50 and EMA200
+updates belonging to that journey are posted into the same thread. When the journey closes,
+Discord posts one prediction-versus-actual follow-up containing the real MFE/MAE/targets and,
+when enabled, the frozen probabilities that existed before the outcome.
+
+`settings/notifications.model_confidence_enabled` is an independent presentation kill switch.
+Turning it off hides learned probabilities from Discord without disabling detections, agent
+agreement, model learning or trading controls.
+
+The frozen pre-V3 comparison artifact is `docs/V2_BENCHMARK_FROZEN.json`. It is comparison-only
+and must never be regenerated from V3 labels.
