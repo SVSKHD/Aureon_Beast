@@ -86,9 +86,9 @@ PRICE_HEIGHT_RATIO = 4
 #: Colours. Named so a change is one edit and so the reasons can be written down.
 UP_COLOUR = "#2e7d52"
 DOWN_COLOUR = "#b23a3a"
-FAST_COLOUR = "#1565C0"  # EMA20: blue
-SLOW_COLOUR = "#F9A825"  # EMA50: yellow/gold for visibility on white
-EMA200_COLOUR = "#D32F2F"  # EMA200: red
+FAST_COLOUR = "#1f6fb2"
+SLOW_COLOUR = "#8a6d3b"
+EMA200_COLOUR = "#D32F2F"
 LEVEL_COLOUR = "#666666"
 #: The invalidation line. Red, like a stop, and labelled so nobody reads it as one -- it is where
 #: the structure stops being true, and nothing in this system places an order from it.
@@ -173,9 +173,13 @@ class Overlays:
     ema_fast: tuple[float | None, ...] = ()
     ema_slow: tuple[float | None, ...] = ()
     ema200: tuple[float | None, ...] = ()
-    ema_fast_label: str = "EMA20"
-    ema_slow_label: str = "EMA50"
+    ema_fast_label: str = "EMA fast"
+    ema_slow_label: str = "EMA slow"
     ema200_label: str = "EMA200"
+    ema_fast_colour: str = FAST_COLOUR
+    ema_slow_colour: str = SLOW_COLOUR
+    ema200_colour: str = EMA200_COLOUR
+    show_ema_end_labels: bool = False
     levels: tuple[ChartLevel, ...] = ()
     session_boundaries: tuple[ChartBoundary, ...] = ()
     #: ``(low, high)`` of the value area, shaded. Not a range to trade.
@@ -601,9 +605,9 @@ def build(
 
     # ── the indicator lines, as they were computed elsewhere ──────────────────
     for series, colour, name in (
-        (overlays.ema_fast, FAST_COLOUR, overlays.ema_fast_label),
-        (overlays.ema_slow, SLOW_COLOUR, overlays.ema_slow_label),
-        (overlays.ema200, EMA200_COLOUR, overlays.ema200_label),
+        (overlays.ema_fast, overlays.ema_fast_colour, overlays.ema_fast_label),
+        (overlays.ema_slow, overlays.ema_slow_colour, overlays.ema_slow_label),
+        (overlays.ema200, overlays.ema200_colour, overlays.ema200_label),
     ):
         if not series:
             continue
@@ -627,7 +631,7 @@ def build(
             for index, value in enumerate(aligned)
             if value is not None and math.isfinite(value)
         ]
-        if finite_pairs:
+        if finite_pairs and overlays.show_ema_end_labels:
             last_index, last_value = finite_pairs[-1]
             price.annotate(
                 name,
