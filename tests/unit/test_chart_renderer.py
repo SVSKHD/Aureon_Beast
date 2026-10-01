@@ -688,3 +688,32 @@ def test_the_golden_hashes_actually_discriminate() -> None:
     golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
     apart = distance(golden["XAUUSD"], golden["XAGUSD"])
     assert apart > 12, f"the two golden hashes are only {apart} bits apart"
+
+
+def test_signal_chart_can_hide_market_structure_clutter() -> None:
+    made = list(bars("XAUUSD", 30))
+    for index, label in ((5, "HH"), (8, "LH"), (12, "HL"), (16, "LL")):
+        made[index] = cr.ChartBar(
+            at=made[index].at,
+            open=made[index].open,
+            high=made[index].high,
+            low=made[index].low,
+            close=made[index].close,
+            tick_volume=made[index].tick_volume,
+            structure_labels=(label,),
+        )
+
+    figure = cr.build(
+        "XAUUSD",
+        "M5",
+        tuple(made),
+        spec_for("XAUUSD"),
+        cr.Overlays(show_structure=False),
+    )
+    drawn = texts(figure)
+
+    assert "swing highs" not in drawn
+    assert "swing lows" not in drawn
+    for label in ("HH", "LH", "HL", "LL"):
+        assert label not in drawn
+
