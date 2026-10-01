@@ -1,0 +1,65 @@
+{
+  "schema": "AUREON_V2_FROZEN_BENCHMARK_V1",
+  "status": "frozen",
+  "purpose": "Pre-V3 comparison reference. Do not regenerate from V3 outcomes.",
+  "source": "docs/PHASE2_BASELINE.md",
+  "source_rule": "XAU_OUTCOME_V2",
+  "dataset": {
+    "fixture": "aureon/data/fixtures/XAUUSD_M5.csv",
+    "history_source": "synthetic",
+    "candles": 1884,
+    "symbol": "XAUUSD",
+    "timeframe": "M5",
+    "market_timezone": "Europe/Athens"
+  },
+  "ema_cross_detection": {
+    "agent_version": "2.3.0",
+    "total": 29,
+    "bullish": 14,
+    "bearish": 15,
+    "by_session": {
+      "asia": 9,
+      "london": 13,
+      "new_york": 6,
+      "off": 1
+    }
+  },
+  "ema_cross_outcomes": {
+    "c20": {
+      "complete": 29,
+      "reach_3": {"count": 18, "rate": 0.6206896552},
+      "reach_5": {"count": 4, "rate": 0.1379310345},
+      "reach_10": {"count": 0, "rate": 0.0}
+    },
+    "day_close": {
+      "complete": 19,
+      "pending": 6,
+      "invalid": 4,
+      "reach_3": {"count": 14, "rate": 0.7368421053},
+      "reach_5": {"count": 10, "rate": 0.5263157895},
+      "reach_10": {"count": 5, "rate": 0.2631578947},
+      "reach_15": {"count": 3, "rate": 0.1578947368},
+      "reach_20": {"count": 3, "rate": 0.1578947368},
+      "median_mfe": 5.17,
+      "median_mae": -5.68
+    },
+    "opposite_cross": {
+      "complete": 27,
+      "pending": 1,
+      "invalid": 1,
+      "reach_3": {"count": 18, "rate": 0.6666666667},
+      "reach_5": {"count": 11, "rate": 0.4074074074},
+      "reach_10": {"count": 4, "rate": 0.1481481481},
+      "reach_15": {"count": 3, "rate": 0.1111111111},
+      "reach_20": {"count": 2, "rate": 0.0740740741},
+      "median_mfe": 3.71,
+      "median_mae": -2.95
+    }
+  },
+  "limitations": [
+    "Synthetic committed fixture, not real-market evidence.",
+    "V2 uses next_open reference and XAU_OUTCOME_V2 price thresholds.",
+    "Pending and invalid horizons are excluded from reached denominators.",
+    "This artifact is comparison-only and must not be rewritten using V3 journey labels."
+  ]
+}
