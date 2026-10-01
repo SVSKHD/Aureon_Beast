@@ -47,12 +47,27 @@ class V3EMALearningCoordinator:
         anchor: EMAJourneyAnchor,
     ) -> Any | None:
         """Predict once, immediately after the anchor snapshot is frozen."""
-        model = self.models.champion_for_contract(
+        holdout = self.learning.holdout_for(
             journey.symbol,
-            feature_schema=EMA_FEATURE_SCHEMA_V3,
-            label_schema=EMA_LABEL_SCHEMA_V3,
-            model_schema=EMA_MODEL_SCHEMA_V3,
+            journey.market_date,
         )
+        model = None
+        if holdout is not None and holdout.status == "open" and holdout.frozen_model_id:
+            candidate = self.models.get_model(holdout.frozen_model_id)
+            if (
+                candidate is not None
+                and candidate.feature_schema_version == EMA_FEATURE_SCHEMA_V3
+                and candidate.label_schema_version == EMA_LABEL_SCHEMA_V3
+                and candidate.model_schema_version == EMA_MODEL_SCHEMA_V3
+            ):
+                model = candidate
+        if model is None:
+            model = self.models.champion_for_contract(
+                journey.symbol,
+                feature_schema=EMA_FEATURE_SCHEMA_V3,
+                label_schema=EMA_LABEL_SCHEMA_V3,
+                model_schema=EMA_MODEL_SCHEMA_V3,
+            )
         if model is None:
             return None
         existing = self.learning.prediction_for_detection(
