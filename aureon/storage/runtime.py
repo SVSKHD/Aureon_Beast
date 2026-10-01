@@ -41,6 +41,7 @@ from aureon.storage.postgres.repositories.setups import SetupRepository
 from aureon.storage.postgres.repositories.trade_requests import TradeRequestRepository
 from aureon.storage.postgres.repositories.trades import TradeRepository
 from aureon.storage.postgres.repositories.training import TrainingMemoryRepository
+from aureon.storage.postgres.repositories.v3_ema_learning import V3EMALearningRepository
 
 
 class SetupReadAdapter:
@@ -214,6 +215,7 @@ class StorageRuntime:
     training_memory: TrainingMemoryRepository
     models: ModelRepository
     ema_journeys: EMAMovementJourneyRepository
+    v3_ema_learning: V3EMALearningRepository
 
     @property
     def setup_reader(self) -> SetupReadAdapter:
@@ -274,6 +276,7 @@ def build_storage(
         training_memory=TrainingMemoryRepository(db),
         models=ModelRepository(db),
         ema_journeys=EMAMovementJourneyRepository(db),
+        v3_ema_learning=V3EMALearningRepository(db),
     )
 
 
