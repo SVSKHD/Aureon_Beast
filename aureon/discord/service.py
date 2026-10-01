@@ -994,6 +994,20 @@ def _ema_cross_analysis(detection: Detection) -> str:
 
 
 
+def _combined_v3_confidence_field(
+    consensus: AgentConsensus | None,
+    payload: dict | None,
+) -> tuple[str, str] | None:
+    if consensus is None:
+        return None
+    agent = consensus.label
+    if not payload or not payload.get("sufficient_data"):
+        return ("Combined view", f"Agents {agent} · Model insufficient")
+    p10 = payload.get("probability_reach_10")
+    model = "—" if p10 is None else f"P(+10) {float(p10) * 100:.0f}%"
+    return ("Combined view", f"Agents {agent} · Model {model}")
+
+
 def _v3_model_confidence_field(payload: dict | None) -> tuple[str, str]:
     """Compact trained-model readout, kept distinct from agent agreement."""
     if not payload:
@@ -1103,6 +1117,9 @@ def build_notification(
             )
             fields.append(("Agent consensus", counts))
         fields.append(_v3_model_confidence_field(model_confidence))
+        combined = _combined_v3_confidence_field(consensus, model_confidence)
+        if combined is not None:
+            fields.append(combined)
         fields.append(("Session", detection.session.session.value))
         screen.fields = fields
         screen.footer = (
@@ -1139,6 +1156,7 @@ def build_notification(
             consensus_field = ("Agent consensus", detail)
 
         model_field = _v3_model_confidence_field(model_confidence)
+        combined_field = _combined_v3_confidence_field(consensus, model_confidence)
         movement_field = (
             (
                 "Move since pre-cross",
@@ -1165,6 +1183,7 @@ def build_notification(
                 ("Analysis", analysis),
                 *([consensus_field] if consensus_field is not None else []),
                 model_field,
+                *([combined_field] if combined_field is not None else []),
                 *([movement_field] if movement_field is not None else []),
                 ("Session", session),
             ]
@@ -1186,6 +1205,7 @@ def build_notification(
                 ("Analysis", analysis),
                 *([consensus_field] if consensus_field is not None else []),
                 model_field,
+                *([combined_field] if combined_field is not None else []),
                 *([movement_field] if movement_field is not None else []),
                 ("Session", session),
             ]
