@@ -49,6 +49,16 @@ class EMAMovementJourneyRepository(PostgresRepository):
             for row in self._rows(statement)
         ]
 
+    def latest_for_symbol(self, symbol: str) -> EMAMovementJourney | None:
+        statement = (
+            select(self.table)
+            .where(self.table.c.symbol == symbol.upper())
+            .order_by(self.table.c.started_at.desc())
+            .limit(1)
+        )
+        rows = self._rows(statement)
+        return None if not rows else EMAMovementJourney.model_validate(dict(rows[0])["payload"])
+
     def for_market_date(self, symbol: str, market_date: str) -> list[EMAMovementJourney]:
         statement = (
             select(self.table)
