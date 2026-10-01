@@ -2332,13 +2332,14 @@ Indexes: `ix_v3_ema_holdout_symbol_date` (unique)
 | `journey_id` | `VARCHAR` | no |
 | `detection_id` | `VARCHAR` | no |
 | `symbol` | `VARCHAR` | no |
+| `market_date` | `VARCHAR` | no |
 | `predicted_at` | `TIMESTAMP WITH TIME ZONE` | no |
 | `payload` | `JSONB` | no |
 | `reconciled_at` | `TIMESTAMP WITH TIME ZONE` | yes |
 | `actual_outcome` | `JSONB` | yes |
 | `outcome_class` | `VARCHAR` | yes |
 
-Indexes: `ix_v3_ema_predictions_symbol_time`
+Indexes: `ix_v3_ema_predictions_symbol_date`
 
 Unique: `uq_v3_ema_prediction`
 
