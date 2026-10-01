@@ -183,6 +183,19 @@ def freeze_anchor_features(
         rsi_change=numeric.get("rsi_change"),
         atr=atr,
         volatility_regime=volatility_regime,
+        tick_volume=numeric.get("tick_volume"),
+        volume_ratio_to_median=numeric.get("tick_volume_ratio_to_median"),
+        volume_percentile=numeric.get("tick_volume_percentile"),
+        volume_state=str(categorical.get("volume_state", "UNKNOWN")),
+        volume_price_alignment=str(
+            categorical.get("volume_price_alignment", "UNKNOWN")
+        ),
+        pre_cross_volume_3bar_mean=numeric.get("tick_volume_3bar_mean"),
+        pre_cross_volume_5bar_mean=numeric.get("tick_volume_5bar_mean"),
+        spread_points=numeric.get("spread_points"),
+        high_impact_news=bool(evidence.flags.get("high_impact_news", False)),
+        news_event=categorical.get("news_event"),
+        minutes_to_news=numeric.get("minutes_to_news"),
         session=detection.session.session.value,
         session_phase=session_phase,
         market_structure=str(
