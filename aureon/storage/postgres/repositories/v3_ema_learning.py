@@ -157,6 +157,20 @@ class V3EMALearningRepository(PostgresRepository):
                 )
             )
 
+    def predictions_for_model(
+        self,
+        model_id: str,
+        *,
+        reconciled_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        statement = select(self.predictions).where(
+            self.predictions.c.model_id == model_id
+        )
+        if reconciled_only:
+            statement = statement.where(self.predictions.c.reconciled_at.is_not(None))
+        statement = statement.order_by(self.predictions.c.predicted_at)
+        return [dict(row) for row in self._rows(statement)]
+
     def false_positive_detection_ids(self, symbol: str) -> set[str]:
         statement = (
             select(self.predictions.c.detection_id)
