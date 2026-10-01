@@ -93,6 +93,8 @@ class EMAMovementJourney(AureonDocument):
     end_reason: JourneyEndReason | None = None
     max_favourable_move: float = Field(default=0.0, ge=0)
     max_adverse_move: float = Field(default=0.0, ge=0)
+    bars_observed: int = Field(default=0, ge=0)
+    last_candle_close_at: UtcDatetime | None = None
 
     @property
     def latest_anchor(self) -> EMAJourneyAnchor | None:
@@ -106,4 +108,14 @@ class EMAMovementJourney(AureonDocument):
                 EMAAnchorType.EMA200_CROSS,
             }:
                 return anchor.movement_from_journey_start
+        return None
+
+    @property
+    def movement_remaining_after_latest_cross(self) -> float | None:
+        for anchor in reversed(self.anchors):
+            if anchor.anchor_type in {
+                EMAAnchorType.EMA20_50_CROSS,
+                EMAAnchorType.EMA200_CROSS,
+            }:
+                return anchor.outcome.mfe if anchor.outcome.completed else None
         return None
