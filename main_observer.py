@@ -337,7 +337,10 @@ class Observer:
         if self.ema_journey_tracker is not None:
             try:
                 for detection in detections:
-                    self.ema_journey_tracker.on_detection(detection)
+                    self.ema_journey_tracker.on_detection(
+                        detection,
+                        same_candle=detections,
+                    )
             except Exception:
                 log.exception("V3 EMA journey detection tracking failed")
 
