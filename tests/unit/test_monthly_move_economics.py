@@ -1,4 +1,4 @@
-from aureon.services.monthly_move_economics import simulate_fixed,policy_summary,monthly_report
+from aureon.services.monthly_move_economics import simulate_fixed,monthly_report
 def row(direction="BUY",target=2,stop=None,runner=20):
  surv={str(t):{"7":{"target_bar":target if t<=20 else None,"adverse_bar":stop,"target_first":target is not None and (stop is None or target<stop),"same_bar_ambiguous":target is not None and stop==target}} for t in (5,10,15,20,25,30,40,50)}
  return {"timestamp":"2023-01-02T00:00:00+00:00","direction":direction,"survivability":surv,"continuation_after_10":runner}
