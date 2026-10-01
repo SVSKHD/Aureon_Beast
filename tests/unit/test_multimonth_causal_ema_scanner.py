@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-from datetime import datetime,timedelta,timezone
 from aureon.services.multimonth_causal_ema_scanner import ema,one_position
 def test_ema_is_causal_prefix_stable():
  xs=[float(i) for i in range(1,80)]; a=ema(xs[:60],20); b=ema(xs,20)
