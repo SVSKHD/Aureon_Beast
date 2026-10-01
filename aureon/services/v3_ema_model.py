@@ -250,6 +250,94 @@ def fit_v3_bundle(
     )
 
 
+
+
+def _score_artifact(
+    artifact: dict[str, Any],
+    examples: list[CanonicalEMAExampleV3],
+) -> dict[str, Any]:
+    encoder = V1FeatureEncoder.from_dict(artifact["encoder"])
+    metrics: dict[str, Any] = {}
+    calibration: dict[str, Any] = {}
+    for target in V3_BINARY_TARGETS:
+        labels = [1 if _target(example, target) else 0 for example in examples]
+        probs = []
+        for example in examples:
+            vector = encoder.transform(*raw_v3_features(example.features))
+            probs.append(_predict_binary(artifact["targets"][target], vector))
+        metrics[target] = binary_metrics(labels, probs)
+        calibration[target] = calibration_buckets(probs, [bool(v) for v in labels])
+    return {"metrics": metrics, "calibration": calibration, "samples": len(examples)}
+
+
+def walk_forward_v3(
+    examples: list[CanonicalEMAExampleV3],
+    *,
+    min_train_samples: int = 30,
+    test_days: int = 1,
+) -> dict[str, Any]:
+    """Expanding-window chronological validation by market day."""
+    ordered = sorted(examples, key=lambda e: (e.market_date, e.generated_at, e.detection_id))
+    dates = sorted({e.market_date for e in ordered})
+    folds: list[dict[str, Any]] = []
+    aggregate_labels: dict[str, list[int]] = {t: [] for t in V3_BINARY_TARGETS}
+    aggregate_probs: dict[str, list[float]] = {t: [] for t in V3_BINARY_TARGETS}
+
+    for index in range(1, len(dates), test_days):
+        test_dates = dates[index:index + test_days]
+        if not test_dates:
+            continue
+        train_dates = set(dates[:index])
+        train = [e for e in ordered if e.market_date in train_dates]
+        test = [e for e in ordered if e.market_date in set(test_dates)]
+        if len(train) < min_train_samples or not test:
+            continue
+        first_test_time = min(e.generated_at for e in test)
+        train = [e for e in train if e.outcome.resolved_at <= first_test_time]
+        if len(train) < min_train_samples:
+            continue
+
+        bundle = fit_v3_bundle(
+            train,
+            min_samples=min_train_samples,
+            train_fraction=0.8,
+        )
+        artifact = bundle.artifact()
+        score = _score_artifact(artifact, test)
+        folds.append(
+            {
+                "train_from": min(e.market_date for e in train),
+                "train_through": max(e.market_date for e in train),
+                "test_from": min(test_dates),
+                "test_through": max(test_dates),
+                "train_samples": len(train),
+                "test_samples": len(test),
+                "metrics": score["metrics"],
+            }
+        )
+        encoder = V1FeatureEncoder.from_dict(artifact["encoder"])
+        for example in test:
+            vector = encoder.transform(*raw_v3_features(example.features))
+            for target in V3_BINARY_TARGETS:
+                aggregate_labels[target].append(1 if _target(example, target) else 0)
+                aggregate_probs[target].append(
+                    _predict_binary(artifact["targets"][target], vector)
+                )
+
+    aggregate = {
+        target: binary_metrics(aggregate_labels[target], aggregate_probs[target])
+        for target in V3_BINARY_TARGETS
+        if aggregate_labels[target]
+    }
+    return {
+        "complete": bool(folds),
+        "folds": folds,
+        "aggregate_metrics": aggregate,
+        "out_of_sample_predictions": sum(len(v) for v in aggregate_labels.values())
+        // max(1, len(V3_BINARY_TARGETS)),
+    }
+
+
 class V3EMAModelTrainer:
     """Train a V3 Candidate. Existing EvolutionAgent owns later lifecycle stages."""
 
@@ -273,7 +361,16 @@ class V3EMAModelTrainer:
             row for row in rows
             if not self.examples.is_held_out(row.symbol, row.market_date)
         ]
-        bundle = fit_v3_bundle(rows, min_samples=min_samples)
+        false_positive_ids = self.examples.false_positive_detection_ids(symbol.upper())
+        weighted_rows = list(rows) + [
+            row for row in rows if row.detection_id in false_positive_ids
+        ]
+        bundle = fit_v3_bundle(weighted_rows, min_samples=min_samples)
+        walk_forward = walk_forward_v3(
+            rows,
+            min_train_samples=min_samples,
+            test_days=1,
+        )
         created = to_utc(self._now())
         artifact = bundle.artifact()
         digest = hashlib.sha256(
@@ -305,11 +402,37 @@ class V3EMAModelTrainer:
             trained_through=max(row.market_date for row in rows),
             training_samples=len(rows),
             target_metrics=bundle.metrics,
-            validation_metrics=bundle.validation,
+            validation_metrics={
+                **bundle.validation,
+                "walk_forward": walk_forward,
+                "false_positive_replay_weighted": len(weighted_rows) - len(rows),
+            },
             artifact=artifact,
             created_at=created,
         )
         self.models.write_model(entry)
+
+        # Freeze the next unseen market date immediately after training. The model id
+        # is fixed before any event on that date is scored.
+        from aureon.services.v3_ema_learning import EMAHoldoutDayV3
+        from datetime import UTC, datetime, timedelta
+        next_date = (
+            datetime.fromisoformat(entry.trained_through).replace(tzinfo=UTC)
+            + timedelta(days=1)
+        ).date().isoformat()
+        holdout_id = hashlib.sha256(
+            f"{symbol.upper()}|{next_date}|{entry.model_id}|V3_EMA_HOLDOUT".encode()
+        ).hexdigest()
+        self.examples.write_holdout(
+            EMAHoldoutDayV3(
+                holdout_id=holdout_id,
+                symbol=symbol.upper(),
+                market_date=next_date,
+                frozen_model_id=entry.model_id,
+                status="open",
+                created_at=created,
+            )
+        )
         return entry
 
 
