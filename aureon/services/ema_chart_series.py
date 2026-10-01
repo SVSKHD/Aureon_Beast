@@ -9,9 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from aureon.config.sessions import session_for
 from aureon.engine.indicators import ema
 
 
@@ -27,6 +29,12 @@ class EMACrossPoint:
         if self.kind == "ema20_50":
             return "EMA20↑EMA50" if self.bullish else "EMA20↓EMA50"
         return "Price↑EMA200" if self.bullish else "Price↓EMA200"
+
+
+@dataclass(frozen=True)
+class SessionBoundaryPoint:
+    at: datetime
+    label: str
 
 
 @dataclass(frozen=True)
@@ -95,3 +103,40 @@ def prepare_ema_chart_series(
         ema200=_values(broad),
         crosses=tuple(crosses),
     )
+
+
+
+def session_boundaries_for_bars(
+    bars: list[Any] | tuple[Any, ...],
+    *,
+    market_tz: str,
+) -> tuple[SessionBoundaryPoint, ...]:
+    """Return visible session-open/close transitions without inventing wall-clock marks."""
+    if len(bars) < 2:
+        return ()
+    zone = ZoneInfo(market_tz)
+    sessions = [
+        session_for(bar.at.astimezone(zone))
+        for bar in bars
+    ]
+    out: list[SessionBoundaryPoint] = []
+    for index in range(1, len(bars)):
+        previous = sessions[index - 1]
+        current = sessions[index]
+        if current == previous:
+            continue
+        if previous.value != "off":
+            out.append(
+                SessionBoundaryPoint(
+                    at=bars[index].at,
+                    label=f"{previous.value.upper()} CLOSE",
+                )
+            )
+        if current.value != "off":
+            out.append(
+                SessionBoundaryPoint(
+                    at=bars[index].at,
+                    label=f"{current.value.upper()} OPEN",
+                )
+            )
+    return tuple(out)
