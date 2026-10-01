@@ -1198,6 +1198,10 @@ def _render_detection_chart(
         ema_fast_label="EMA20",
         ema_slow_label="EMA50",
         ema200_label="EMA200",
+        ema_fast_colour=chart_renderer.EMA20_SIGNAL_COLOUR,
+        ema_slow_colour=chart_renderer.EMA50_SIGNAL_COLOUR,
+        ema200_colour=chart_renderer.EMA200_COLOUR,
+        show_ema_end_labels=True,
         session_boundaries=tuple(
             chart_renderer.ChartBoundary(at=item.at, label=item.label)
             for item in boundaries
