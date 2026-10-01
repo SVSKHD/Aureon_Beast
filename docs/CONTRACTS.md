@@ -1466,12 +1466,12 @@ re-derives exactly the token it stamped.
 Phase 13 (plan §2). MT5 remains broker truth, parquet remains the candle archive,
 and the SQLite outbox remains local durability.
 
-Schema revision **0007** (`alembic_version`). `python
+Schema revision **0009** (`alembic_version`). `python
 scripts/migrate.py check` FAILS when the database is behind this OR ahead of it:
 an older build against a newer schema writes NULL into every column it does not
 know about, silently (C-7).
 
-35 tables. Column rule (plan §7): relational for anything filtered,
+39 tables. Column rule (plan §7): relational for anything filtered,
 ordered, identified, claimed or transitioned on; `JSONB` for frozen context read
 back whole. Tick data is never stored here.
 
@@ -1486,6 +1486,7 @@ back whole. Tick data is never stored here.
 | `daily_training_status` | 16 | 1 |
 | `detection_evaluations` | 10 | 1 |
 | `detections` | 25 | 4 |
+| `ema_movement_journeys` | 13 | 2 |
 | `heartbeats` | 5 | 0 |
 | `learning_exams` | 11 | 1 |
 | `market_day_frames` | 10 | 1 |
@@ -1511,6 +1512,9 @@ back whole. Tick data is never stored here.
 | `trade_requests` | 35 | 4 |
 | `trades` | 32 | 4 |
 | `training_examples` | 31 | 2 |
+| `v3_ema_examples` | 13 | 2 |
+| `v3_ema_holdout_days` | 9 | 1 |
+| `v3_ema_predictions` | 12 | 1 |
 | `weekly_reviews` | 8 | 1 |
 
 ### `alerts`
@@ -1706,6 +1710,25 @@ Unique: `uq_detection_evaluation`
 | `mtf` | `JSONB` | yes |
 
 Indexes: `ix_detections_agent_close`, `ix_detections_market_date`, `ix_detections_symbol_close`, `ix_detections_symbol_date`
+
+### `ema_movement_journeys`
+
+| column | type | null |
+|---|---|---|
+| `journey_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `account_scope` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | no |
+| `timeframe` | `VARCHAR` | no |
+| `direction` | `VARCHAR` | no |
+| `market_date` | `VARCHAR` | no |
+| `status` | `VARCHAR` | no |
+| `started_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `ended_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `end_reason` | `VARCHAR` | yes |
+| `payload` | `JSONB` | no |
+
+Indexes: `ix_ema_journeys_date`, `ix_ema_journeys_stream`
 
 ### `heartbeats`
 
@@ -2260,6 +2283,64 @@ Indexes: `ix_trades_open_time`, `ix_trades_position` (unique), `ix_trades_reques
 Indexes: `ix_training_examples_symbol_date`, `ix_training_examples_timeframe`
 
 Unique: `uq_training_example_contract`
+
+### `v3_ema_examples`
+
+| column | type | null |
+|---|---|---|
+| `example_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `journey_id` | `VARCHAR` | no |
+| `detection_id` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | no |
+| `timeframe` | `VARCHAR` | no |
+| `direction` | `VARCHAR` | no |
+| `market_date` | `VARCHAR` | no |
+| `anchor_type` | `VARCHAR` | no |
+| `feature_schema` | `VARCHAR` | no |
+| `label_schema` | `VARCHAR` | no |
+| `payload` | `JSONB` | no |
+| `generated_at` | `TIMESTAMP WITH TIME ZONE` | no |
+
+Indexes: `ix_v3_ema_examples_journey`, `ix_v3_ema_examples_symbol_date`
+
+Unique: `uq_v3_ema_example`
+
+### `v3_ema_holdout_days`
+
+| column | type | null |
+|---|---|---|
+| `holdout_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `symbol` | `VARCHAR` | no |
+| `market_date` | `VARCHAR` | no |
+| `frozen_model_id` | `VARCHAR` | yes |
+| `status` | `VARCHAR` | no |
+| `created_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `scored_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `metrics` | `JSONB` | no |
+
+Indexes: `ix_v3_ema_holdout_symbol_date` (unique)
+
+### `v3_ema_predictions`
+
+| column | type | null |
+|---|---|---|
+| `prediction_id` **(pk)** | `VARCHAR` | no |
+| `schema_version` | `INTEGER` | no |
+| `model_id` | `VARCHAR` | no |
+| `journey_id` | `VARCHAR` | no |
+| `detection_id` | `VARCHAR` | no |
+| `symbol` | `VARCHAR` | no |
+| `predicted_at` | `TIMESTAMP WITH TIME ZONE` | no |
+| `payload` | `JSONB` | no |
+| `reconciled_at` | `TIMESTAMP WITH TIME ZONE` | yes |
+| `actual_outcome` | `JSONB` | yes |
+| `outcome_class` | `VARCHAR` | yes |
+
+Indexes: `ix_v3_ema_predictions_symbol_time`
+
+Unique: `uq_v3_ema_prediction`
 
 ### `weekly_reviews`
 
