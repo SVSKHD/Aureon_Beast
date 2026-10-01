@@ -134,10 +134,22 @@ class V3EMAValidationService:
         return self.learning.update_holdout(released)
 
 
-def _example_summary(examples: list[CanonicalEMAExampleV3]) -> dict[str, Any]:
+def _example_summary(
+    examples: list[CanonicalEMAExampleV3],
+    *,
+    min_cell_samples: int = 20,
+) -> dict[str, Any]:
     if not examples:
-        return {"samples": 0}
+        return {"samples": 0, "insufficient": True}
+    if len(examples) < min_cell_samples:
+        return {
+            "samples": len(examples),
+            "journeys": len({example.journey_id for example in examples}),
+            "insufficient": True,
+            "minimum_required": min_cell_samples,
+        }
     return {
+        "insufficient": False,
         "samples": len(examples),
         "journeys": len({example.journey_id for example in examples}),
         "reach_3_rate": sum(example.outcome.reached_3 for example in examples) / len(examples),
@@ -156,8 +168,12 @@ def _example_summary(examples: list[CanonicalEMAExampleV3]) -> dict[str, Any]:
     }
 
 
-def continuation_report(examples: list[CanonicalEMAExampleV3]) -> dict[str, Any]:
-    """Research TODOs 54-56: compare the three EMA anchor families."""
+def continuation_report(
+    examples: list[CanonicalEMAExampleV3],
+    *,
+    min_cell_samples: int = 20,
+) -> dict[str, Any]:
+    """Compare anchor families without publishing unstable small-cell hit rates."""
     anchor_groups: dict[str, list[CanonicalEMAExampleV3]] = defaultdict(list)
     trend_groups: dict[str, list[CanonicalEMAExampleV3]] = defaultdict(list)
     direction_groups: dict[str, list[CanonicalEMAExampleV3]] = defaultdict(list)
@@ -176,16 +192,31 @@ def continuation_report(examples: list[CanonicalEMAExampleV3]) -> dict[str, Any]
         regime_groups[example.features.volatility_regime].append(example)
 
     return {
-        "by_anchor": {key: _example_summary(rows) for key, rows in anchor_groups.items()},
-        "by_trend": {key: _example_summary(rows) for key, rows in trend_groups.items()},
+        "by_anchor": {
+            key: _example_summary(rows, min_cell_samples=min_cell_samples)
+            for key, rows in anchor_groups.items()
+        },
+        "by_trend": {
+            key: _example_summary(rows, min_cell_samples=min_cell_samples)
+            for key, rows in trend_groups.items()
+        },
         "by_direction": {
-            key: _example_summary(rows) for key, rows in direction_groups.items()
+            key: _example_summary(rows, min_cell_samples=min_cell_samples)
+            for key, rows in direction_groups.items()
         },
-        "by_session": {key: _example_summary(rows) for key, rows in session_groups.items()},
+        "by_session": {
+            key: _example_summary(rows, min_cell_samples=min_cell_samples)
+            for key, rows in session_groups.items()
+        },
         "by_agent_confidence": {
-            key: _example_summary(rows) for key, rows in confidence_groups.items()
+            key: _example_summary(rows, min_cell_samples=min_cell_samples)
+            for key, rows in confidence_groups.items()
         },
-        "by_regime": {key: _example_summary(rows) for key, rows in regime_groups.items()},
+        "by_regime": {
+            key: _example_summary(rows, min_cell_samples=min_cell_samples)
+            for key, rows in regime_groups.items()
+        },
+        "minimum_cell_samples": min_cell_samples,
     }
 
 
