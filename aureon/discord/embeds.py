@@ -242,6 +242,12 @@ def notification_embed(screen: Any) -> Any:
                 value=facts["Model confidence"],
                 inline=False,
             )
+        if facts.get("Combined view"):
+            embed.add_field(
+                name="Combined view",
+                value=facts["Combined view"],
+                inline=False,
+            )
     elif "Cross" in facts:
         embed.description = (
             f"**{facts.get('Price', '—')}** · {_readable(facts.get('Session', '—')).title()}\n"
@@ -270,6 +276,12 @@ def notification_embed(screen: Any) -> Any:
             embed.add_field(
                 name="Model confidence",
                 value=facts["Model confidence"],
+                inline=False,
+            )
+        if facts.get("Combined view"):
+            embed.add_field(
+                name="Combined view",
+                value=facts["Combined view"],
                 inline=False,
             )
         if facts.get("Move since pre-cross"):
