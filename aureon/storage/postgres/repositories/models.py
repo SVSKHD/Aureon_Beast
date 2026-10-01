@@ -89,6 +89,27 @@ class ModelRepository(PostgresRepository):
         rows = self._rows(statement)
         return None if not rows else ModelRegistryEntry.model_validate(self._model_dict(rows[0]))
 
+    def champion_for_contract(
+        self,
+        symbol: str,
+        *,
+        feature_schema: str,
+        label_schema: str,
+        model_schema: str,
+    ) -> ModelRegistryEntry | None:
+        statement = (
+            select(self.models)
+            .where(self.models.c.symbol == symbol.upper())
+            .where(self.models.c.status == ModelLifecycleStatus.CHAMPION.value)
+            .where(self.models.c.feature_schema_version == feature_schema)
+            .where(self.models.c.label_schema_version == label_schema)
+            .where(self.models.c.model_schema_version == model_schema)
+            .order_by(self.models.c.activated_at.desc(), self.models.c.created_at.desc())
+            .limit(1)
+        )
+        rows = self._rows(statement)
+        return None if not rows else ModelRegistryEntry.model_validate(self._model_dict(rows[0]))
+
     def challengers(self, symbol: str) -> list[ModelRegistryEntry]:
         statement = (
             select(self.models)
