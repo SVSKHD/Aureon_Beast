@@ -182,6 +182,16 @@ class V3EMALearningRepository(PostgresRepository):
         )
         return [EMAHoldoutDayV3.model_validate(dict(row)) for row in self._rows(statement)]
 
+    def holdout_for(self, symbol: str, market_date: str) -> EMAHoldoutDayV3 | None:
+        statement = (
+            select(self.holdouts)
+            .where(self.holdouts.c.symbol == symbol.upper())
+            .where(self.holdouts.c.market_date == market_date)
+            .limit(1)
+        )
+        rows = self._rows(statement)
+        return None if not rows else EMAHoldoutDayV3.model_validate(dict(rows[0]))
+
     def is_held_out(self, symbol: str, market_date: str) -> bool:
         statement = (
             select(self.holdouts.c.holdout_id)
