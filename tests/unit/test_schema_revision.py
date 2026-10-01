@@ -39,6 +39,10 @@ EXPECTED_TABLES = {
     "market_days",
     "market_day_frames",
     "sync_batches",
+    "ema_movement_journeys",
+    "v3_ema_examples",
+    "v3_ema_predictions",
+    "v3_ema_holdout_days",
 }
 
 #: C-7's four: additive-only, no destructive downgrade, ever.
@@ -60,11 +64,11 @@ def test_every_table_the_plan_names_exists() -> None:
     assert set(Base.metadata.tables) == EXPECTED_TABLES
 
 
-def test_there_are_exactly_twenty_four() -> None:
+def test_there_are_exactly_twenty_eight() -> None:
     """Stated as a number too, because a set comparison passes if BOTH sides drift."""
     import aureon.storage.postgres.tables  # noqa: F401
 
-    assert len(Base.metadata.tables) == 24
+    assert len(Base.metadata.tables) == 28
 
 
 def test_every_table_has_a_primary_key() -> None:
