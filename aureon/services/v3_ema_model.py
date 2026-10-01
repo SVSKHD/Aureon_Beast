@@ -482,6 +482,8 @@ def predict_v3(
     if sample_count < min_samples:
         return EMAModelConfidenceV3(
             model_id=model.model_id,
+            model_generation=model.generation,
+            trained_through=model.trained_through,
             sample_count=sample_count,
             sufficient_data=False,
             reason=f"INSUFFICIENT TRAINING DATA: {sample_count}/{min_samples}",
@@ -493,6 +495,8 @@ def predict_v3(
     if is_ood:
         return EMAModelConfidenceV3(
             model_id=model.model_id,
+            model_generation=model.generation,
+            trained_through=model.trained_through,
             sample_count=sample_count,
             sufficient_data=False,
             out_of_distribution=True,
@@ -511,6 +515,8 @@ def predict_v3(
 
     return EMAModelConfidenceV3(
         model_id=model.model_id,
+        model_generation=model.generation,
+        trained_through=model.trained_through,
         sample_count=sample_count,
         sufficient_data=True,
         probability_reach_3=probs.get("reach_3"),
