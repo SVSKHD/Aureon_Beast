@@ -2526,6 +2526,7 @@ def build_observer(config: AureonConfig) -> Observer:
     from aureon.services.learning_memory import LearningMemoryService
     from aureon.services.prediction_service import PredictionService
     from aureon.services.shadow_model import ShadowModelService
+    from aureon.services.v3_ema_ops import V3ChampionDriftMonitor
 
     # V1 one-position rule: the Champion still analyses every setup while Aureon holds a
     # position, but answers HOLD_EXISTING_POSITION. The observer only READS trades here.
@@ -2542,6 +2543,10 @@ def build_observer(config: AureonConfig) -> Observer:
         learning=storage.v3_ema_learning,
         models=storage.models,
         min_model_samples=30,
+        drift_monitor=V3ChampionDriftMonitor(
+            models=storage.models,
+            learning=storage.v3_ema_learning,
+        ),
     )
     observer.ema_journey_tracker = EMAMovementJourneyTracker(
         repository=storage.ema_journeys,

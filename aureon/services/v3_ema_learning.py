@@ -90,6 +90,7 @@ class EMAModelConfidenceV3(AureonModel):
     model_generation: int | None = None
     trained_through: str | None = None
     sample_count: int = Field(ge=0)
+    target_sample_counts: dict[str, int] = Field(default_factory=dict)
     sufficient_data: bool
     out_of_distribution: bool = False
     probability_reach_3: float | None = Field(default=None, ge=0, le=1)

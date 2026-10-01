@@ -273,6 +273,67 @@ class ModelRepository(PostgresRepository):
             raise LookupError(f"model {model_id} disappeared after promotion")
         return refreshed
 
+    def rollback_champion_for_contract(
+        self,
+        model_id: str,
+        *,
+        at: Any,
+        reason: str,
+    ) -> ModelRegistryEntry | None:
+        """Retire a degraded Champion and restore the most recent prior Champion."""
+        with self._db.transaction() as connection:
+            current = self._row(model_id, table=self.models, connection=connection)
+            if current is None:
+                raise LookupError(f"no model {model_id}")
+            if str(current["status"]) != ModelLifecycleStatus.CHAMPION.value:
+                raise ValueError(f"model {model_id} is not champion")
+
+            symbol = str(current["symbol"])
+            feature_schema = str(current["feature_schema_version"])
+            label_schema = str(current["label_schema_version"])
+            model_schema = str(current["model_schema_version"])
+
+            candidate = connection.execute(
+                select(self.models)
+                .where(self.models.c.symbol == symbol)
+                .where(self.models.c.model_id != model_id)
+                .where(self.models.c.status == ModelLifecycleStatus.RETIRED.value)
+                .where(self.models.c.feature_schema_version == feature_schema)
+                .where(self.models.c.label_schema_version == label_schema)
+                .where(self.models.c.model_schema_version == model_schema)
+                .where(self.models.c.activated_at.is_not(None))
+                .order_by(
+                    self.models.c.activated_at.desc(),
+                    self.models.c.created_at.desc(),
+                )
+                .limit(1)
+            ).mappings().first()
+
+            connection.execute(
+                update(self.models)
+                .where(self.models.c.model_id == model_id)
+                .values(
+                    status=ModelLifecycleStatus.RETIRED.value,
+                    promotion_reason=reason,
+                )
+            )
+
+            if candidate is None:
+                return None
+
+            replacement_id = str(candidate["model_id"])
+            connection.execute(
+                update(self.models)
+                .where(self.models.c.model_id == replacement_id)
+                .values(
+                    status=ModelLifecycleStatus.CHAMPION.value,
+                    activated_at=at,
+                    promotion_reason=f"rollback after {model_id}: {reason}",
+                )
+            )
+
+        return self.get_model(replacement_id)
+
     def promote_champion(
         self,
         model_id: str,

@@ -27,6 +27,11 @@ from aureon.services.v3_ema_learning import (
     EMAModelConfidenceV3,
     calibration_buckets,
 )
+from aureon.services.v3_reproducibility import (
+    DEFAULT_RANDOM_SEED,
+    current_code_commit,
+    dataset_snapshot_hash,
+)
 
 V3_BINARY_TARGETS = (
     "clean_10",
@@ -485,10 +490,18 @@ def walk_forward_v3(
 class V3EMAModelTrainer:
     """Train a V3 Candidate. Existing EvolutionAgent owns later lifecycle stages."""
 
-    def __init__(self, examples: Any, models: Any, *, now: Any = utc_now) -> None:
+    def __init__(
+        self,
+        examples: Any,
+        models: Any,
+        *,
+        now: Any = utc_now,
+        random_seed: int = DEFAULT_RANDOM_SEED,
+    ) -> None:
         self.examples = examples
         self.models = models
         self._now = now
+        self.random_seed = int(random_seed)
 
     def train_candidate(
         self,
@@ -521,6 +534,14 @@ class V3EMAModelTrainer:
         )
         created = to_utc(self._now())
         artifact = bundle.artifact()
+        dataset_hash = dataset_snapshot_hash(rows)
+        code_commit = current_code_commit()
+        provenance = {
+            "dataset_snapshot_hash": dataset_hash,
+            "random_seed": self.random_seed,
+            "code_commit": code_commit,
+        }
+        artifact["provenance"] = provenance
         digest = hashlib.sha256(
             json.dumps(
                 {
@@ -528,6 +549,7 @@ class V3EMAModelTrainer:
                     "schema": EMA_MODEL_SCHEMA_V3,
                     "examples": [row.example_id for row in rows],
                     "artifact": artifact,
+                    "provenance": provenance,
                 },
                 sort_keys=True,
                 separators=(",", ":"),
@@ -549,6 +571,11 @@ class V3EMAModelTrainer:
             trained_from=min(row.market_date for row in rows),
             trained_through=max(row.market_date for row in rows),
             training_samples=len(rows),
+            hyperparameters={
+                "random_seed": self.random_seed,
+                "dataset_snapshot_hash": dataset_hash,
+                "code_commit": code_commit,
+            },
             target_metrics=bundle.metrics,
             validation_metrics={
                 **bundle.validation,
@@ -557,6 +584,7 @@ class V3EMAModelTrainer:
                     row.detection_id in false_positive_ids for row in rows
                 ),
                 "journey_weighting": "each journey totals 1.0 training weight",
+                "provenance": provenance,
             },
             artifact=artifact,
             created_at=created,
@@ -606,12 +634,17 @@ def predict_v3(
         raise ValueError("V3 EMA model contract mismatch")
 
     sample_count = int(model.training_samples)
+    target_sample_counts = {
+        name: int(metric.samples)
+        for name, metric in model.target_metrics.items()
+    }
     if sample_count < min_samples:
         return EMAModelConfidenceV3(
             model_id=model.model_id,
             model_generation=model.generation,
             trained_through=model.trained_through,
             sample_count=sample_count,
+            target_sample_counts=target_sample_counts,
             sufficient_data=False,
             reason=f"INSUFFICIENT TRAINING DATA: {sample_count}/{min_samples}",
         )
@@ -625,6 +658,7 @@ def predict_v3(
                 model_generation=model.generation,
                 trained_through=model.trained_through,
                 sample_count=sample_count,
+                target_sample_counts=target_sample_counts,
                 sufficient_data=False,
                 reason=(
                     "BASE_RATE_GATE_FAILED: model has not beaten "
@@ -639,6 +673,7 @@ def predict_v3(
                 model_generation=model.generation,
                 trained_through=model.trained_through,
                 sample_count=sample_count,
+                target_sample_counts=target_sample_counts,
                 sufficient_data=False,
                 reason=(
                     "INSUFFICIENT CELL DATA: "
@@ -655,6 +690,7 @@ def predict_v3(
             model_generation=model.generation,
             trained_through=model.trained_through,
             sample_count=sample_count,
+            target_sample_counts=target_sample_counts,
             sufficient_data=False,
             out_of_distribution=True,
             reason=f"OUT_OF_DISTRIBUTION: {ood_reason}",
@@ -675,6 +711,7 @@ def predict_v3(
         model_generation=model.generation,
         trained_through=model.trained_through,
         sample_count=sample_count,
+        target_sample_counts=target_sample_counts,
         sufficient_data=True,
         probability_reach_3=probs.get("reach_3"),
         probability_reach_5=probs.get("reach_5"),
