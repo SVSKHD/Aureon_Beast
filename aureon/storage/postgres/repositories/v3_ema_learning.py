@@ -78,6 +78,7 @@ class V3EMALearningRepository(PostgresRepository):
         journey_id: str,
         detection_id: str,
         symbol: str,
+        market_date: str,
         predicted_at: Any,
         payload: dict[str, Any],
     ) -> None:
@@ -89,6 +90,7 @@ class V3EMALearningRepository(PostgresRepository):
                 "journey_id": journey_id,
                 "detection_id": detection_id,
                 "symbol": symbol.upper(),
+                "market_date": market_date,
                 "predicted_at": predicted_at,
                 "payload": payload,
                 "reconciled_at": None,
@@ -182,17 +184,13 @@ class V3EMALearningRepository(PostgresRepository):
         statement = (
             select(self.predictions)
             .where(self.predictions.c.symbol == symbol.upper())
+            .where(self.predictions.c.market_date == market_date)
         )
         if model_id is not None:
             statement = statement.where(self.predictions.c.model_id == model_id)
         if reconciled_only:
             statement = statement.where(self.predictions.c.reconciled_at.is_not(None))
-        rows = [dict(row) for row in self._rows(statement)]
-        return [
-            row
-            for row in rows
-            if str(row["predicted_at"])[:10] == market_date
-        ]
+        return [dict(row) for row in self._rows(statement)]
 
     def false_positive_detection_ids(self, symbol: str) -> set[str]:
         statement = (
