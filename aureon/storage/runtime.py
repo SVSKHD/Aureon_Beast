@@ -153,7 +153,11 @@ class ModelReadAdapter:
 class V3EMAReadAdapter:
     """Read-only V3 EMA learning surface exposed to Discord."""
 
-    def __init__(self, learning: V3EMALearningRepository, journeys: EMAMovementJourneyRepository) -> None:
+    def __init__(
+        self,
+        learning: V3EMALearningRepository,
+        journeys: EMAMovementJourneyRepository,
+    ) -> None:
         self._learning = learning
         self._journeys = journeys
 
