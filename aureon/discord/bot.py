@@ -133,7 +133,12 @@ class AureonBot(discord.Client):
             if context.config.discord_guild_id
             else None
         )
-        self.notifier = Notifier(context, send=self.announce, edit=self.revise)
+        self.notifier = Notifier(
+            context,
+            send=self.announce,
+            edit=self.revise,
+            create_thread=self.create_thread,
+        )
         self._notifier_task: asyncio.Task[None] | None = None
         #: 11B. Optional: a bot without one behaves exactly as it did before, at the awake
         #: cadence all week. Set by ``main_discord`` when there is a heartbeat to slow.
@@ -250,6 +255,22 @@ class AureonBot(discord.Client):
         recipient = await self._recipient(target, direct=direct)
         message = await recipient.send(embed=embed, view=view, **_attachment(chart, filename))
         return None if message is None else str(message.id)
+
+    async def create_thread(
+        self,
+        target: int | str,
+        message_id: str,
+        *,
+        name: str,
+    ) -> str | None:
+        """Create a Discord thread from one journey root message."""
+        recipient = await self._recipient(target, direct=False)
+        message = await recipient.fetch_message(int(message_id))
+        thread = await message.create_thread(
+            name=name[:100],
+            auto_archive_duration=1440,
+        )
+        return None if thread is None else str(thread.id)
 
     async def revise(
         self,
