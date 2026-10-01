@@ -6,12 +6,11 @@ historical examples and never infer unavailable candle paths.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
 from typing import Any
 
 from aureon.ml.logistic import binary_metrics
 from aureon.models.base import to_utc, utc_now
-from aureon.models.ema_journey_v3 import EMAAnchorType, EMAMovementJourney
+from aureon.models.ema_journey_v3 import EMAMovementJourney
 from aureon.services.v3_ema_learning import (
     CanonicalEMAExampleV3,
     EMAHoldoutDayV3,
