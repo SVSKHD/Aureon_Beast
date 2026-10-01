@@ -39,28 +39,41 @@ def fit_logistic(
     iterations: int = 500,
     learning_rate: float = 0.05,
     l2: float = 0.001,
+    sample_weights: list[float] | None = None,
 ) -> LogisticModel:
     if not vectors or len(vectors) != len(labels):
         raise ValueError("vectors and labels must be non-empty and aligned")
     width = len(vectors[0])
     if any(len(vector) != width for vector in vectors):
         raise ValueError("all vectors must have the same width")
+    if sample_weights is None:
+        sample_weights = [1.0] * len(labels)
+    if len(sample_weights) != len(labels) or any(weight <= 0 for weight in sample_weights):
+        raise ValueError("sample_weights must be positive and aligned")
 
     weights = [0.0] * width
-    positives = sum(labels)
-    negatives = len(labels) - positives
+    positives = sum(weight * label for weight, label in zip(sample_weights, labels, strict=True))
+    negatives = sum(
+        weight * (1 - label)
+        for weight, label in zip(sample_weights, labels, strict=True)
+    )
     bias = math.log((positives + 1.0) / (negatives + 1.0))
 
     for _ in range(iterations):
         grad_w = [0.0] * width
         grad_b = 0.0
-        for vector, label in zip(vectors, labels, strict=True):
+        for vector, label, sample_weight in zip(
+            vectors,
+            labels,
+            sample_weights,
+            strict=True,
+        ):
             score = bias + sum(w * x for w, x in zip(weights, vector, strict=True))
-            error = _sigmoid(score) - label
+            error = (_sigmoid(score) - label) * sample_weight
             grad_b += error
             for index, value in enumerate(vector):
                 grad_w[index] += error * value
-        size = float(len(labels))
+        size = float(sum(sample_weights))
         bias -= learning_rate * grad_b / size
         for index in range(width):
             gradient = grad_w[index] / size + l2 * weights[index]
