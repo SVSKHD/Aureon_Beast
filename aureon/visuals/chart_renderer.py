@@ -484,7 +484,7 @@ def build(
 
     decimals = _decimals(spec, bars)
     figure = _figure()
-    right_edge = 0.70 if overlays.analysis_lines else 0.88
+    right_edge = 0.74 if overlays.analysis_lines else 0.88
     grid = figure.add_gridspec(
         PRICE_HEIGHT_RATIO + 1,
         1,
@@ -816,7 +816,7 @@ def build(
     # ── the right-side analysis panel ──────────────────────────────────────────
     if overlays.analysis_lines:
         figure.text(
-            0.735,
+            0.765,
             0.885,
             "MARKET CONTEXT",
             fontsize=11,
@@ -824,14 +824,14 @@ def build(
             color="#222222",
             va="top",
         )
-        panel_lines = overlays.analysis_lines[:18]
+        panel_lines = overlays.analysis_lines[:10]
         truncated = len(overlays.analysis_lines) > len(panel_lines)
         if truncated:
             panel_lines = panel_lines[:-1]
         panel_font = 7.8
         panel_spacing = 1.30
         figure.text(
-            0.735,
+            0.765,
             0.845,
             "\n".join(panel_lines),
             fontsize=panel_font,
@@ -845,7 +845,7 @@ def build(
             # and a reader (or a test) should find it as a distinct string.
             line_height = panel_font * panel_spacing / 72.0 / figure.get_figheight()
             figure.text(
-                0.735,
+                0.765,
                 0.845 - line_height * (len(panel_lines) + 0.4),
                 "… more context on Discord card",
                 fontsize=panel_font,
