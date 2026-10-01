@@ -717,3 +717,31 @@ def test_signal_chart_can_hide_market_structure_clutter() -> None:
     for label in ("HH", "LH", "HL", "LL"):
         assert label not in drawn
 
+
+
+def test_ema_cross_markers_are_drawn_with_explicit_labels() -> None:
+    made = bars("XAUUSD", 40)
+    overlay = cr.Overlays(
+        show_structure=False,
+        detections=(
+            cr.ChartMark(
+                at=made[20].at,
+                price=made[20].close,
+                label="EMA20↑EMA50",
+                direction_context="bullish",
+            ),
+            cr.ChartMark(
+                at=made[25].at,
+                price=made[25].close,
+                label="Price↑EMA200",
+                direction_context="bullish",
+            ),
+        ),
+    )
+
+    figure = cr.build("XAUUSD", "M5", made, spec_for("XAUUSD"), overlay)
+    drawn = texts(figure)
+
+    assert "EMA20↑EMA50" in drawn
+    assert "Price↑EMA200" in drawn
+
