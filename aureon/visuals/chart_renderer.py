@@ -86,8 +86,9 @@ PRICE_HEIGHT_RATIO = 4
 #: Colours. Named so a change is one edit and so the reasons can be written down.
 UP_COLOUR = "#2e7d52"
 DOWN_COLOUR = "#b23a3a"
-FAST_COLOUR = "#1f6fb2"
-SLOW_COLOUR = "#8a6d3b"
+FAST_COLOUR = "#1565C0"  # EMA20: blue
+SLOW_COLOUR = "#F9A825"  # EMA50: yellow/gold for visibility on white
+EMA200_COLOUR = "#D32F2F"  # EMA200: red
 LEVEL_COLOUR = "#666666"
 #: The invalidation line. Red, like a stop, and labelled so nobody reads it as one -- it is where
 #: the structure stops being true, and nothing in this system places an order from it.
@@ -137,6 +138,14 @@ class ChartLevel:
 
 
 @dataclass(frozen=True)
+class ChartBoundary:
+    """A vertical session boundary supplied by the session/context layer."""
+
+    at: datetime
+    label: str
+
+
+@dataclass(frozen=True)
 class ChartMark:
     """Something that happened at a bar: a detection, or a setup event."""
 
@@ -163,9 +172,12 @@ class Overlays:
     subtitle: str = ""
     ema_fast: tuple[float | None, ...] = ()
     ema_slow: tuple[float | None, ...] = ()
-    ema_fast_label: str = "EMA fast"
-    ema_slow_label: str = "EMA slow"
+    ema200: tuple[float | None, ...] = ()
+    ema_fast_label: str = "EMA20"
+    ema_slow_label: str = "EMA50"
+    ema200_label: str = "EMA200"
     levels: tuple[ChartLevel, ...] = ()
+    session_boundaries: tuple[ChartBoundary, ...] = ()
     #: ``(low, high)`` of the value area, shaded. Not a range to trade.
     value_area: tuple[float, float] | None = None
     poc_price: float | None = None
@@ -591,19 +603,75 @@ def build(
     for series, colour, name in (
         (overlays.ema_fast, FAST_COLOUR, overlays.ema_fast_label),
         (overlays.ema_slow, SLOW_COLOUR, overlays.ema_slow_label),
+        (overlays.ema200, EMA200_COLOUR, overlays.ema200_label),
     ):
         if not series:
             continue
         aligned = _pad(series, len(bars))
         if not _finite(aligned):
             continue
+        plotted = [
+            v if v is not None and math.isfinite(v) else float("nan")
+            for v in aligned
+        ]
         price.plot(
             xs,
-            [v if v is not None and math.isfinite(v) else float("nan") for v in aligned],
+            plotted,
             color=colour,
-            linewidth=1.3,
+            linewidth=1.8 if name == overlays.ema200_label else 1.45,
             label=name,
             zorder=4,
+        )
+        finite_pairs = [
+            (index, value)
+            for index, value in enumerate(aligned)
+            if value is not None and math.isfinite(value)
+        ]
+        if finite_pairs:
+            last_index, last_value = finite_pairs[-1]
+            price.annotate(
+                name,
+                xy=(last_index, last_value),
+                xytext=(6, 0),
+                textcoords="offset points",
+                fontsize=7.2,
+                fontweight="bold",
+                color=colour,
+                va="center",
+                bbox=dict(
+                    boxstyle="round,pad=0.12",
+                    fc="white",
+                    ec=colour,
+                    alpha=0.88,
+                ),
+                zorder=8,
+            )
+
+
+    # ── session open/close boundaries ──────────────────────────────────────────
+    times = [bar.at for bar in bars]
+    for boundary in overlays.session_boundaries:
+        index = _nearest(times, boundary.at)
+        if index is None:
+            continue
+        price.axvline(
+            index,
+            color="#777777",
+            linestyle=":",
+            linewidth=0.9,
+            alpha=0.75,
+            zorder=1,
+        )
+        price.annotate(
+            boundary.label,
+            xy=(index, 1.0),
+            xycoords=("data", "axes fraction"),
+            xytext=(3, -4),
+            textcoords="offset points",
+            fontsize=6.5,
+            color="#555555",
+            va="top",
+            rotation=90,
         )
 
     # ── the named levels, labelled in the right margin ────────────────────────
@@ -655,14 +723,21 @@ def build(
     # All stored detections remain visible as small markers, but only the highest-value
     # annotations get text. Labelling every wick/liquidity/breakout event made active-session
     # charts unreadable and hid the candles the marks were meant to explain.
-    times = [bar.at for bar in bars]
     visible_detections = [
         mark for mark in overlays.detections if _nearest(times, mark.at) is not None
     ]
     priority = [
         mark
         for mark in visible_detections
-        if mark.label.upper().startswith(("BULL CROSS", "BEAR CROSS", "EMA CROSS"))
+        if mark.label.upper().startswith(
+            (
+                "BULL CROSS",
+                "BEAR CROSS",
+                "EMA CROSS",
+                "EMA20",
+                "PRICE",
+            )
+        )
     ]
     recent_other = [
         mark for mark in visible_detections
@@ -858,6 +933,7 @@ __all__ = [
     "MIN_BARS",
     "VOLUME_LABEL",
     "ChartBar",
+    "ChartBoundary",
     "ChartLevel",
     "ChartMark",
     "Overlays",
