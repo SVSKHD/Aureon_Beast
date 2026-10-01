@@ -1051,6 +1051,63 @@ def _v3_model_confidence_field(payload: dict | None) -> tuple[str, str]:
     return ("Model confidence", value)
 
 
+
+
+def build_v3_journey_outcome_summary(
+    journey: Any,
+    predictions: dict[str, dict[str, Any]] | None = None,
+    *,
+    show_model_confidence: bool = True,
+) -> tuple[str, str]:
+    """Compact prediction-vs-actual closeout for one EMA movement journey."""
+    predictions = predictions or {}
+    direction = journey.direction.value.upper()
+    title = f"{journey.symbol} · {direction} EMA JOURNEY CLOSED"
+    lines = [
+        f"Journey `{journey.journey_id[:12]}`",
+        f"End reason: {journey.end_reason.value if journey.end_reason else 'unknown'}",
+    ]
+    for anchor in journey.anchors:
+        label = {
+            "pre_cross": "Pre-cross",
+            "ema20_50_cross": "EMA20/50",
+            "ema200_cross": "EMA200",
+        }.get(anchor.anchor_type.value, anchor.anchor_type.value)
+        outcome = anchor.outcome
+        reached = [
+            f"+{key}"
+            for key, target in outcome.targets.items()
+            if target.reached
+        ]
+        actual = (
+            f"MFE {_fmt(outcome.mfe)} · MAE {_fmt(outcome.mae)} · "
+            f"reached {', '.join(reached) if reached else 'none'}"
+        )
+        lines.append(f"**{label} actual:** {actual}")
+
+        if show_model_confidence:
+            row = predictions.get(anchor.detection_id) or {}
+            payload = row.get("payload") if isinstance(row, dict) else None
+            payload = payload or {}
+            if payload.get("sufficient_data"):
+                p3 = payload.get("probability_reach_3")
+                p10 = payload.get("probability_reach_10")
+                counts = payload.get("target_sample_counts") or {}
+                n3 = int(counts.get("reach_3") or payload.get("sample_count") or 0)
+                n10 = int(counts.get("reach_10") or payload.get("sample_count") or 0)
+                p3_text = "—" if p3 is None else f"{float(p3) * 100:.0f}% (n={n3})"
+                p10_text = "—" if p10 is None else f"{float(p10) * 100:.0f}% (n={n10})"
+                lines.append(
+                    f"**{label} predicted:** P(+3) {p3_text} · P(+10) {p10_text}"
+                )
+            elif payload:
+                lines.append(
+                    f"**{label} predicted:** {payload.get('reason') or 'insufficient'}"
+                )
+    lines.append("Historical probability review only — no automatic trade action.")
+    return title, "\n".join(lines)
+
+
 def build_notification(
     detection: Detection,
     *,
