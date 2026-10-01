@@ -5,12 +5,8 @@ and deterministic retraining triggers.
 """
 from __future__ import annotations
 
-import hashlib
-import json
-import os
-import subprocess
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from aureon.ml.logistic import binary_metrics
@@ -18,46 +14,7 @@ from aureon.models.base import to_utc, utc_now
 from aureon.models.ema_journey_v3 import EMAAnchorFeaturesV3
 from aureon.services.v3_ema_learning import CanonicalEMAExampleV3, calibration_buckets
 from aureon.services.v3_ema_model import expected_calibration_error, predict_v3
-
-
-DEFAULT_RANDOM_SEED = 0
-
-
-def dataset_snapshot_hash(examples: list[CanonicalEMAExampleV3]) -> str:
-    canonical = [
-        example.model_dump(mode="json")
-        for example in sorted(
-            examples,
-            key=lambda row: (row.market_date, row.generated_at, row.example_id),
-        )
-    ]
-    blob = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(blob).hexdigest()
-
-
-def current_code_commit() -> str:
-    env = os.getenv("AUREON_GIT_COMMIT")
-    if env:
-        return env.strip()
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
-            text=True,
-            timeout=3,
-        ).strip()
-    except Exception:
-        return "unknown"
-
-
-def prediction_fingerprint(payload: Any) -> str:
-    data = (
-        payload.model_dump(mode="json")
-        if hasattr(payload, "model_dump")
-        else payload
-    )
-    return hashlib.sha256(
-        json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+from aureon.services.v3_reproducibility import stable_payload_hash
 
 
 def assert_live_replay_parity(
@@ -69,8 +26,8 @@ def assert_live_replay_parity(
     min_samples: int = 30,
     min_cell_samples: int = 20,
 ) -> dict[str, str]:
-    live_feature_hash = prediction_fingerprint(live_features)
-    replay_feature_hash = prediction_fingerprint(replay_features)
+    live_feature_hash = stable_payload_hash(live_features)
+    replay_feature_hash = stable_payload_hash(replay_features)
     if live_feature_hash != replay_feature_hash:
         raise AssertionError(
             "V3 feature parity failed: live and replay snapshots differ"
@@ -89,8 +46,8 @@ def assert_live_replay_parity(
         direction=direction,
         min_cell_samples=min_cell_samples,
     )
-    live_prediction_hash = prediction_fingerprint(live)
-    replay_prediction_hash = prediction_fingerprint(replay)
+    live_prediction_hash = stable_payload_hash(live)
+    replay_prediction_hash = stable_payload_hash(replay)
     if live_prediction_hash != replay_prediction_hash:
         raise AssertionError(
             "V3 prediction parity failed: live and replay outputs differ"
