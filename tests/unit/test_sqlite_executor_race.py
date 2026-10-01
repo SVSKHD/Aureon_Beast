@@ -9,6 +9,7 @@ from aureon.models.enums import TradeRequestStatus
 from aureon.models.market import QuoteSnapshot
 from aureon.storage.local_database import LocalDatabase
 from aureon.storage.postgres.repositories.trade_requests import (
+    COLLECTION,
     ClaimRejected,
     TradeRequestRepository,
 )
@@ -62,7 +63,7 @@ def test_two_sqlite_executors_racing_one_confirmation_produce_one_claim(tmp_path
     assert stored.status is TradeRequestStatus.EXECUTING
     assert stored.executor_instance_id in {"executor-a", "executor-b"}
 
-    audit = seed.audit.for_document("trade_requests", "race-1")
+    audit = seed.audit.for_document(COLLECTION, "race-1")
     claims = [row for row in audit if row.action == "trade_request.claim"]
     assert len(claims) == 1
     database.dispose()
