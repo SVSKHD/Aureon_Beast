@@ -1004,7 +1004,13 @@ def _combined_v3_confidence_field(
     if not payload or not payload.get("sufficient_data"):
         return ("Combined view", f"Agents {agent} · Model insufficient")
     p10 = payload.get("probability_reach_10")
-    model = "—" if p10 is None else f"P(+10) {float(p10) * 100:.0f}%"
+    counts = payload.get("target_sample_counts") or {}
+    n10 = int(counts.get("reach_10") or payload.get("sample_count") or 0)
+    model = (
+        "—"
+        if p10 is None
+        else f"P(+10) {float(p10) * 100:.0f}% (n={n10})"
+    )
     return ("Combined view", f"Agents {agent} · Model {model}")
 
 
