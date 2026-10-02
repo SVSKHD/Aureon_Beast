@@ -21,6 +21,7 @@ from aureon.models.ema_journey_v4 import (
     V4RemainingMovementExample,
 )
 from aureon.models.enums import Direction, SessionName, Timeframe
+from aureon.models.market import Candle
 from aureon.models.mtf import MtfContext
 from aureon.services.v4_ema_model import raw_v4_features
 
@@ -94,6 +95,114 @@ class SessionCloseOutcome:
     ema20_50_crosses: int
     ema200_crosses: int
     journeys_seen: int
+
+
+@dataclass
+class _SessionRuntime:
+    context: SessionOpenContext
+    high: float
+    low: float
+    close: float
+    ema20_50_crosses: int = 0
+    ema200_crosses: int = 0
+    journeys_seen: int = 0
+
+
+class V4SessionTracker:
+    """Independent Asia/London/New York windows, including simultaneous overlap."""
+
+    def __init__(self) -> None:
+        self._active: dict[tuple[str, SessionName], _SessionRuntime] = {}
+        self._last_closed: dict[str, SessionCloseOutcome] = {}
+
+    def on_closed_candle(
+        self,
+        candle: Candle,
+        *,
+        ema20: float | None,
+        ema50: float | None,
+        ema200: float | None,
+        ema20_50_crosses: int = 0,
+        ema200_crosses: int = 0,
+        journeys_seen: int = 0,
+    ) -> tuple[list[SessionOpenContext], list[SessionCloseOutcome]]:
+        market_dt = candle.open_time.market
+        now_active = set(active_sessions(market_dt))
+        opens: list[SessionOpenContext] = []
+        closes: list[SessionCloseOutcome] = []
+
+        # Close every session that was active for this symbol but no longer contains
+        # this candle. London can close while New York remains active.
+        for key, runtime in list(self._active.items()):
+            symbol, session = key
+            if symbol != candle.symbol or session in now_active:
+                continue
+            outcome = self._close(runtime, candle.open_time.market)
+            closes.append(outcome)
+            self._last_closed[candle.symbol] = outcome
+            del self._active[key]
+
+        prior = self._last_closed.get(candle.symbol)
+        for session in now_active:
+            key = (candle.symbol, session)
+            runtime = self._active.get(key)
+            if runtime is None:
+                context = SessionOpenContext(
+                    symbol=candle.symbol,
+                    session=session,
+                    opened_at=candle.open_time.market,
+                    price=candle.open,
+                    ema20=ema20,
+                    ema50=ema50,
+                    ema200=ema200,
+                    prior_session_high=None if prior is None else prior.high,
+                    prior_session_low=None if prior is None else prior.low,
+                    prior_session_close=None if prior is None else prior.close_price,
+                )
+                runtime = _SessionRuntime(
+                    context=context,
+                    high=candle.high,
+                    low=candle.low,
+                    close=candle.close,
+                )
+                self._active[key] = runtime
+                opens.append(context)
+            else:
+                runtime.high = max(runtime.high, candle.high)
+                runtime.low = min(runtime.low, candle.low)
+                runtime.close = candle.close
+
+            runtime.ema20_50_crosses += int(ema20_50_crosses)
+            runtime.ema200_crosses += int(ema200_crosses)
+            runtime.journeys_seen += int(journeys_seen)
+
+        return opens, closes
+
+    def close_all(self, at: datetime) -> list[SessionCloseOutcome]:
+        closed = [self._close(runtime, at) for runtime in self._active.values()]
+        for outcome in closed:
+            self._last_closed[outcome.symbol] = outcome
+        self._active.clear()
+        return closed
+
+    @staticmethod
+    def _close(runtime: _SessionRuntime, at: datetime) -> SessionCloseOutcome:
+        context = runtime.context
+        return SessionCloseOutcome(
+            symbol=context.symbol,
+            session=context.session,
+            opened_at=context.opened_at,
+            closed_at=at,
+            open_price=context.price,
+            close_price=runtime.close,
+            high=runtime.high,
+            low=runtime.low,
+            net_move=runtime.close - context.price,
+            range=runtime.high - runtime.low,
+            ema20_50_crosses=runtime.ema20_50_crosses,
+            ema200_crosses=runtime.ema200_crosses,
+            journeys_seen=runtime.journeys_seen,
+        )
 
 
 def sessionwise_remaining_report(
