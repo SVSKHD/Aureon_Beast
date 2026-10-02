@@ -254,7 +254,7 @@ def train_sessionwise_continuation(
     examples: list[V4RemainingMovementExample],
     *,
     min_samples: int = 20,
-) -> dict[str, "V4ContinuationBundle"]:
+) -> dict[str, V4ContinuationBundle]:
     """Train independent short-continuation specialists when a session has support."""
     return {
         session: fit_continuation_specialist(rows, min_samples=min_samples)
