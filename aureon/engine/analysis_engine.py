@@ -165,6 +165,7 @@ class IndicatorRead:
 
     ema_fast: float | None = None
     ema_slow: float | None = None
+    ema200: float | None = None
     previous_ema_fast: float | None = None
     previous_ema_slow: float | None = None
     rsi: float | None = None
@@ -448,6 +449,8 @@ class AnalysisEngine:
                 previous_ema_fast=_last(fast, back=1),
                 previous_ema_slow=_last(slow, back=1),
             )
+        if len(closes) > 200:
+            read = replace(read, ema200=_last(ema(closes, 200)))
         if len(closes) > RSI_PERIOD:
             values = rsi_series(closes, RSI_PERIOD)
             read = replace(
