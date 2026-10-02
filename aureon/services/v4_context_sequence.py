@@ -250,6 +250,21 @@ def sessionwise_training_sets(
     }
 
 
+def train_sessionwise_continuation(
+    examples: list[V4RemainingMovementExample],
+    *,
+    min_samples: int = 20,
+) -> dict[str, "V4ContinuationBundle"]:
+    """Train independent short-continuation specialists when a session has support."""
+    return {
+        session: fit_continuation_specialist(rows, min_samples=min_samples)
+        for session, rows in sessionwise_training_sets(
+            examples,
+            min_samples=min_samples,
+        ).items()
+    }
+
+
 def freeze_htf_context(mtf: MtfContext | None) -> V4HTFContext:
     """Freeze only M15/H1 reads already observable at the M5 anchor close."""
     if mtf is None:
