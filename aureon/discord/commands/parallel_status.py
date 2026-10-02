@@ -45,18 +45,21 @@ class ParallelStatusCommands:
             return
 
         detail = dict(heartbeat.detail or {})
-        enabled = bool(detail.get("parallel_enabled"))
+        diagnostics_present = detail.get("diagnostics_version") is not None or "parallel_enabled" in detail
+        enabled = detail.get("parallel_enabled") if diagnostics_present else None
         streams = detail.get("streams") if isinstance(detail.get("streams"), dict) else {}
         expected = len(self.context.config.symbols) * len(self.context.config.timeframes)
-        healthy = sum(
-            1 for value in streams.values()
-            if isinstance(value, dict) and value.get("status") == "RUNNING"
-        )
-        mode = "🟢 PARALLEL" if enabled else "🟡 SEQUENTIAL"
+        reporting = sum(1 for value in streams.values() if isinstance(value, dict))
+        if enabled is True:
+            mode = "🟢 PARALLEL"
+        elif enabled is False:
+            mode = "🟡 SEQUENTIAL"
+        else:
+            mode = "⚪ UNKNOWN — observer diagnostics not published yet"
         lines = [
             f"**Mode:** {mode}",
             f"**Broker:** {detail.get('broker') or self.context.config.broker_source}",
-            f"**Workers:** {healthy}/{expected} reporting",
+            f"**Workers:** {reporting}/{expected} reporting",
             f"**Provider access:** {detail.get('provider_access', 'unknown')}",
         ]
 
@@ -80,10 +83,16 @@ class ParallelStatusCommands:
                     or stream.get("last_candle_open")
                     if isinstance(stream, dict) else None
                 )
+                worker_state = str(stream.get("status") or "UNKNOWN")
+                worker_label = {
+                    "RUNNING": "🟢 RUNNING",
+                    "PARKED": "🌙 PARKED · market closed",
+                    "WAITING": "⚪ WAITING",
+                }.get(worker_state, f"⚪ {worker_state}")
                 lines.extend([
                     "",
                     f"**{symbol} · {timeframe.value}**",
-                    f"Worker: {'🟢 RUNNING' if stream.get('status') == 'RUNNING' else '⚪ WAITING'}",
+                    f"Worker: {worker_label}",
                     f"Bid / Ask: {bid if bid is not None else '—'} / {ask if ask is not None else '—'}",
                     f"Tick age: {_seconds(_age_seconds(quote_at))}",
                     f"Processing: {f'{float(processing):.2f} ms' if processing is not None else '—'}",
