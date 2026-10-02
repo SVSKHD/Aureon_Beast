@@ -132,3 +132,109 @@ class V4JourneySnapshot(AureonModel):
     pre_cross_seconds: float = Field(default=0.0, ge=0)
     movement_consumed_at_latest_cross: float | None = None
     cross_order: str = "NONE"
+
+
+class V4PullbackClass(StrEnum):
+    SHALLOW = "shallow_pullback"
+    NORMAL = "normal_pullback"
+    DEEP = "deep_pullback"
+
+
+class V4PullbackStatus(StrEnum):
+    ACTIVE = "active"
+    REENTRY_OBSERVED = "reentry_observed"
+    CONTINUED = "continued"
+    FAILED = "failed"
+    CLOSED = "closed"
+
+
+class V4RetestKind(StrEnum):
+    EMA20 = "ema20_retest"
+    EMA50 = "ema50_retest"
+    EMA200 = "ema200_retest"
+    STRUCTURE = "structure_retest"
+
+
+class V4VolumeTrajectory(AureonModel):
+    """Volume facts separated by phase; MT5 tick volume remains relative context."""
+
+    pre_cross_3bar_mean: float | None = None
+    pre_cross_5bar_mean: float | None = None
+    cross_tick_volume: float | None = None
+    cross_volume_ratio: float | None = None
+    expansion_volume_sum: float = Field(default=0.0, ge=0)
+    expansion_volume_bars: int = Field(default=0, ge=0)
+    expansion_volume_mean: float | None = Field(default=None, ge=0)
+
+    def observe_expansion(self, tick_volume: float) -> None:
+        value = max(0.0, float(tick_volume))
+        self.expansion_volume_sum += value
+        self.expansion_volume_bars += 1
+        self.expansion_volume_mean = (
+            self.expansion_volume_sum / self.expansion_volume_bars
+        )
+
+
+class V4PullbackState(AureonModel):
+    """One observable retracement after a confirmed directional expansion."""
+
+    pullback_id: str
+    journey_id: str
+    symbol: str
+    timeframe: Timeframe
+    direction: Direction
+    started_at: UtcDatetime
+    start_price: float
+    expansion_origin_price: float
+    expansion_extreme_price: float
+    expansion_move: float = Field(ge=0)
+    atr_at_start: float | None = Field(default=None, ge=0)
+    bars: int = Field(default=0, ge=0)
+    depth: float = Field(default=0.0, ge=0)
+    depth_atr: float | None = Field(default=None, ge=0)
+    retracement_fraction: float = Field(default=0.0, ge=0)
+    classification: V4PullbackClass = V4PullbackClass.SHALLOW
+    retests: tuple[V4RetestKind, ...] = ()
+    structure_level: float | None = None
+    structure_intact: bool = True
+    ema_aligned: bool = False
+    latest_price: float | None = None
+    latest_at: UtcDatetime | None = None
+    status: V4PullbackStatus = V4PullbackStatus.ACTIVE
+
+
+class V4ReentryOutcome(AureonModel):
+    bars_observed: int = Field(default=0, ge=0)
+    mfe: float = Field(default=0.0, ge=0)
+    mae: float = Field(default=0.0, ge=0)
+    reached_3: bool = False
+    reached_5: bool = False
+    reached_10: bool = False
+    failed: bool = False
+    failure_reason: str | None = None
+    completed: bool = False
+
+
+class V4ReentryObservation(AureonModel):
+    """Research-only pullback continuation anchor; never an execution request."""
+
+    reentry_id: str
+    pullback_id: str
+    journey_id: str
+    symbol: str
+    timeframe: Timeframe
+    direction: Direction
+    observed_at: UtcDatetime
+    price: float
+    ema20: float
+    ema50: float
+    ema200: float | None = None
+    atr: float | None = Field(default=None, ge=0)
+    pullback_depth: float = Field(ge=0)
+    pullback_fraction: float = Field(ge=0)
+    pullback_class: V4PullbackClass
+    structure_intact: bool
+    ema_aligned: bool
+    retests: tuple[V4RetestKind, ...] = ()
+    volume: V4VolumeTrajectory = Field(default_factory=V4VolumeTrajectory)
+    outcome: V4ReentryOutcome = Field(default_factory=V4ReentryOutcome)

@@ -163,6 +163,7 @@ class Observer:
         self.outcome_trackers: dict[str, OutcomeTracker] = dict(outcome_trackers or {})
         self.ema_journey_tracker: EMAMovementJourneyTracker | None = None
         self.v3_ema_learning: V3EMALearningCoordinator | None = None
+        self.v4_pullback_tracker: object | None = None
         self.heartbeat = heartbeat
         # 9C: the observer answers price alerts because it is the process with quotes --
         # Discord may not call the broker, and a second MT5 connection polling levels
@@ -570,6 +571,7 @@ class Observer:
             htf = None
 
         read = analysis.indicator_read(candle.symbol, candle.timeframe)
+        self._advance_v4_pullback(candle, read)
         signal_tuple = tuple(
             (d.agent_name, d.direction)
             for d in detections
@@ -662,6 +664,31 @@ class Observer:
             decision=decision,
             previous_decision=previous_decision,
         )
+
+    def _advance_v4_pullback(self, candle: Candle, read: object) -> None:
+        """Advance V4 expansion/pullback/re-entry research on the same closed candle."""
+        if self.v4_pullback_tracker is None or self.ema_journey_tracker is None:
+            return
+        journey = self.ema_journey_tracker.active_for(
+            candle.symbol,
+            candle.timeframe.value,
+        )
+        if journey is None:
+            return
+        try:
+            self.v4_pullback_tracker.on_closed_candle(  # type: ignore[attr-defined]
+                journey,
+                candle,
+                ema20=getattr(read, "ema_fast", None),
+                ema50=getattr(read, "ema_slow", None),
+                ema200=getattr(read, "ema200", None),
+                atr=getattr(read, "atr", None),
+            )
+        except Exception:
+            log.exception(
+                "V4 pullback tracking failed at %s",
+                candle.open_time.utc,
+            )
 
     def _maybe_publish_cross_venue_blueprint(
         self,
@@ -2529,6 +2556,7 @@ def build_observer(config: AureonConfig) -> Observer:
     from aureon.services.prediction_service import PredictionService
     from aureon.services.shadow_model import ShadowModelService
     from aureon.services.v3_ema_ops import V3ChampionDriftMonitor
+    from aureon.services.v4_pullback_tracker import V4PullbackTracker
 
     # V1 one-position rule: the Champion still analyses every setup while Aureon holds a
     # position, but answers HOLD_EXISTING_POSITION. The observer only READS trades here.
@@ -2550,11 +2578,17 @@ def build_observer(config: AureonConfig) -> Observer:
             learning=storage.v3_ema_learning,
         ),
     )
+    observer.v4_pullback_tracker = V4PullbackTracker()
+
+    def _resolve_ema_journey(journey) -> None:
+        observer.v4_pullback_tracker.close_journey(journey)
+        observer.v3_ema_learning.resolve_journey(journey)
+
     observer.ema_journey_tracker = EMAMovementJourneyTracker(
         repository=storage.ema_journeys,
         max_horizon_bars=96,
         max_link_bars=96,
-        on_journey_closed=observer.v3_ema_learning.resolve_journey,
+        on_journey_closed=_resolve_ema_journey,
         point_size_by_symbol={
             symbol: SymbolIntelligenceAgent().resolve_tuning(symbol).point
             for symbol in config.symbols
