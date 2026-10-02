@@ -464,3 +464,29 @@ def test_a_candle_cannot_sweep_a_level_it_created(candles: list[Candle]) -> None
         level = detection.indicators.extras["level_price"]
         assert detection.indicators.extras["penetration_points"] > 0
         assert level != pytest.approx(detection.price)
+
+
+def test_off_to_asia_emits_session_open_without_fake_off_close(
+    candles: list[Candle],
+) -> None:
+    detections = run(SessionTrendAgent(), candles)
+    asia_opens = [
+        d
+        for d in detections
+        if d.evidence.categorical.get("session_event") == "open"
+        and d.evidence.categorical.get("opened_session") == "asia"
+    ]
+    off_closes = [
+        d
+        for d in detections
+        if d.evidence.categorical.get("session_event") == "close"
+        and d.evidence.categorical.get("completed_session") == "off"
+    ]
+
+    assert asia_opens, "OFF -> ASIA must emit ASIA SESSION OPENED"
+    assert not off_closes, "OFF must never be presented as a completed session"
+    asia = asia_opens[0]
+    assert asia.evidence.categorical["previous_session"] == "off"
+    assert asia.evidence.categorical["previous_trend"] == "unknown"
+    assert "open" in asia.evidence.numeric
+    assert "previous_close" in asia.evidence.numeric
