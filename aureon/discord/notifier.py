@@ -108,7 +108,7 @@ class Notifier:
         #: for a discord.Client here, so every decision in this module is testable without
         #: a gateway -- the same split the commands use.
         self.send = send
-        self.channel_id = channel_id or context.config.alert_channel_id
+        self.channel_id = channel_id or context.config.broker_alert_channel_id
         self.window_seconds = (
             window_seconds
             if window_seconds is not None
@@ -333,7 +333,7 @@ class Notifier:
 
         direction = journey.direction.value.upper()
         root = notice_embed(
-            f"{journey.symbol} · {direction} EMA JOURNEY",
+            f"{journey.symbol} · {context.config.broker_source} · {direction} EMA JOURNEY",
             (
                 f"Journey `{journey.journey_id[:12]}`\n"
                 "Pre-cross, EMA20/50 and EMA200 updates for this movement "
@@ -348,7 +348,7 @@ class Notifier:
                 self.channel_id,
                 root_message_id,
                 name=(
-                    f"{journey.symbol} {direction} EMA "
+                    f"{journey.symbol} {context.config.broker_source} {direction} EMA "
                     f"{journey.journey_id[:8]}"
                 )[:100],
             )
