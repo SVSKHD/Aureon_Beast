@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
 
@@ -62,6 +63,7 @@ class MarketEngine:
         pace: Callable[[float], float] | None = None,
         grace_seconds: float = DEFAULT_GRACE_SECONDS,
         lookback_bars: int = DEFAULT_LOOKBACK_BARS,
+        parallel_streams: bool = False,
     ) -> None:
         self.provider = provider
         self.engine = engine
@@ -95,6 +97,11 @@ class MarketEngine:
         self.pace = pace
         self.grace_seconds = grace_seconds
         self.lookback_bars = lookback_bars
+        # Multi-symbol deployments may analyse streams concurrently, but calls into the
+        # broker/provider remain serialized. The MetaTrader5 Python module exposes one
+        # terminal session and is not treated as a thread-safe parallel API.
+        self.parallel_streams = parallel_streams
+        self._provider_lock = threading.Lock()
 
         # Highest candle open already processed, per stream. Seeded from durable
         # state at startup so a restart neither reprocesses nor skips.
@@ -125,8 +132,36 @@ class MarketEngine:
                 log.exception("before_poll hook failed")
         produced: list[Detection] = []
         if not self.is_parked:
-            for symbol in self.symbols:
-                for timeframe in self.timeframes:
+            streams = [
+                (symbol, timeframe)
+                for symbol in self.symbols
+                for timeframe in self.timeframes
+            ]
+            if self.parallel_streams and len(streams) > 1:
+                # One worker per stream (bounded by the configured stream count). A slow
+                # Gold analysis cannot hold Silver behind it. Exceptions are isolated to
+                # their stream and the next poll retries because its cursor only advances
+                # after a candle is accepted by that stream.
+                with ThreadPoolExecutor(
+                    max_workers=len(streams),
+                    thread_name_prefix="aureon-stream",
+                ) as pool:
+                    futures = {
+                        pool.submit(self._poll_stream, symbol, timeframe): (symbol, timeframe)
+                        for symbol, timeframe in streams
+                    }
+                    for future in as_completed(futures):
+                        symbol, timeframe = futures[future]
+                        try:
+                            produced.extend(future.result())
+                        except Exception:  # noqa: BLE001
+                            log.exception(
+                                "stream poll failed for %s/%s; sibling streams continue",
+                                symbol,
+                                timeframe.value,
+                            )
+            else:
+                for symbol, timeframe in streams:
                     produced.extend(self._poll_stream(symbol, timeframe))
         if self.on_poll is not None:
             try:
@@ -137,7 +172,11 @@ class MarketEngine:
 
     def _poll_stream(self, symbol: str, timeframe: Timeframe) -> list[Detection]:
         key = (symbol, timeframe)
-        now = self.provider.now_utc()
+        # Provider calls are intentionally serialized even when stream analysis is
+        # parallel. This keeps one MT5 terminal/session and avoids relying on vendor API
+        # thread-safety while still preventing Gold analysis from delaying Silver.
+        with self._provider_lock:
+            now = self.provider.now_utc()
         # The newest bar that is certainly final: floor to the boundary using a
         # clock pulled back by the grace period, then step back one full bar.
         boundary = floor_to_timeframe(
@@ -156,7 +195,8 @@ class MarketEngine:
             start = cursor + timedelta(minutes=timeframe.minutes)
 
         end = newest_closed_open + timedelta(minutes=timeframe.minutes)
-        candles = self.provider.get_closed_candles(symbol, timeframe, start, end)
+        with self._provider_lock:
+            candles = self.provider.get_closed_candles(symbol, timeframe, start, end)
         if not candles:
             return []
 

@@ -120,6 +120,7 @@ class AureonConfig(AureonModel):
     # ── Observation ───────────────────────────────────────────────────────────
     broker_source: str = "MT5"
     symbols: tuple[str, ...] = ("XAUUSD",)
+    parallel_symbol_pipelines: bool = True
     timeframes: tuple[Timeframe, ...] = (Timeframe.M5,)
 
     # ── EMA cross periods (§13) ───────────────────────────────────────────────
@@ -346,6 +347,7 @@ class AureonConfig(AureonModel):
             market_tz=_env_str("AUREON_MARKET_TZ", "Europe/Athens"),
             broker_source=broker_source,
             symbols=tuple(configured_symbols),
+            parallel_symbol_pipelines=_env_str("AUREON_PARALLEL_SYMBOL_PIPELINES", "true").strip().lower() == "true",
             timeframes=timeframes,
             ema_fast=_env_int("AUREON_EMA_FAST", 20),
             ema_slow=_env_int("AUREON_EMA_SLOW", 50),
