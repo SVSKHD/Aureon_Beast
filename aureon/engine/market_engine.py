@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
@@ -102,6 +103,8 @@ class MarketEngine:
         # terminal session and is not treated as a thread-safe parallel API.
         self.parallel_streams = parallel_streams
         self._provider_lock = threading.Lock()
+        self._diagnostics_lock = threading.Lock()
+        self._stream_diagnostics: dict[tuple[str, Timeframe], dict[str, object]] = {}
 
         # Highest candle open already processed, per stream. Seeded from durable
         # state at startup so a restart neither reprocesses nor skips.
@@ -172,6 +175,13 @@ class MarketEngine:
 
     def _poll_stream(self, symbol: str, timeframe: Timeframe) -> list[Detection]:
         key = (symbol, timeframe)
+        started = time.perf_counter()
+        with self._diagnostics_lock:
+            self._stream_diagnostics[key] = {
+                **self._stream_diagnostics.get(key, {}),
+                "status": "RUNNING",
+                "started_at": datetime.now().astimezone().isoformat(),
+            }
         # Provider calls are intentionally serialized even when stream analysis is
         # parallel. This keeps one MT5 terminal/session and avoids relying on vendor API
         # thread-safety while still preventing Gold analysis from delaying Silver.
@@ -191,6 +201,7 @@ class MarketEngine:
             )
         else:
             if cursor >= newest_closed_open:
+                self._finish_diagnostic(key, started, cursor)
                 return []  # nothing new has closed
             start = cursor + timedelta(minutes=timeframe.minutes)
 
@@ -198,6 +209,7 @@ class MarketEngine:
         with self._provider_lock:
             candles = self.provider.get_closed_candles(symbol, timeframe, start, end)
         if not candles:
+            self._finish_diagnostic(key, started, cursor)
             return []
 
         produced: list[Detection] = []
@@ -216,7 +228,37 @@ class MarketEngine:
                 # Last, so whatever it does sees the state the two callbacks above already
                 # updated -- the session extremes, the day cache and the outbox.
                 self.on_analysis(candle, detections)
+        self._finish_diagnostic(key, started, self._cursor.get(key))
         return produced
+
+    def _finish_diagnostic(
+        self,
+        key: tuple[str, Timeframe],
+        started: float,
+        last_open: datetime | None,
+    ) -> None:
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        with self._diagnostics_lock:
+            self._stream_diagnostics[key] = {
+                "status": "RUNNING",
+                "processing_ms": round(elapsed_ms, 2),
+                "last_completed_at": datetime.now().astimezone().isoformat(),
+                "last_candle_open": last_open.isoformat() if last_open is not None else None,
+            }
+
+    def diagnostics(self) -> dict[str, object]:
+        """Thread-safe observer diagnostics suitable for a heartbeat detail payload."""
+        with self._diagnostics_lock:
+            streams = {
+                f"{symbol}/{timeframe.value}": dict(detail)
+                for (symbol, timeframe), detail in self._stream_diagnostics.items()
+            }
+        return {
+            "parallel_enabled": self.parallel_streams,
+            "worker_count": len(self.symbols) * len(self.timeframes),
+            "provider_access": "serialized",
+            "streams": streams,
+        }
 
     @property
     def is_parked(self) -> bool:
