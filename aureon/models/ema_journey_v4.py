@@ -285,3 +285,80 @@ class V4ReentryObservation(AureonModel):
     retests: tuple[V4RetestKind, ...] = ()
     volume: V4VolumeTrajectory = Field(default_factory=V4VolumeTrajectory)
     outcome: V4ReentryOutcome = Field(default_factory=V4ReentryOutcome)
+
+
+class V4SessionPhase(StrEnum):
+    EARLY = "early"
+    MID = "mid"
+    LATE = "late"
+
+
+class V4SessionEventType(StrEnum):
+    OPEN = "open"
+    CLOSE = "close"
+
+
+class V4SessionContext(AureonModel):
+    """Independent V4 session membership; multiple sessions may be active."""
+
+    model_config = ConfigDict(frozen=True)
+
+    active_sessions: tuple[str, ...] = ()
+    phases: dict[str, V4SessionPhase] = Field(default_factory=dict)
+    overlap: bool = False
+    overlap_name: str | None = None
+
+
+class V4SessionOpenSnapshot(AureonModel):
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    timeframe: Timeframe
+    session: str
+    opened_at: UtcDatetime
+    open_price: float
+    ema20: float | None = None
+    ema50: float | None = None
+    ema200: float | None = None
+    trend: str = "UNKNOWN"
+    previous_session: str | None = None
+    previous_session_change: float | None = None
+    previous_session_range: float | None = None
+
+
+class V4SessionCloseOutcome(AureonModel):
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    timeframe: Timeframe
+    session: str
+    opened_at: UtcDatetime
+    closed_at: UtcDatetime
+    open_price: float
+    high: float
+    low: float
+    close_price: float
+    change: float
+    range: float
+    candle_count: int = Field(ge=1)
+    ema20_50_crosses: int = Field(default=0, ge=0)
+    ema200_crosses: int = Field(default=0, ge=0)
+    journey_count: int = Field(default=0, ge=0)
+
+
+class V4SessionLearningRow(AureonModel):
+    """Resolved movement row decorated with independent session/phase context."""
+
+    model_config = ConfigDict(frozen=True)
+
+    session: str
+    phase: V4SessionPhase
+    overlap: bool = False
+    direction: Direction
+    anchor_type: str
+    reached_3: bool = False
+    reached_5: bool = False
+    reached_10: bool = False
+    mfe: float = Field(default=0.0, ge=0)
+    mae: float = Field(default=0.0, ge=0)
+    pullback_depth: float | None = Field(default=None, ge=0)
