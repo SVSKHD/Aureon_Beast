@@ -62,6 +62,17 @@ def _env_csv(key: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
+def _env_optional_bool(key: str) -> bool | None:
+    """Parse an optional true/false feature flag without changing legacy behaviour."""
+    raw = _env_opt(key)
+    if raw is None:
+        return None
+    value = raw.strip().lower()
+    if value not in {"true", "false"}:
+        raise ValueError(f"{key} must be true or false, got {raw!r}")
+    return value == "true"
+
+
 def _env_true(key: str) -> bool:
     """True only for the exact string ``"true"``, case-insensitively (11A, F-3).
 
@@ -107,6 +118,7 @@ class AureonConfig(AureonModel):
     market_tz: str = "Europe/Athens"
 
     # ── Observation ───────────────────────────────────────────────────────────
+    broker_source: str = "MT5"
     symbols: tuple[str, ...] = ("XAUUSD",)
     timeframes: tuple[Timeframe, ...] = (Timeframe.M5,)
 
@@ -203,6 +215,8 @@ class AureonConfig(AureonModel):
     #: which is the right default: a deployment that has not chosen a channel must not
     #: start posting into whichever one it can see.
     alert_channel_id: int | None = None
+    mt5_alert_channel_id: int | None = None
+    ctrader_alert_channel_id: int | None = None
     #: How far back the notifier looks for detections it has not announced. Two minutes:
     #: long enough to survive a restart or a slow Firestore write, short enough that a bot
     #: which was down for an hour does not wake up and post an hour of history at once.
@@ -258,6 +272,8 @@ class AureonConfig(AureonModel):
     @model_validator(mode="after")
     def _validate(self) -> AureonConfig:
         ZoneInfo(self.market_tz)  # fail fast on a typo'd zone
+        if self.broker_source not in {"MT5", "CTRADER"}:
+            raise ValueError("AUREON_BROKER_SOURCE must be MT5 or CTRADER")
         # An UNSET or empty var falls back to the default, which is the ordinary
         # env convention. A whitespace-only value is different: it is a mistake
         # that would otherwise key every detection id in history on " ".
@@ -308,12 +324,28 @@ class AureonConfig(AureonModel):
         )
         guild = _env_opt("AUREON_DISCORD_GUILD_ID")
         channel = _env_opt("AUREON_ALERT_CHANNEL_ID")
+        mt5_channel = _env_opt("AUREON_MT5_ALERT_CHANNEL_ID")
+        ctrader_channel = _env_opt("AUREON_CTRADER_ALERT_CHANNEL_ID")
+        broker_source = _env_str("AUREON_BROKER_SOURCE", "MT5").strip().upper()
+        configured_symbols = list(_env_csv("AUREON_SYMBOLS", ("XAUUSD",)))
+        if broker_source == "MT5":
+            gold_enabled = _env_optional_bool("AUREON_MT5_GOLD_ENABLED")
+            silver_enabled = _env_optional_bool("AUREON_MT5_SILVER_ENABLED")
+            if gold_enabled is not None:
+                configured_symbols = [s for s in configured_symbols if s.upper() != "XAUUSD"]
+                if gold_enabled:
+                    configured_symbols.insert(0, "XAUUSD")
+            if silver_enabled is not None:
+                configured_symbols = [s for s in configured_symbols if s.upper() != "XAGUSD"]
+                if silver_enabled:
+                    configured_symbols.append("XAGUSD")
         login = _env_opt("AUREON_MT5_LOGIN")
         return cls(
             account_scope=_env_str("AUREON_ACCOUNT_SCOPE", "primary"),
             aureon_magic=_env_int("AUREON_MAGIC", 770177),
             market_tz=_env_str("AUREON_MARKET_TZ", "Europe/Athens"),
-            symbols=_env_csv("AUREON_SYMBOLS", ("XAUUSD",)),
+            broker_source=broker_source,
+            symbols=tuple(configured_symbols),
             timeframes=timeframes,
             ema_fast=_env_int("AUREON_EMA_FAST", 20),
             ema_slow=_env_int("AUREON_EMA_SLOW", 50),
@@ -364,6 +396,8 @@ class AureonConfig(AureonModel):
             authorized_user_ids=_env_csv("AUREON_AUTHORIZED_USER_IDS"),
             link_window_minutes=_env_int("AUREON_LINK_WINDOW_MINUTES", 90),
             alert_channel_id=int(channel) if channel else None,
+            mt5_alert_channel_id=int(mt5_channel) if mt5_channel else None,
+            ctrader_alert_channel_id=int(ctrader_channel) if ctrader_channel else None,
             notify_window_seconds=_env_float("AUREON_NOTIFY_WINDOW_SECONDS", 120.0),
             allow_live_execution=_env_true("AUREON_ALLOW_LIVE_EXECUTION"),
             autonomous_management_enabled=_env_true("AUREON_AUTONOMOUS_MANAGEMENT_ENABLED"),
@@ -384,6 +418,15 @@ class AureonConfig(AureonModel):
             mt5_server=_env_opt("AUREON_MT5_SERVER"),
             mt5_terminal_path=_env_opt("AUREON_MT5_TERMINAL_PATH"),
         )
+
+    @property
+    def broker_alert_channel_id(self) -> int | None:
+        """Discord channel selected for this broker runtime, with legacy fallback."""
+        if self.broker_source == "MT5":
+            return self.mt5_alert_channel_id or self.alert_channel_id
+        if self.broker_source == "CTRADER":
+            return self.ctrader_alert_channel_id or self.alert_channel_id
+        return self.alert_channel_id
 
     def rule_id_for(self, symbol: str) -> str:
         """The outcome rule id for one symbol.
