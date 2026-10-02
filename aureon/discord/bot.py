@@ -147,6 +147,7 @@ class AureonBot(discord.Client):
         #: The awake cadences, captured before anything slows them down.
         self._awake_poll = self.notifier.poll_seconds
         self._restart_notice_sent = False
+        self._fallback_guild_synced = False
 
     async def setup_hook(self) -> None:
         """Register commands and sync them where the operator asked.
@@ -352,8 +353,40 @@ class AureonBot(discord.Client):
         clear_restart_notice(repo_root)
         self._restart_notice_sent = True
 
+    async def _sync_alert_channel_guild(self) -> None:
+        """Make new slash commands available immediately when no guild id was configured.
+
+        Global application-command sync is retained as the portable fallback, but Discord can
+        take time to propagate global changes. The alert channel already identifies the server
+        Aureon operates in, so after the gateway is ready we also sync the same command tree to
+        that guild. No extra environment setting is required.
+        """
+        if self._guild is not None or self._fallback_guild_synced:
+            return
+        channel_id = self.context.config.alert_channel_id
+        if channel_id is None:
+            return
+        try:
+            channel = self.get_channel(int(channel_id)) or await self.fetch_channel(int(channel_id))
+            guild = getattr(channel, "guild", None)
+            if guild is None:
+                log.warning("alert channel %s has no guild; keeping global command sync", channel_id)
+                return
+            guild_ref = discord.Object(id=guild.id)
+            self.tree.copy_global_to(guild=guild_ref)
+            synced = await self.tree.sync(guild=guild_ref)
+            self._fallback_guild_synced = True
+            log.info(
+                "commands additionally synced to alert-channel guild %s (%d commands)",
+                guild.id,
+                len(synced),
+            )
+        except Exception:  # noqa: BLE001 - global commands remain available as fallback
+            log.exception("could not sync commands to alert-channel guild; global sync remains")
+
     async def on_ready(self) -> None:  # pragma: no cover - requires a gateway
         log.info("connected as %s", self.user)
+        await self._sync_alert_channel_guild()
         await self._announce_restart_notice()
 
 
