@@ -234,6 +234,7 @@ class V4PullbackTracker:
             expansion_fraction=fraction,
             structure_level=structure_level,
         )
+        runtime.volume.observe_pullback(candle.tick_volume)
         return V4PullbackState(
             pullback_id=self._pullback_id(journey.journey_id, candle),
             journey_id=journey.journey_id,
@@ -291,6 +292,8 @@ class V4PullbackTracker:
         }:
             return
 
+        if not runtime.reentries:
+            runtime.volume.observe_pullback(candle.tick_volume)
         pullback.bars += 1
         depth = self._pullback_depth(
             journey.direction,
@@ -368,6 +371,7 @@ class V4PullbackTracker:
             outcome = observation.outcome
             if outcome.completed or candle.close_time <= to_utc(observation.observed_at):
                 continue
+            runtime.volume.observe_continuation(candle.tick_volume)
             outcome.bars_observed += 1
             favourable, adverse = self._candle_moves(
                 observation.direction,

@@ -165,6 +165,14 @@ class V4VolumeTrajectory(AureonModel):
     expansion_volume_sum: float = Field(default=0.0, ge=0)
     expansion_volume_bars: int = Field(default=0, ge=0)
     expansion_volume_mean: float | None = Field(default=None, ge=0)
+    pullback_volume_sum: float = Field(default=0.0, ge=0)
+    pullback_volume_bars: int = Field(default=0, ge=0)
+    pullback_volume_mean: float | None = Field(default=None, ge=0)
+    pullback_volume_contracting: bool = False
+    continuation_volume_sum: float = Field(default=0.0, ge=0)
+    continuation_volume_bars: int = Field(default=0, ge=0)
+    continuation_volume_mean: float | None = Field(default=None, ge=0)
+    continuation_volume_expanding: bool = False
 
     def observe_expansion(self, tick_volume: float) -> None:
         value = max(0.0, float(tick_volume))
@@ -173,6 +181,45 @@ class V4VolumeTrajectory(AureonModel):
         self.expansion_volume_mean = (
             self.expansion_volume_sum / self.expansion_volume_bars
         )
+
+    def observe_pullback(self, tick_volume: float) -> None:
+        value = max(0.0, float(tick_volume))
+        self.pullback_volume_sum += value
+        self.pullback_volume_bars += 1
+        self.pullback_volume_mean = self.pullback_volume_sum / self.pullback_volume_bars
+        if self.expansion_volume_mean is not None:
+            self.pullback_volume_contracting = (
+                self.pullback_volume_mean < self.expansion_volume_mean
+            )
+
+    def observe_continuation(self, tick_volume: float) -> None:
+        value = max(0.0, float(tick_volume))
+        self.continuation_volume_sum += value
+        self.continuation_volume_bars += 1
+        self.continuation_volume_mean = (
+            self.continuation_volume_sum / self.continuation_volume_bars
+        )
+        baseline = self.pullback_volume_mean or self.expansion_volume_mean
+        if baseline is not None:
+            self.continuation_volume_expanding = self.continuation_volume_mean > baseline
+
+
+class V4HTFFrameSnapshot(AureonModel):
+    model_config = ConfigDict(frozen=True)
+
+    timeframe: Timeframe
+    ema_fast: float | None = None
+    ema_slow: float | None = None
+    close: float
+    bias: str
+
+
+class V4HTFContext(AureonModel):
+    model_config = ConfigDict(frozen=True)
+
+    m15: V4HTFFrameSnapshot | None = None
+    h1: V4HTFFrameSnapshot | None = None
+    alignment: str = "mixed"
 
 
 class V4PullbackState(AureonModel):
