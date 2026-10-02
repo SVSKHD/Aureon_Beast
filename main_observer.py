@@ -164,6 +164,7 @@ class Observer:
         self.ema_journey_tracker: EMAMovementJourneyTracker | None = None
         self.v3_ema_learning: V3EMALearningCoordinator | None = None
         self.v4_pullback_tracker: object | None = None
+        self.v4_session_tracker: object | None = None
         self.heartbeat = heartbeat
         # 9C: the observer answers price alerts because it is the process with quotes --
         # Discord may not call the broker, and a second MT5 connection polling levels
@@ -572,6 +573,7 @@ class Observer:
 
         read = analysis.indicator_read(candle.symbol, candle.timeframe)
         self._advance_v4_pullback(candle, read)
+        self._advance_v4_sessions(candle, detections, read, current)
         signal_tuple = tuple(
             (d.agent_name, d.direction)
             for d in detections
@@ -664,6 +666,39 @@ class Observer:
             decision=decision,
             previous_decision=previous_decision,
         )
+
+    def _advance_v4_sessions(
+        self,
+        candle: Candle,
+        detections: list[Detection],
+        read: object,
+        current: dict[str, object],
+    ) -> None:
+        """Track Asia/London/New York independently, including their overlap."""
+        if self.v4_session_tracker is None:
+            return
+        try:
+            self.v4_session_tracker.on_closed_candle(  # type: ignore[attr-defined]
+                candle,
+                detections=detections,
+                ema20=getattr(read, "ema_fast", None),
+                ema50=getattr(read, "ema_slow", None),
+                ema200=getattr(read, "ema200", None),
+                trend=str(current.get("session_trend") or "UNKNOWN"),
+                journey_started=any(
+                    detection.agent_name in {
+                        "ema200_pre_cross",
+                        "ema_cross",
+                        "ema200_cross",
+                    }
+                    for detection in detections
+                ),
+            )
+        except Exception:
+            log.exception(
+                "V4 independent session tracking failed at %s",
+                candle.open_time.utc,
+            )
 
     def _advance_v4_pullback(self, candle: Candle, read: object) -> None:
         """Advance V4 expansion/pullback/re-entry research on the same closed candle."""
@@ -2557,6 +2592,7 @@ def build_observer(config: AureonConfig) -> Observer:
     from aureon.services.shadow_model import ShadowModelService
     from aureon.services.v3_ema_ops import V3ChampionDriftMonitor
     from aureon.services.v4_pullback_tracker import V4PullbackTracker
+    from aureon.services.v4_session_intelligence import V4SessionTracker
 
     # V1 one-position rule: the Champion still analyses every setup while Aureon holds a
     # position, but answers HOLD_EXISTING_POSITION. The observer only READS trades here.
@@ -2579,6 +2615,7 @@ def build_observer(config: AureonConfig) -> Observer:
         ),
     )
     observer.v4_pullback_tracker = V4PullbackTracker()
+    observer.v4_session_tracker = V4SessionTracker()
 
     def _resolve_ema_journey(journey) -> None:
         observer.v4_pullback_tracker.close_journey(journey)
