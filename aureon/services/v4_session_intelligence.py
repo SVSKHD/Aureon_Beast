@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, time
-from typing import Iterable
+from collections.abc import Iterable
 
 from aureon.config.sessions import SESSION_WINDOWS
 from aureon.models.detection import Detection
