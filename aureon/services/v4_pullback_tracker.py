@@ -102,7 +102,6 @@ class V4PullbackTracker:
         )
 
         if runtime.pullback is None:
-            runtime.volume.observe_expansion(candle.tick_volume)
             depth_close = self._pullback_from_extreme(
                 journey.direction,
                 runtime.extreme_price,
@@ -133,6 +132,10 @@ class V4PullbackTracker:
                     ema200=ema200,
                     structure_level=structure_level,
                 )
+            else:
+                # Phase volume is intentionally expansion-only.  The candle that
+                # starts a pullback belongs to the pullback phase, not both phases.
+                runtime.volume.observe_expansion(candle.tick_volume)
         else:
             self._advance_pullback(
                 journey,
