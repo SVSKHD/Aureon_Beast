@@ -104,7 +104,41 @@ class SessionTrendAgent(BaseAgent):
             return []  # still inside the same session
 
         if previous is SessionName.OFF and not self.include_off_session:
-            return []
+            # OFF is not a real session, so do not fabricate an OFF close summary.
+            # But OFF -> ASIA is still a real session-open boundary and must emit an
+            # ASIA SESSION OPENED context card.
+            if current is SessionName.OFF:
+                return []
+            current_open = float(window["open"].iloc[-1])
+            previous_close = float(window["close"].iloc[-2])
+            return [
+                self.build_detection(
+                    ctx=ctx,
+                    event_key=f"open|{current.value}",
+                    price=current_open,
+                    direction=None,
+                    indicators=IndicatorSnapshot(
+                        extras={
+                            "open": current_open,
+                            "previous_close": previous_close,
+                        }
+                    ),
+                    levels={"session_open": current_open},
+                    evidence=AgentEvidence(
+                        numeric={
+                            "open": current_open,
+                            "previous_close": previous_close,
+                        },
+                        categorical={
+                            "session_event": "open",
+                            "opened_session": current.value,
+                            "previous_session": SessionName.OFF.value,
+                            "previous_trend": "unknown",
+                        },
+                        flags={},
+                    ),
+                )
+            ]
 
         # The completed session is the contiguous run of bars immediately before the
         # boundary that share `previous`.
