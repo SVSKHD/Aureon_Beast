@@ -261,6 +261,7 @@ class Observer:
             before_poll=self.gate.tick,
             parked=lambda: self.gate.parked,
             pace=self.gate.pace,
+            parallel_streams=config.parallel_symbol_pipelines,
         )
         self._last_candles: dict[tuple[str, Timeframe], Candle] = {}
         #: 12 T-7. One setup engine per symbol, or none at all: an observer with no Firestore
