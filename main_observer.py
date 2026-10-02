@@ -264,6 +264,10 @@ class Observer:
             parallel_streams=config.parallel_symbol_pipelines,
         )
         self._last_candles: dict[tuple[str, Timeframe], Candle] = {}
+        if self.heartbeat is not None:
+            # Cross-process diagnostics: Discord reads this JSON from SQLite and never
+            # touches MT5. Keep the provider/broker boundary intact.
+            self.heartbeat.detail_provider = self._parallel_diagnostics
         #: 12 T-7. One setup engine per symbol, or none at all: an observer with no Firestore
         #: client tracks no setups and still observes. Set by ``build_observer``.
         self.setups: dict[tuple[str, Timeframe], object] = {}
@@ -2203,6 +2207,26 @@ class Observer:
             self.heartbeat.start()
         self.worker.start()
         return backfilled
+
+    def _parallel_diagnostics(self) -> dict[str, object]:
+        detail = dict(self.market_engine.diagnostics())
+        stream_details = detail.get("streams")
+        if isinstance(stream_details, dict):
+            for symbol in self.config.symbols:
+                for timeframe in self.config.timeframes:
+                    key = f"{symbol}/{timeframe.value}"
+                    stream = dict(stream_details.get(key, {}))
+                    quote = self._latest_quote(symbol)
+                    if quote is not None:
+                        stream["bid"] = quote.bid
+                        stream["ask"] = quote.ask
+                        stream["quote_at"] = quote.captured_at.isoformat()
+                    candle = self._last_candles.get((symbol, timeframe))
+                    if candle is not None:
+                        stream["last_closed_candle"] = candle.open_time.utc.isoformat()
+                    stream_details[key] = stream
+        detail["broker"] = self.config.broker_source
+        return detail
 
     def _publish_symbol_specs(self) -> None:
         """Publish broker symbol metadata for Discord (decision 79).
