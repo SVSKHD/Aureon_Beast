@@ -8,6 +8,7 @@ from aureon.discord.context import BotContext
 
 
 def register_all(tree: Any, context: BotContext) -> None:
+    from aureon.discord.commands.agents import register as register_agents
     """Register every Aureon command on the tree."""
     from aureon.discord.commands.backtest_status import register as register_backtest_status
     from aureon.discord.commands.control import register as register_control
@@ -39,6 +40,7 @@ def register_all(tree: Any, context: BotContext) -> None:
     register_note(tree, context)
     register_ops(tree, context)
     register_parallel_status(tree, context)
+    register_agents(tree, context)
     register_preview(tree, context)
     register_pull_history(tree, context)
     register_setups(tree, context)
