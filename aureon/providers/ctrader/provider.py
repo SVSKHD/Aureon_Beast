@@ -37,9 +37,9 @@ class CTraderDataProvider(BaseMarketDataProvider):
         symbol: str,
         timeframe: Timeframe,
         from_utc: datetime,
-        to_utc: datetime,
+        until_utc: datetime,
     ) -> list[Candle]:
-        rows = self.transport.candles(symbol, timeframe, to_utc=to_utc, from_utc=from_utc)
+        rows = self.transport.candles(symbol, timeframe, to_utc=until_utc, from_utc=from_utc)
         cutoff = floor_to_timeframe(
             self.now_utc() - timedelta(seconds=self.candle_grace_seconds), timeframe
         ) - timedelta(minutes=timeframe.minutes)
@@ -48,7 +48,7 @@ class CTraderDataProvider(BaseMarketDataProvider):
             opened = _timestamp(row.get("open_time") or row.get("timestamp"))
             if opened is None:
                 raise MarketDataError(f"cTrader candle for {symbol} has no timestamp")
-            if opened < to_utc(from_utc) or opened >= to_utc(to_utc) or opened > cutoff:
+            if opened < to_utc(from_utc) or opened >= to_utc(until_utc) or opened > cutoff:
                 continue
             candles.append(
                 Candle(
