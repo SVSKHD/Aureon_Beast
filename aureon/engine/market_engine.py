@@ -104,7 +104,19 @@ class MarketEngine:
         self.parallel_streams = parallel_streams
         self._provider_lock = threading.Lock()
         self._diagnostics_lock = threading.Lock()
-        self._stream_diagnostics: dict[tuple[str, Timeframe], dict[str, object]] = {}
+        # Register every configured stream immediately. On weekends the sleep gate parks
+        # before _poll_stream runs, but /parallel-status must still prove that Gold and
+        # Silver are configured as independent workers rather than showing a misleading 0/2.
+        self._stream_diagnostics: dict[tuple[str, Timeframe], dict[str, object]] = {
+            (symbol, timeframe): {
+                "status": "WAITING",
+                "processing_ms": None,
+                "last_completed_at": None,
+                "last_candle_open": None,
+            }
+            for symbol in self.symbols
+            for timeframe in self.timeframes
+        }
 
         # Highest candle open already processed, per stream. Seeded from durable
         # state at startup so a restart neither reprocesses nor skips.
@@ -253,10 +265,17 @@ class MarketEngine:
                 f"{symbol}/{timeframe.value}": dict(detail)
                 for (symbol, timeframe), detail in self._stream_diagnostics.items()
             }
+        parked = self.is_parked
+        if parked:
+            for stream in streams.values():
+                if stream.get("status") != "RUNNING":
+                    stream["status"] = "PARKED"
         return {
+            "diagnostics_version": 2,
             "parallel_enabled": self.parallel_streams,
             "worker_count": len(self.symbols) * len(self.timeframes),
             "provider_access": "serialized",
+            "parked": parked,
             "streams": streams,
         }
 
