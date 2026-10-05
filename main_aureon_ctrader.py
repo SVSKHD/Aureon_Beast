@@ -47,6 +47,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     config = AureonConfig.from_env().model_copy(update={"broker_source": "CTRADER"})
+    if not config.ctrader_enabled:
+        log.info("cTrader runtime disabled by AUREON_CTRADER_ENABLED=false")
+        return 0
     log.info(
         "starting independent cTrader runtime: broker=%s symbols=%s channel=%s",
         config.broker_source,
