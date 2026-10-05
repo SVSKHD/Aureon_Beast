@@ -251,6 +251,32 @@ class LocalDatabase:
                     )
                     log.info("upgraded local schema: model_predictions.%s", name)
 
+            # V3 EMA predictions gained market_date after existing local databases had
+            # already created the table. create_all() never alters an existing SQLite
+            # table, so upgrade it in place and backfill historical rows from predicted_at.
+            v3_prediction_columns = {
+                row[1]
+                for row in connection.exec_driver_sql(
+                    "PRAGMA table_info(v3_ema_predictions)"
+                ).fetchall()
+            }
+            if v3_prediction_columns and "market_date" not in v3_prediction_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE v3_ema_predictions ADD COLUMN market_date TEXT"
+                )
+                connection.exec_driver_sql(
+                    "UPDATE v3_ema_predictions "
+                    "SET market_date = substr(predicted_at, 1, 10) "
+                    "WHERE market_date IS NULL"
+                )
+                connection.exec_driver_sql(
+                    "CREATE INDEX IF NOT EXISTS ix_v3_ema_predictions_symbol_date "
+                    "ON v3_ema_predictions (symbol, market_date, predicted_at)"
+                )
+                log.info(
+                    "upgraded local schema: v3_ema_predictions.market_date"
+                )
+
             event_columns = {
                 row[1]
                 for row in connection.exec_driver_sql(
