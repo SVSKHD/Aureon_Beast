@@ -18,6 +18,27 @@ COLOUR_WARN = 0xF9A825
 COLOUR_BAD = 0xC62828
 COLOUR_INFO = 0x1565C0
 
+# Discord rejects an entire embed when any field value exceeds this hard limit.
+DISCORD_FIELD_VALUE_LIMIT = 1024
+
+
+def _field_value(value: object, *, code_block: bool = False) -> str:
+    """Bound dynamic embed content without letting Discord reject the whole message."""
+    text = str(value or "—")
+    if len(text) <= DISCORD_FIELD_VALUE_LIMIT:
+        return text
+
+    marker = "\n… (truncated)"
+    if code_block:
+        # Preserve a valid closing fence for status panels rendered as code blocks.
+        closing = "\n```"
+        budget = DISCORD_FIELD_VALUE_LIMIT - len(marker) - len(closing)
+        body = text[:-len(closing)] if text.endswith(closing) else text
+        return body[:budget] + marker + closing
+
+    budget = DISCORD_FIELD_VALUE_LIMIT - len(marker)
+    return text[:budget] + marker
+
 FRESHNESS_ICON = {
     Freshness.LIVE: "🟢",
     Freshness.STALE: "🟡",
@@ -120,12 +141,11 @@ def status_embed(screen: StatusScreen) -> Any:
     )
     embed.add_field(
         name="Services",
-        value="\n".join(
+        value=_field_value("\n".join(
             f"{FRESHNESS_ICON.get(s.freshness, '•')} `{s.name}` {s.freshness.value}"
             + (f" — {s.detail}" if s.detail else "")
             for s in screen.services
-        )
-        or "—",
+        ) or "—"),
         inline=False,
     )
     if screen.symbols:
@@ -136,25 +156,25 @@ def status_embed(screen: StatusScreen) -> Any:
         closed = screen.closed_line
         embed.add_field(
             name="Market",
-            value=f"💤 {closed}\n{market}" if closed else market,
+            value=_field_value(f"💤 {closed}\n{market}" if closed else market),
             inline=False,
         )
     if screen.symbol_registry:
         embed.add_field(
             name="Symbols / Agent 18",
-            value="\n".join(screen.symbol_registry),
+            value=_field_value("\n".join(screen.symbol_registry)),
             inline=False,
         )
     if screen.agent_highway:
         embed.add_field(
             name="Agent Highway",
-            value="\n".join(screen.agent_highway),
+            value=_field_value("\n".join(screen.agent_highway)),
             inline=False,
         )
     if screen.intelligence:
         embed.add_field(
             name="V1 intelligence",
-            value="\n".join(screen.intelligence)[:1024],
+            value=_field_value("\n".join(screen.intelligence)),
             inline=False,
         )
     embed.add_field(
@@ -167,11 +187,11 @@ def status_embed(screen: StatusScreen) -> Any:
     for panel in screen.live_panels:
         embed.add_field(
             name=f"{panel.symbol} ({panel.market_state})",
-            value="```\n" + "\n".join(panel.lines) + "\n```",
+            value=_field_value("```\n" + "\n".join(panel.lines) + "\n```", code_block=True),
             inline=False,
         )
     if screen.review_summary is not None:
-        embed.add_field(name="Latest review", value=screen.review_summary, inline=False)
+        embed.add_field(\n            name="Latest review",\n            value=_field_value(screen.review_summary),\n            inline=False,\n        )
     # §59's last line. In the footer rather than a field: it is the provenance of
     # everything above it, and a reader who doubts a number looks here.
     embed.set_footer(text=screen.updated_line)
