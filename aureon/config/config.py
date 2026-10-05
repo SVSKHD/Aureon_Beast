@@ -119,6 +119,8 @@ class AureonConfig(AureonModel):
 
     # ── Observation ───────────────────────────────────────────────────────────
     broker_source: str = "MT5"
+    # Master switch for every cTrader-specific runtime/integration. Safe default is off.
+    ctrader_enabled: bool = False
     symbols: tuple[str, ...] = ("XAUUSD",)
     parallel_symbol_pipelines: bool = True
     timeframes: tuple[Timeframe, ...] = (Timeframe.M5,)
@@ -346,6 +348,7 @@ class AureonConfig(AureonModel):
             aureon_magic=_env_int("AUREON_MAGIC", 770177),
             market_tz=_env_str("AUREON_MARKET_TZ", "Europe/Athens"),
             broker_source=broker_source,
+            ctrader_enabled=_env_true("AUREON_CTRADER_ENABLED"),
             symbols=tuple(configured_symbols),
             parallel_symbol_pipelines=_env_str("AUREON_PARALLEL_SYMBOL_PIPELINES", "true").strip().lower() == "true",
             timeframes=timeframes,
